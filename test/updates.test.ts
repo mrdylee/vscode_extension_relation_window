@@ -66,6 +66,20 @@ test('overlapping checks cannot open duplicate prompts or installations', async 
   finish(false); await pending;
   assert.deepEqual(f.calls,['fetch']);
 });
+test('failed automatic checks do not suppress a later successful retry for a day', async () => {
+  const f = fixture();
+  f.host.latest = async () => { throw new Error('offline'); };
+  assert.equal(await f.checker.check(), 'failed');
+  assert.equal(f.host.lastCheck(), 0, 'a failed request is not a completed daily check');
+  f.host.latest = async () => latest();
+  assert.equal(await f.checker.check(), 'declined', 'recovered connection can discover the release');
+  assert.equal(await f.checker.check(), 'throttled', 'successful discovery still respects the daily interval');
+});
+test('invalid release metadata does not consume the daily check', async () => {
+  const f = fixture(); f.host.latest = async () => ({ ...latest(), assets: [] });
+  assert.equal(await f.checker.check(), 'failed');
+  assert.equal(f.host.lastCheck(), 0);
+});
 
 test('release fetch distinguishes absence, HTTP failures and malformed responses', async () => {
   const { fetchLatestRelease, RELEASE_API } = await import('../src/updates');

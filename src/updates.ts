@@ -43,13 +43,13 @@ export class UpdateChecker {
     this.busy = true;
     let approved = false;
     try {
-      await this.host.saveCheck(now);
       const value = await this.host.latest();
+      const release = value === undefined ? undefined : selectRelease(value, this.current);
+      await this.host.saveCheck(now);
       if (value === undefined) {
         if (manual) await this.host.inform('No stable release has been published yet.');
         return 'unavailable';
       }
-      const release = selectRelease(value, this.current);
       if (!release) {
         if (manual) await this.host.inform(`No stable version newer than v${this.current} is available.`);
         return 'current';

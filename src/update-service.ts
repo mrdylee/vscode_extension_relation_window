@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { CHECK_INTERVAL, downloadRelease, fetchLatestRelease, Release, UpdateChecker } from './updates';
+import { downloadRelease, fetchLatestRelease, Release, UpdateChecker } from './updates';
 
 async function installRelease(release: Release) {
   await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `Installing C Relations v${release.version}` }, async () => {
@@ -38,7 +38,9 @@ export function registerUpdates(context: vscode.ExtensionContext) {
   const automatic = () => {
     if (context.extensionMode === vscode.ExtensionMode.Production && vscode.workspace.getConfiguration('cRelation').get('automaticUpdates', true)) void checker.check();
   };
-  const timer = setInterval(automatic, CHECK_INTERVAL);
+  // Poll hourly so failed requests retry and a restarted window checks when due.
+  // UpdateChecker still limits successful automatic checks to once per day.
+  const timer = setInterval(automatic, 60 * 60 * 1000);
   context.subscriptions.push(vscode.commands.registerCommand('cRelation.checkForUpdates', () => checker.check(true)),
     vscode.workspace.onDidChangeConfiguration(e => { if (e.affectsConfiguration('cRelation.automaticUpdates')) automatic(); }),
     { dispose: () => clearInterval(timer) });

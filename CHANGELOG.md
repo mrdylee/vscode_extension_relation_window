@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.22 — 2026-10-17
+
+- Failed update requests no longer consume the 24-hour successful-check interval.
+- Poll hourly to retry failures and check when due after window restarts; successful automatic checks remain daily and manual checks bypass the interval.
+- Explain automatic notification timing and manual checks in the bundled guide.
+
 ## 0.1.21 — 2026-10-17
 
 - Distinguish function declarations with an outlined document icon and definitions with a filled cube, preserving the 16×16 footprint.

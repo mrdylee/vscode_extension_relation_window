@@ -94,3 +94,5 @@ The graph displays at most 300 nodes. Recursion stops expansion along that path.
 In a WSL-connected VS Code window, install the VSIX into the WSL environment. Check that C Relation Explorer appears under the WSL extension list. Configure workspace scope from that same window and match Linux path casing.
 
 Use **C Relations: Check for Updates** to check for a newer release. Updates require internet access and your approval; analysis and this guide work offline. After installing an update, run **Developer: Reload Window** and verify the version shown next to **Context**.
+
+Automatic checks are enabled by default and run when the production extension activates, then when due. Successful checks are limited to once per 24 hours; an hourly timer checks whether one is due. New releases do not trigger an immediate notification. From v0.1.22, failed network/metadata checks retry on the next hourly tick while the extension remains active. Manual checks bypass the daily interval and report failures. Automatic checks stay quiet on network errors and are disabled in development/test mode. Use the user setting **C Relation: Automatic Updates** to enable or disable them.
