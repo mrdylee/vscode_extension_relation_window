@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.24 — 2026-10-17
+
+- Restore the compact rounded `ƒ` function icon: outline for declarations, fill for definitions, with independently visible dashed conditional/candidate/recursive borders.
+- Add the complete symbol and variable-use badge legend, with a bundled offline image, to Help.
+
 ## 0.1.23 — 2026-10-17
 
 - Show Relation details after the pointer remains still for 500 ms instead of one second. Movement restarts the delay and leaving the node cancels it.

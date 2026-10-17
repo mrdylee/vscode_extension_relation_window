@@ -65,7 +65,25 @@ Other examples: `App/**/*.{c,h}` matches C/H files under App; `**/vendor/**` mat
 
 Functions, variables, types and macros have distinct icons. Context and detail popups use syntax colors; these are not full compiler-based semantic highlighting.
 
-Function declarations (prototypes without a body) use a small blue outlined document. Function definitions (implementations with a body) use a filled purple cube. Both keep the same compact size. A generic `ƒ` remains when a reference has no identified declaration or definition. The popup names the form as **Function declaration** or **Function definition**. A dashed outline separately marks conditional code, ambiguous candidates or recursion; inspect the popup for the reason.
+## Symbol icons and badges
+
+![All C Relations symbol icons: outlined and filled functions, variables, types, macros, unknown symbols, dashed states and variable-use badges](media/symbol-icons.png)
+
+All icons remain **16×16**. Function icons retain the original rounded `ƒ` shape; fill distinguishes declarations from implementations.
+
+| Icon | Meaning |
+| --- | --- |
+| Outlined `ƒ` | Function declaration: a prototype without a body |
+| Filled `ƒ` | Function definition: an implementation with a body |
+| Generic `ƒ` | Function reference whose declaration/definition form is not identified; uses the outlined style too, so inspect the popup label |
+| Blue `v` | Variable, including a function-pointer variable |
+| Green `T` | Type, such as a typedef |
+| Amber `#` | Macro |
+| `?` | Unknown symbol kind |
+
+The popup names a known function form as **Function declaration** or **Function definition**. A **dashed border** independently marks one or more of **Conditional**, **Candidate** or **Recursive**. These states share the same dashed style; inspect the popup for the exact reason. A solid border means none of these special states is marked; it does not prove the code executes at runtime. Filled function icons leave a small gap inside a dashed border so the dashes remain visible.
+
+Variable-use badges are **R** (read), **W** (write), **RW** (read/write) and **&** (address passed). Several badges can appear on one node. Function colors adapt to light and dark themes. The image above shows the dark theme and includes enlarged icons for comparison alongside their actual size.
 
 ## Variable reads and writes
 

@@ -58,7 +58,9 @@ try {
   assert.ok(await page.evaluate(() => window.sent.some(m => m.type === 'help')), 'Help button requests offline guide');
   for (const form of ['declaration', 'definition']) {
     const glyph = page.locator(`.symbol-icon[data-form="${form}"]`).first();
-    assert.equal(await glyph.locator('svg').count(), 1, `${form} uses a vector icon`);
+    assert.equal(await glyph.textContent(), 'ƒ', `${form} retains the original function glyph`);
+    const background = await glyph.evaluate(node => getComputedStyle(node).backgroundColor);
+    assert.equal(background === 'rgba(0, 0, 0, 0)', form === 'declaration', 'fill distinguishes declaration and definition');
     const box = await glyph.boundingBox();
     assert.equal(box.width, 16, 'function icon keeps the original width');
     assert.equal(box.height, 16, 'function icon keeps the original height');
@@ -69,6 +71,9 @@ try {
     assert.equal(await page.locator('.detail-kind').textContent(), `Function ${form}`);
     await page.keyboard.press('Escape');
   }
+  const conditionalIcon = page.locator('[data-node-name="optional_task"] .symbol-icon');
+  assert.equal(await conditionalIcon.evaluate(node => getComputedStyle(node).borderStyle), 'dashed');
+  assert.equal(await conditionalIcon.evaluate(node => getComputedStyle(node).backgroundClip), 'content-box', 'filled functions leave a gap so dashed borders remain visible');
   const depthSelector = page.getByRole('combobox', { name: 'Depth', exact: true });
   for (const level of [2, 3, 4, 5]) {
     await depthSelector.click();

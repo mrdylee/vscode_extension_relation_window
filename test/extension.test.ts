@@ -304,6 +304,9 @@ export async function run() {
   const guideUri = vscode.Uri.joinPath(ext.extensionUri, 'USER_GUIDE.md');
   const guide = Buffer.from(await vscode.workspace.fs.readFile(guideUri)).toString('utf8');
   assert.ok(guide.includes('Exclude always wins.') && guide.includes('cRelation.include'), 'bundled guide explains scope precedence');
+  assert.ok(guide.includes('media/symbol-icons.png'), 'offline Help links to the symbol legend');
+  const legend = await vscode.workspace.fs.readFile(vscode.Uri.joinPath(ext.extensionUri, 'media', 'symbol-icons.png'));
+  assert.deepEqual([...legend.slice(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10], 'bundled icon legend is an accessible PNG');
   await api.view.handleMessage({ type: 'help' });
   await new Promise(resolve => setTimeout(resolve, 500));
   assert.ok(vscode.window.tabGroups.all.flatMap(group => group.tabs).some(tab => tab.input instanceof vscode.TabInputWebview && /USER_GUIDE/.test(tab.label)), 'Help opens a rendered offline guide');

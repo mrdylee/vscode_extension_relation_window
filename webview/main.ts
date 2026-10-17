@@ -57,9 +57,6 @@ function icon(node: GraphNode) {
   const i = el('span', 'symbol-icon', icons[node.kind]); i.dataset.kind = node.kind; i.setAttribute('aria-hidden', 'true');
   if (node.kind === 'function' && node.definition !== undefined) {
     i.dataset.form = node.definition ? 'definition' : 'declaration';
-    i.innerHTML = node.definition
-      ? '<svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" opacity=".95" d="M8 1.5 14 5 8 8.5 2 5Z"/><path fill="currentColor" opacity=".65" d="M2 5.8 7.5 9v5.5L2 11.3Z"/><path fill="currentColor" opacity=".4" d="m8.5 9 5.5-3.2v5.5l-5.5 3.2Z"/></svg>'
-      : '<svg viewBox="0 0 16 16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" d="M3.5 1.5h5L12.5 5v9.5h-9ZM8.5 1.5V5h4M5.5 8h5M5.5 10.5h3.5"/></svg>';
   }
   return i;
 }
