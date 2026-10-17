@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.18 — 2026-10-17
+
+- Add folder-scoped `cRelation.include` patterns. Empty includes all C/H files; Exclude always takes precedence. Apply both settings before the initial file cap and to runtime file events and unsaved edits.
+- Preserve the original double-click source target when single-click expansion moves Relation nodes.
+- Document Include/Exclude combinations, Settings UI, JSON examples and WSL paths.
+
 ## 0.1.17 — 2026-10-17
 
 - Keep depth and relation-mode selectors mounted during background updates so open menus remain usable. Preserve unchanged definition choices.

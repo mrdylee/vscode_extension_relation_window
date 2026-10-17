@@ -2,7 +2,7 @@
   "name": "c-relation-explorer",
   "displayName": "C Relation Explorer",
   "description": "Build-free C references, caller graphs and a linked Context preview.",
-  "version": "0.1.17",
+  "version": "0.1.18",
   "publisher": "local-james-black",
   "license": "MIT",
   "engines": {
@@ -55,12 +55,19 @@
     "configuration": {
       "title": "C Relations",
       "properties": {
+        "cRelation.include": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "default": [],
+          "scope": "resource",
+          "description": "Workspace-relative glob patterns to include in C/H analysis, for example App/** or Drivers/**. Empty includes all C/H files. Exclude always takes priority. Uses forward slashes. Changes automatically rebuild the index."
+        },
         "cRelation.exclude": {
           "type": "array",
           "items": { "type": "string", "minLength": 1 },
           "default": [],
           "scope": "resource",
-          "description": "Workspace-relative glob patterns excluded from indexing and file watching, for example **/Tools/Polyspace/**. Uses forward slashes. This is independent of C_Cpp.files.exclude and search.exclude."
+          "description": "Workspace-relative glob patterns excluded from indexing and file watching, for example **/Tools/Polyspace/**. Exclude takes priority over Include. Uses forward slashes. Changes automatically rebuild the index. Independent of files.exclude, search.exclude and C_Cpp.files.exclude."
         },
         "cRelation.skipInactive": {
           "type": "boolean",
@@ -86,7 +93,7 @@
     "test:freertos": "npm run build && node scripts/test-freertos.mjs",
     "test:ui": "npm run build && tsx test/create-ui-fixture.ts && node test/ui.mjs",
     "vscode:prepublish": "npm run build",
-    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license --out artifacts/c-relation-explorer-0.1.17.vsix"
+    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license --out artifacts/c-relation-explorer-0.1.18.vsix"
   },
   "dependencies": {
     "minimatch": "10.2.6",

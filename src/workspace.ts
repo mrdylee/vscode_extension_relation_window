@@ -23,7 +23,7 @@ export class WorkspaceIndex implements vscode.Disposable {
   private epoch = 0;
   private disposed = false;
   private workerError?: Error;
-  private exclusions = new Map<string, { patterns: string[]; matchers: Minimatch[] }>();
+  private scopes = new Map<string, { include: string[]; exclude: string[]; included: Minimatch[]; excluded: Minimatch[] }>();
   get skipInactive() { return vscode.workspace.getConfiguration('cRelation').get<boolean>('skipInactive', true); }
   constructor(extensionPath: string) {
     const assets = path.join(extensionPath, 'dist');
@@ -46,25 +46,29 @@ export class WorkspaceIndex implements vscode.Disposable {
       vscode.workspace.onDidChangeTextDocument(event => { if (event.contentChanges.length) this.schedule(event.document.uri); }),
       vscode.workspace.onDidCloseTextDocument(document => this.schedule(document.uri)),
       vscode.workspace.onDidChangeConfiguration(event => {
-        if (event.affectsConfiguration('cRelation.skipInactive') || event.affectsConfiguration('cRelation.exclude')) void this.reindex();
+        if (event.affectsConfiguration('cRelation.skipInactive') || event.affectsConfiguration('cRelation.include') || event.affectsConfiguration('cRelation.exclude')) void this.reindex();
       }),
       vscode.workspace.onDidChangeWorkspaceFolders(() => void this.reindex()));
     this.ready = this.reindex();
   }
-  private excludes(folder: vscode.WorkspaceFolder) {
+  private scope(folder: vscode.WorkspaceFolder) {
     const key = folder.uri.toString();
-    let value = this.exclusions.get(key);
+    let value = this.scopes.get(key);
     if (!value) {
-      const patterns = [...builtInExcludes, ...vscode.workspace.getConfiguration('cRelation', folder.uri).get<string[]>('exclude', [])];
-      value = { patterns, matchers: patterns.map(pattern => new Minimatch(pattern, { dot: true, nonegate: true, nocomment: true, noext: true, nocase: process.platform === 'win32' })) };
-      this.exclusions.set(key, value);
+      const config = vscode.workspace.getConfiguration('cRelation', folder.uri);
+      const include = config.get<string[]>('include', []), exclude = [...builtInExcludes, ...config.get<string[]>('exclude', [])];
+      const match = (pattern: string) => new Minimatch(pattern, { dot: true, nonegate: true, nocomment: true, noext: true, nocase: process.platform === 'win32' });
+      value = { include, exclude, included: include.map(match), excluded: exclude.map(match) };
+      this.scopes.set(key, value);
     }
     return value;
   }
   private eligible(uri: vscode.Uri) {
     const folder = vscode.workspace.getWorkspaceFolder(uri);
-    return /\.[ch]$/i.test(uri.path) && !!folder &&
-      !this.excludes(folder).matchers.some(matcher => matcher.match(vscode.workspace.asRelativePath(uri, false).replace(/\\/g, '/')));
+    if (!/\.[ch]$/i.test(uri.path) || !folder) return false;
+    const scope = this.scope(folder), relative = vscode.workspace.asRelativePath(uri, false).replace(/\\/g, '/');
+    return (!scope.included.length || scope.included.some(matcher => matcher.match(relative))) &&
+      !scope.excluded.some(matcher => matcher.match(relative));
   }
   private remove(uri: vscode.Uri) {
     const key = uri.toString();
@@ -111,16 +115,21 @@ export class WorkspaceIndex implements vscode.Disposable {
   }
   async reindex() {
     const epoch = ++this.epoch;
-    this.exclusions.clear();
+    this.scopes.clear();
     this.index.clear(); this.failures.clear();
     this.status = 'Indexing C sources…'; this.changed.fire();
     try {
       const uris: vscode.Uri[] = [];
       for (const folder of vscode.workspace.workspaceFolders ?? []) {
-        const exclude = `{${this.excludes(folder).patterns.join(',')}}`;
-        const found = await vscode.workspace.findFiles(new vscode.RelativePattern(folder, '**/*.{c,h}'), exclude, 10001 - uris.length);
+        const scope = this.scope(folder), exclude = `{${scope.exclude.join(',')}}`;
+        const include = scope.include.length === 1 ? scope.include[0] : scope.include.length ? `{${scope.include.join(',')}}` : '**/*.{c,h}';
+        // Include globs may match non-C files; filter them before imposing the source-file cap.
+        const found = await vscode.workspace.findFiles(new vscode.RelativePattern(folder, include), exclude, scope.include.length ? undefined : 10001 - uris.length);
         if (this.disposed || epoch !== this.epoch) return;
-        uris.push(...found.filter(uri => this.eligible(uri)));
+        for (const uri of found) {
+          if (this.eligible(uri)) uris.push(uri);
+          if (uris.length > 10000) break;
+        }
         if (uris.length > 10000) break;
       }
       for (const uri of uris.slice(0, 10000)) {

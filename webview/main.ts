@@ -9,7 +9,7 @@ const app = document.getElementById('app')!;
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text = '') {
   const node = document.createElement(tag); node.className = className; node.textContent = text; return node;
 }
-function button(text: string, action: () => void, title = text) {
+function button(text: string, action: (event: MouseEvent) => void, title = text) {
   const node = el('button', '', text); node.type = 'button'; node.title = title; node.onclick = action; return node;
 }
 const toolbar = el('header', 'toolbar');
@@ -17,6 +17,14 @@ const panes = el('main', 'panes');
 const context = el('section', 'context pane');
 const relation = el('section', 'relation pane');
 const graph = el('div', 'graph');
+// Expansion can move/recreate nodes between clicks; keep the first click's source target.
+let firstClickId: string | undefined;
+graph.addEventListener('click', event => {
+  if (event.detail === 1) firstClickId = (event.target as HTMLElement).closest<HTMLElement>('.node-title')?.dataset.preview;
+}, true);
+graph.addEventListener('dblclick', event => {
+  if (firstClickId) { event.preventDefault(); send('open', { id: firstClickId }); }
+});
 const graphHeader = el('div', 'pane-heading');
 const candidates = el('div', 'candidates');
 const footer = el('footer');
@@ -133,7 +141,7 @@ function drawNode(node: GraphNode): HTMLElement {
   const branch = el('div', 'branch');
   const card = el('article', 'node'); card.dataset.nodeName = node.name;
   const openId = node.sites[0]?.access ? node.sites[0].id : node.symbolId ?? node.sites[0]?.id;
-  const title = button('', () => send('selectNode', { key: node.key }), '');
+  const title = button('', event => { if (event.detail <= 1) send('selectNode', { key: node.key }); }, '');
   title.className = 'node-title'; title.dataset.key = node.key;
   title.dataset.preview = openId;
   title.append(icon(node.kind), el('span', 'symbol-name', node.symbolId ? node.name : node.sites[0]?.name ?? node.name));
@@ -148,7 +156,6 @@ function drawNode(node: GraphNode): HTMLElement {
   title.onmouseleave = scheduleClose;
   title.onfocus = () => { if (title.matches(':focus-visible')) showDetails(node, title); };
   title.onblur = event => { if (!popup.contains(event.relatedTarget as Node)) hideDetails(); };
-  title.ondblclick = () => send('open', { id: openId });
   title.onkeydown = event => {
     if (event.key === ' ') { event.preventDefault(); showDetails(node, title); }
     if (event.key === 'Tab' && !event.shiftKey && !popup.hidden && popupKey === node.key) {

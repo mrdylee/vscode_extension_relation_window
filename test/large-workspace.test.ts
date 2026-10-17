@@ -34,6 +34,13 @@ export async function run() {
     assert.equal(groups.reduce((n: number, g: any) => n + g.sites.length, 0), 50000);
     await new Promise(r => setTimeout(r, 30)); // Include query stalls in the heartbeat measurement.
     const result = { passed: true, sourceFiles: 12551, indexedFiles: 2501, calls: 50000, elapsedMs: Date.now() - started, selectionMs, queryMs, filesAtSelection, ticks, maxTickGapMs };
+    const settings = vscode.workspace.getConfiguration('cRelation');
+    await settings.update('include', ['target.c', 'caller-*.c', 'caller-1*'], vscode.ConfigurationTarget.Workspace);
+    await settings.update('exclude', [], vscode.ConfigurationTarget.Workspace);
+    await new Promise(r => setTimeout(r, 500));
+    await Promise.race([withinDeadline, api.workspace.whenIdle()]);
+    assert.equal(api.workspace.status, 'Index ready');
+    assert.equal(api.workspace.index.files.size, 2501, 'include filters before the file cap and overlapping patterns are deduplicated');
     await mkdir(path.dirname(process.env.C_RELATION_TEST_OUTPUT!), { recursive: true });
     await writeFile(process.env.C_RELATION_TEST_OUTPUT!, JSON.stringify(result, null, 2));
     console.log('Large workspace verification', JSON.stringify(result));

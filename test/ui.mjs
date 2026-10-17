@@ -78,11 +78,15 @@ try {
   await page.keyboard.press('Escape');
   await page.evaluate(state => window.dispatchEvent(new MessageEvent('message', { data: { type: 'state', state } })), state);
   const caller = page.locator('[data-node-name="control_task"]');
-  await caller.locator('.node-title').dblclick();
-  await page.waitForFunction(() => window.sent.some(m => m.type === 'open'));
-  state.graph = fixture.graph;
-  preview(fixture.graph.root.symbolId);
-  await page.evaluate(state => window.dispatchEvent(new MessageEvent('message', { data: { type: 'state', state } })), state);
+  for (const delay of [0, 150, 300]) {
+    const openCount = await page.evaluate(() => window.sent.filter(m => m.type === 'open').length);
+    await caller.locator('.node-title').dblclick({ delay });
+    await page.waitForFunction(count => window.sent.filter(m => m.type === 'open').length > count, openCount);
+    assert.equal(await page.evaluate(() => window.sent.filter(m => m.type === 'open').at(-1).id), fixture.graph.root.children.find(node => node.name === 'control_task').symbolId, 'double-click opens the original symbol after expansion moves nodes');
+    state.graph = fixture.graph;
+    preview(fixture.graph.root.symbolId);
+    await page.evaluate(state => window.dispatchEvent(new MessageEvent('message', { data: { type: 'state', state } })), state);
+  }
   assert.ok((await caller.boundingBox()).height <= 26, 'compact single-line node');
   assert.equal(await caller.locator('.site').count(), 0);
   const popup = page.getByRole('dialog', { name: 'Symbol details' });

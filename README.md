@@ -13,12 +13,12 @@ VS Code 데스크톱 1.95 이상이 필요합니다. 분석은 로컬 WASM으로
 
 **WSL 설치:** Windows의 VS Code에서 Microsoft WSL 확장을 설치한 뒤 **WSL: Reopen Folder in WSL**로 C 소스 폴더를 엽니다. 그 창에서 VSIX를 설치하고 확장 목록의 **WSL: 배포판 이름**에 C Relation Explorer가 있는지 확인합니다. 필요하면 **Install in WSL**을 선택합니다. [VS Code WSL 안내](https://code.visualstudio.com/docs/remote/wsl#_managing-extensions)
 
-## 분석에서 폴더 제외 (v0.1.16 이상)
+## 분석 범위 설정: Include / Exclude
 
-큰 프로젝트에서는 분석할 필요가 없는 도구·생성 코드 폴더를 제외하세요. 예를 들어 Polyspace 설치 파일이나 분석 결과가 소스 폴더 안에 있다면 해당 경로를 제외할 수 있습니다. 기본 사용자 제외 목록은 비어 있으므로 Polyspace나 SDK 폴더가 자동으로 제외되지는 않습니다.
+Include는 v0.1.18 이상, Exclude는 v0.1.16 이상에서 사용할 수 있습니다. 분석할 폴더가 적으면 **Include**로 포함할 범위를 지정하고, 불필요한 도구·생성 코드 폴더는 **Exclude**로 제외하세요. 예를 들어 Polyspace 설치 파일이나 분석 결과가 소스 폴더 안에 있다면 해당 경로를 제외할 수 있습니다. 기본 사용자 제외 목록은 비어 있으므로 Polyspace나 SDK 폴더가 자동으로 제외되지는 않습니다.
 
 1. C 소스 폴더를 연 VS Code 창에서 명령 팔레트의 **Preferences: Open Workspace Settings (JSON)**을 실행합니다. WSL 프로젝트라면 WSL에 연결된 창에서 설정합니다.
-2. 설정 객체에 `cRelation.exclude`를 추가하고 저장합니다. 기존 설정이 있다면 다른 항목을 지우지 말고 이 항목을 합칩니다. 일반적인 단일 폴더 프로젝트에서는 `.vscode/settings.json`에 저장됩니다.
+2. 설정 객체에 `cRelation.include`와 `cRelation.exclude`를 필요에 맞게 추가하고 저장합니다. 기존 설정이 있다면 다른 항목을 지우지 말고 이 항목을 합칩니다. 일반적인 단일 폴더 프로젝트에서는 `.vscode/settings.json`에 저장됩니다.
 
 ```json
 {
@@ -31,9 +31,27 @@ VS Code 데스크톱 1.95 이상이 필요합니다. 분석은 로컬 WASM으로
 
 3. 저장하면 자동으로 다시 분석합니다. 하단 상태가 **Indexing C sources…**에서 **Index ready**로 바뀌는지 확인한 뒤 원본 `.c` / `.h`의 함수 이름을 클릭합니다. 필요할 때만 **Rebuild index**로 전체 분석을 다시 실행하세요.
 
-설정 화면을 사용하려면 Settings에서 `@id:cRelation.exclude`를 검색하고 Workspace 범위에 패턴을 추가해도 됩니다.
+위 예시는 전체 C/H 파일 중 Polyspace와 build만 제외합니다. **App과 Drivers만 분석하면서 그 안의 generated와 test는 제외**하려면 다음과 같이 설정합니다.
 
-| 패턴 예시 | 제외 범위 |
+```json
+{
+  "cRelation.include": ["App/**", "Drivers/**"],
+  "cRelation.exclude": ["**/generated/**", "**/test/**"]
+}
+```
+
+| Include | Exclude | 분석 범위 |
+| --- | --- | --- |
+| 비어 있음 (`[]`) | 비어 있음 (`[]`) | 전체 C/H 파일 (기본 제외 폴더는 제외) |
+| 설정 | 비어 있음 | Include에 일치하는 C/H 파일 |
+| 비어 있음 | 설정 | 전체 C/H에서 Exclude를 제외 |
+| 설정 | 설정 | Include에 일치하는 C/H에서 Exclude를 제외 |
+
+**Exclude가 최종 우선**입니다. Include는 패턴 중 하나에 일치하면 포함하며, 겹치는 패턴으로 같은 파일을 중복 분석하지 않습니다. Include가 설정되어 있지만 일치하는 파일이 없으면 분석 결과는 0개입니다. 전체 범위로 돌아가려면 Include를 `[]`로 비우세요.
+
+Settings 화면에서는 `@id:cRelation.include` 또는 `@id:cRelation.exclude`를 검색하고 **Workspace** 범위에서 항목을 추가할 수 있습니다. 폴더 안의 모든 파일을 지정할 때는 `App` 대신 `App/**`처럼 작성하세요. 폴더 패턴에 다른 종류의 파일이 있어도 분석은 C/H 파일만 대상으로 합니다.
+
+| 패턴 예시 | 일치 범위 (Include/Exclude 공통) |
 | --- | --- |
 | `**/Tools/Polyspace/**` | 어느 깊이에 있든 `Tools/Polyspace` 아래 파일 |
 | `**/build/**` | 모든 `build` 폴더 아래 파일 |
@@ -42,9 +60,9 @@ VS Code 데스크톱 1.95 이상이 필요합니다. 분석은 로컬 WASM으로
 
 - 패턴은 **열린 워크스페이스 폴더 기준**입니다. 실제 폴더 이름에 맞게 바꾸고 Windows에서도 경로 구분자는 `/`를 사용하세요. WSL에서는 경로의 대소문자가 일치해야 합니다. Windows에서 실행되는 확장은 대소문자를 구분하지 않습니다.
 - 여러 폴더를 연 워크스페이스에서는 각 폴더를 기준으로 패턴을 적용하며, 폴더별 설정도 가능합니다.
-- 제외한 파일의 **정의와 참조는 Relation에 나오지 않습니다**. 필요한 공통 헤더나 라이브러리까지 제외하면 관계가 누락될 수 있습니다. 패턴을 제거하면 자동 재분석으로 다시 포함됩니다.
-- 제외 설정은 초기 파일 수 제한 **이전**에 적용되며 이후 파일 생성·수정·미저장 편집에도 적용됩니다.
-- `files.exclude`, `search.exclude`, `C_Cpp.files.exclude`는 이 확장의 분석 범위에 적용되지 않습니다. 반드시 `cRelation.exclude`를 사용하세요.
+- Include 밖에 있거나 Exclude에 해당하는 파일의 **정의와 참조는 Relation에 나오지 않습니다**. 필요한 공통 헤더나 라이브러리까지 제외하면 관계가 누락될 수 있습니다. Include를 넓히거나 Exclude에서 패턴을 제거하면 자동 재분석으로 다시 포함할 수 있습니다.
+- Include/Exclude 설정은 초기 파일 수 제한 **이전**에 적용되며 이후 파일 생성·수정·미저장 편집에도 적용됩니다.
+- `files.exclude`, `search.exclude`, `C_Cpp.files.exclude`는 이 확장의 분석 범위에 적용되지 않습니다. `cRelation.include`와 `cRelation.exclude`를 사용하세요.
 - `node_modules`, `.git`, `.vscode-test`는 기본으로 제외합니다. 사용자 제외 후에도 초기 분석 대상이 10,000개를 넘으면 **Partial index**가 표시됩니다. 불필요한 경로를 더 제외하거나 필요한 소스 폴더를 별도로 여세요.
 
 ## 업데이트
@@ -113,7 +131,7 @@ Tree-sitter C 구문 트리에서 심볼·위치를 수집하고 파일/지역 �
 - 매크로를 확장하지 않습니다. 매크로 안에 감춰진 함수 호출은 직접 호출로 만들어 내지 않습니다.
 - 헤더의 `static`, 간접 include, 복잡한 변수 선언, 컴파일러 전용 문법은 불완전할 수 있습니다. 파서 오류는 하단 **Analysis notices**로 표시하지만 모든 의미 오류를 감지하지는 못합니다.
 - `.c`, `.h` 파일을 대상으로 하며 `node_modules`, `.git`, `.vscode-test`와 `cRelation.exclude` 패턴에 맞는 파일을 제외합니다. `files.exclude`, `search.exclude`, `C_Cpp.files.exclude`는 이 확장의 분석 범위에 적용되지 않습니다.
-- 초기 분석은 제외 설정 적용 후 최대 10,000개 파일, 파일당 2,000,000 UTF-16 코드 단위, 화면당 300개 노드로 제한합니다. 제한·분석 실패는 알림으로 표시합니다. 파일 변경은 해당 파일의 인덱스만 교체합니다.
+- 초기 분석은 Include/Exclude 적용 후 최대 10,000개 파일, 파일당 2,000,000 UTF-16 코드 단위, 화면당 300개 노드로 제한합니다. 제한·분석 실패는 알림으로 표시합니다. 파일 변경은 해당 파일의 인덱스만 교체합니다.
 - Context는 선택 위치 앞 80줄, 뒤 120줄 범위를 읽기 전용으로 보여줍니다. 간단한 구문 색상은 제공하지만 전체 C 의미 강조는 아닙니다.
 
 ## Relation이 바뀌지 않거나 느릴 때
@@ -122,7 +140,7 @@ Tree-sitter C 구문 트리에서 심볼·위치를 수집하고 파일/지역 �
 2. **Following selection** 상태인지 확인합니다. **Pinned · Follow paused**는 선택 추적을 멈추고 현재 Relation을 유지하는 상태입니다. 버튼을 누르면 추적을 재개합니다.
 3. 하단의 **분석 상태와 파일 수**를 확인합니다. 초기 분석 중에는 아직 처리하지 않은 파일의 관계가 빠질 수 있습니다. **Partial index: 10,000 file limit reached**이면 일부 파일이 초기 색인에서 빠졌으므로 제외 설정으로 범위를 줄이세요.
 4. **Analysis notices**를 펼칩니다. `File exceeds the 2,000,000 character analysis limit`는 해당 파일의 크기 제한 안내입니다. 도구가 생성한 대형 파일이면 그 폴더를 제외하세요. 문법 분석 알림은 파일과 줄을 확인해야 하며, **Index ready**도 모든 파일에 분석 오류가 없다는 뜻은 아닙니다.
-5. 선택한 파일이 `cRelation.exclude`에 포함되어 있지 않은지 확인합니다. 같은 이름의 정의가 여럿이면 **Select definition**에서 원하는 파일의 정의를 선택합니다.
+5. Include를 설정했다면 선택한 파일이 그 패턴에 일치하고, Exclude에는 일치하지 않는지 확인합니다. 0개로 표시되면 폴더 이름과 WSL 경로의 대소문자를 확인하세요. 같은 이름의 정의가 여럿이면 **Select definition**에서 원하는 파일의 정의를 선택합니다.
 
 **Rebuild index**는 현재 범위로 분석을 다시 실행합니다. 제외 설정 없이 반복해서 눌러도 분석 대상이나 파일 수 제한이 달라지지는 않습니다. `Skip inactive branches`는 폴더 제외와 별개이며, 정의 여부가 불명확한 `#ifdef` 분기를 제거하는 옵션은 아닙니다.
 
