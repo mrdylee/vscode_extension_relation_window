@@ -249,3 +249,55 @@ test('conditional initialization writes bind only to their own definition', () =
     }
   }
 });
+
+test('updating or removing one file does not scan unchanged file records', () => {
+  const value = new RelationIndex();
+  const untouched = parse('void target(void){}', 'file:///demo/target.c');
+  value.update(untouched);
+  Object.defineProperty(untouched, 'references', { get() { throw new Error('unchanged references scanned'); } });
+  Object.defineProperty(untouched, 'symbols', { get() { throw new Error('unchanged symbols scanned'); } });
+  const caller = parse('void caller(void){target();}', 'file:///demo/caller.c');
+  value.update(caller);
+  value.update(parse('void caller(void){target(); target();}', caller.uri));
+  value.remove(caller.uri);
+  value.remove('file:///missing.c');
+});
+
+test('shared prototypes are not rescanned for every call site', () => {
+  const value = new RelationIndex();
+  const target = parse('void target(void){}', 'file:///demo/target.c');
+  value.update(target);
+  let definitionReads = 0;
+  for (let n = 0; n < 20; n++) {
+    const file = parse(`void target(void); void caller${n}(void){${'target();'.repeat(20)}}`, `file:///demo/caller${n}.c`);
+    const declaration = file.symbols.find(s => s.name === 'target')!;
+    Object.defineProperty(declaration, 'definition', { get() { definitionReads++; return false; } });
+    value.update(file);
+  }
+  const groups = value.relations(target.symbols[0].id, 'callers');
+  assert.equal(groups.length, 20);
+  assert.equal(groups.flatMap(g => g.sites).length, 400);
+  assert.ok(definitionReads < 1000, `unrelated prototypes scanned ${definitionReads} times`);
+});
+
+test('incremental replacement, rename, delete and reinsert match a fresh index', () => {
+  const value = index({ 'a.c': 'void target(void){} int state;', 'b.c': 'void caller(void){target(); state++;}',
+    'c.c': 'void target(void){} void caller(void){target();}' });
+  const equivalent = () => {
+    const fresh = new RelationIndex();
+    for (const file of value.files.values()) fresh.update(file);
+    for (const symbol of fresh.symbols()) {
+      assert.deepEqual(value.symbol(symbol.id), fresh.symbol(symbol.id));
+      for (const mode of ['references', 'callers'] as const)
+        assert.deepEqual(value.graph(symbol.id, mode, 3), fresh.graph(symbol.id, mode, 3));
+    }
+    assert.deepEqual(value.symbols().map(s => s.id).sort(), fresh.symbols().map(s => s.id).sort());
+  };
+  equivalent();
+  value.update(parse('void target(void){} int other;', 'file:///demo/a.c')); equivalent();
+  value.update(parse('void renamed(void){target(); target();}', 'file:///demo/b.c')); equivalent();
+  value.remove('file:///demo/c.c'); equivalent();
+  value.update(parse('void target(void){}', 'file:///demo/c.c')); equivalent();
+  value.update(parse('', 'file:///demo/a.c')); equivalent();
+  value.clear(); assert.equal(value.symbols().length, 0); assert.equal(value.files.size, 0);
+});

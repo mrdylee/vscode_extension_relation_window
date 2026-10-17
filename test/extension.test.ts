@@ -6,6 +6,12 @@ import path from 'node:path';
 export async function run() {
   const ext = vscode.extensions.getExtension('local-james-black.c-relation-explorer');
   assert.ok(ext, 'extension registered');
+  const root = vscode.workspace.workspaceFolders![0].uri;
+  const excludedUri = vscode.Uri.joinPath(root, 'Tools', 'Polyspace', 'generated.c');
+  const excludedPatterns = ['**/Tools/Polyspace/**', '**/{generated,vendor}/**'];
+  await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(root, 'Tools', 'Polyspace'));
+  await vscode.workspace.fs.writeFile(excludedUri, Buffer.from('void excluded(void){check_fault(1);}'));
+  await vscode.workspace.getConfiguration('cRelation').update('exclude', excludedPatterns, vscode.ConfigurationTarget.Workspace);
   const originalFetch = globalThis.fetch;
   let automaticReleaseChecks = 0;
   globalThis.fetch = async (input, init) => {
@@ -30,7 +36,7 @@ export async function run() {
   const opening = vscode.workspace.onDidOpenTextDocument(() => openedByReindex++);
   try { await api.workspace.reindex(); } finally { opening.dispose(); }
   assert.equal(openedByReindex, 0, 'background indexing must not open VS Code documents');
-  const root = vscode.workspace.workspaceFolders![0].uri;
+  assert.equal(api.workspace.index.files.has(excludedUri.toString()), false, 'initial indexing excludes configured folders');
   const document = await vscode.workspace.openTextDocument(vscode.Uri.joinPath(root, 'control.c'));
   const editor = await vscode.window.showTextDocument(document);
   await vscode.commands.executeCommand('cRelation.open');
@@ -193,6 +199,25 @@ export async function run() {
   assert.equal(vscode.window.activeTextEditor?.document.uri.toString(), faultDocument.uri.toString(), 'Context can navigate into a different file');
   assert.ok(vscode.window.activeTextEditor?.selection.active.isEqual(countPosition));
   assert.equal(api.view.state.graph?.root.name, 'fault_count', 'Context variable click switches to variable relations');
+  const excludedDocument = await vscode.workspace.openTextDocument(excludedUri);
+  const excludedEditor = await vscode.window.showTextDocument(excludedDocument);
+  await excludedEditor.edit(edit => edit.insert(new vscode.Position(0, 0), '// unsaved excluded edit\n'));
+  const generatedUri = vscode.Uri.joinPath(root, 'generated', 'late.c');
+  await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(root, 'generated'));
+  await vscode.workspace.fs.writeFile(generatedUri, Buffer.from('void excluded_late(void){}'));
+  await new Promise(resolve => setTimeout(resolve, 500));
+  await api.workspace.whenIdle();
+  assert.equal(api.workspace.index.files.has(excludedUri.toString()), false, 'editing excluded files does not add them');
+  assert.equal(api.workspace.index.files.has(generatedUri.toString()), false, 'watchers honor glob exclusions');
+  await vscode.workspace.getConfiguration('cRelation').update('exclude', [], vscode.ConfigurationTarget.Workspace);
+  await new Promise(resolve => setTimeout(resolve, 500));
+  await api.workspace.whenIdle();
+  assert.ok(api.workspace.index.files.get(excludedUri.toString())?.text.includes('unsaved excluded edit'), 'removing exclusions reindexes unsaved buffers');
+  assert.ok(api.workspace.index.files.has(generatedUri.toString()));
+  await vscode.workspace.getConfiguration('cRelation').update('exclude', excludedPatterns, vscode.ConfigurationTarget.Workspace);
+  await new Promise(resolve => setTimeout(resolve, 500));
+  await api.workspace.whenIdle();
+  assert.equal(api.workspace.index.files.has(excludedUri.toString()), false, 'adding exclusions removes old index entries');
   const output = process.env.C_RELATION_TEST_OUTPUT!;
   await mkdir(path.dirname(output), { recursive: true });
   await writeFile(output, JSON.stringify({ passed: true, checks: ['Context source navigation and relation reroot', 'Context cross-file variable navigation', 'Context lock and stale-message checks', 'selected identifier tracking', 'selection retry after indexing', 'unlock follows latest editor', 'same-symbol graph reuse', 'variable selection and access filters', 'variable actual-site preview preserves editor', 'variable access filter validation', 'variable uses continue into caller tree', 'activation', '93-file index completion', 'indexing does not open documents', 'WASM worker', 'click tracking', 'variable icon data', 'call sites', 'Context preserves editor', 'mode/depth/expand/collapse', 'locked root', 'explicit source open', 'invalid message target', '#if0 setting reindex', 'unsaved buffer', 'file create/delete', 'ambiguous symbol clears stale graph and Context', 'candidate selection'] }, null, 2));

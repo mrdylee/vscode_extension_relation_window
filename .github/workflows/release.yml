@@ -23,9 +23,14 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm run typecheck
       - run: npm test
+      - run: npm run test:performance
       - run: npm run test:extension
         if: runner.os != 'Linux'
       - run: xvfb-run -a npm run test:extension
+        if: runner.os == 'Linux'
+      - run: npm run test:large
+        if: runner.os != 'Linux'
+      - run: xvfb-run -a npm run test:large
         if: runner.os == 'Linux'
 
   release:

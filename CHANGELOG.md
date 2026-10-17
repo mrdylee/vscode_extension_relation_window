@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.15 — 2026-10-17
+
+- Replace full-project index rebuilding with file-level updates; remove repeated reference-array copies.
+- Cache shared definition candidates and look up file-local symbols directly, avoiding repeated scans of declarations for every call site.
+- Add `cRelation.exclude` workspace-relative glob patterns, applied before the initial file limit and to file watching and unsaved edits. Changing exclusions rebuilds the index automatically.
+- Add incremental-equivalence tests, exclusion integration tests, and large-workspace performance checks to release validation.
+
 ## 0.1.14 — 2026-10-17
 
 - Translate interface labels, tooltips, accessibility labels, dialogs, and update messages into English.

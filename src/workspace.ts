@@ -3,6 +3,9 @@ import { Worker } from 'node:worker_threads';
 import path from 'node:path';
 import { FileAnalysis } from './model';
 import { RelationIndex } from './relations';
+import { Minimatch } from 'minimatch';
+
+const builtInExcludes = ['**/node_modules/**', '**/.git/**', '**/.vscode-test/**'];
 
 export class WorkspaceIndex implements vscode.Disposable {
   readonly index = new RelationIndex();
@@ -20,6 +23,7 @@ export class WorkspaceIndex implements vscode.Disposable {
   private epoch = 0;
   private disposed = false;
   private workerError?: Error;
+  private exclusions = new Map<string, { patterns: string[]; matchers: Minimatch[] }>();
   get skipInactive() { return vscode.workspace.getConfiguration('cRelation').get<boolean>('skipInactive', true); }
   constructor(extensionPath: string) {
     const assets = path.join(extensionPath, 'dist');
@@ -41,13 +45,26 @@ export class WorkspaceIndex implements vscode.Disposable {
       watch.onDidDelete(uri => this.remove(uri)),
       vscode.workspace.onDidChangeTextDocument(event => { if (event.contentChanges.length) this.schedule(event.document.uri); }),
       vscode.workspace.onDidCloseTextDocument(document => this.schedule(document.uri)),
-      vscode.workspace.onDidChangeConfiguration(event => { if (event.affectsConfiguration('cRelation.skipInactive')) void this.reindex(); }),
+      vscode.workspace.onDidChangeConfiguration(event => {
+        if (event.affectsConfiguration('cRelation.skipInactive') || event.affectsConfiguration('cRelation.exclude')) void this.reindex();
+      }),
       vscode.workspace.onDidChangeWorkspaceFolders(() => void this.reindex()));
     this.ready = this.reindex();
   }
+  private excludes(folder: vscode.WorkspaceFolder) {
+    const key = folder.uri.toString();
+    let value = this.exclusions.get(key);
+    if (!value) {
+      const patterns = [...builtInExcludes, ...vscode.workspace.getConfiguration('cRelation', folder.uri).get<string[]>('exclude', [])];
+      value = { patterns, matchers: patterns.map(pattern => new Minimatch(pattern, { dot: true, nonegate: true, nocomment: true, noext: true })) };
+      this.exclusions.set(key, value);
+    }
+    return value;
+  }
   private eligible(uri: vscode.Uri) {
-    return /\.[ch]$/i.test(uri.path) && !!vscode.workspace.getWorkspaceFolder(uri) &&
-      !/\/(?:node_modules|\.git|\.vscode-test)\//.test(uri.path);
+    const folder = vscode.workspace.getWorkspaceFolder(uri);
+    return /\.[ch]$/i.test(uri.path) && !!folder &&
+      !this.excludes(folder).matchers.some(matcher => matcher.match(path.posix.relative(folder.uri.path, uri.path)));
   }
   private remove(uri: vscode.Uri) {
     const key = uri.toString();
@@ -70,6 +87,7 @@ export class WorkspaceIndex implements vscode.Disposable {
     return job;
   }
   private async analyze(uri: vscode.Uri) {
+    if (this.disposed || !this.eligible(uri)) return;
     const key = uri.toString(), epoch = this.epoch;
     const version = (this.versions.get(key) ?? 0) + 1;
     this.versions.set(key, version);
@@ -93,10 +111,18 @@ export class WorkspaceIndex implements vscode.Disposable {
   }
   async reindex() {
     const epoch = ++this.epoch;
+    this.exclusions.clear();
     this.index.clear(); this.failures.clear();
     this.status = 'Indexing C sources…'; this.changed.fire();
     try {
-      const uris = await vscode.workspace.findFiles('**/*.{c,h}', '**/{node_modules,.git,.vscode-test}/**', 10001);
+      const uris: vscode.Uri[] = [];
+      for (const folder of vscode.workspace.workspaceFolders ?? []) {
+        const exclude = `{${this.excludes(folder).patterns.join(',')}}`;
+        const found = await vscode.workspace.findFiles(new vscode.RelativePattern(folder, '**/*.{c,h}'), exclude, 10001 - uris.length);
+        if (this.disposed || epoch !== this.epoch) return;
+        uris.push(...found.filter(uri => this.eligible(uri)));
+        if (uris.length > 10000) break;
+      }
       for (const uri of uris.slice(0, 10000)) {
         if (this.disposed || epoch !== this.epoch) return;
         await this.enqueue(uri);
@@ -105,7 +131,10 @@ export class WorkspaceIndex implements vscode.Disposable {
         this.status = uris.length > 10000 ? 'Partial index: 10,000 file limit reached' : 'Index ready';
         this.changed.fire();
       }
-    } catch (error) { this.status = `Index error: ${String(error)}`; this.changed.fire(); }
+    } catch (error) {
+      if (this.disposed || epoch !== this.epoch) return;
+      this.status = `Index error: ${String(error)}`; this.changed.fire();
+    }
   }
   async whenIdle() {
     while (this.jobs.size || this.timers.size || this.status.startsWith('Indexing')) {

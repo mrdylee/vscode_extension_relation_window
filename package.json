@@ -2,7 +2,7 @@
   "name": "c-relation-explorer",
   "displayName": "C Relation Explorer",
   "description": "Build-free C references, caller graphs and a linked Context preview.",
-  "version": "0.1.14",
+  "version": "0.1.15",
   "publisher": "local-james-black",
   "license": "MIT",
   "engines": {
@@ -55,6 +55,13 @@
     "configuration": {
       "title": "C Relations",
       "properties": {
+        "cRelation.exclude": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "default": [],
+          "scope": "resource",
+          "description": "Workspace-relative glob patterns excluded from indexing and file watching, for example **/Tools/Polyspace/**. Uses forward slashes. This is independent of C_Cpp.files.exclude and search.exclude."
+        },
         "cRelation.skipInactive": {
           "type": "boolean",
           "default": true,
@@ -74,12 +81,15 @@
     "typecheck": "tsc --noEmit",
     "test": "tsx --test test/core.test.ts test/syntax.test.ts test/updates.test.ts",
     "test:extension": "npm run build && node scripts/test-extension.mjs",
+    "test:performance": "tsx test/index-performance.ts",
+    "test:large": "npm run build && node scripts/test-large-workspace.mjs",
     "test:freertos": "npm run build && node scripts/test-freertos.mjs",
     "test:ui": "npm run build && tsx test/create-ui-fixture.ts && node test/ui.mjs",
     "vscode:prepublish": "npm run build",
-    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license --out artifacts/c-relation-explorer-0.1.14.vsix"
+    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license --out artifacts/c-relation-explorer-0.1.15.vsix"
   },
   "dependencies": {
+    "minimatch": "10.2.6",
     "tree-sitter-c": "0.24.1",
     "web-tree-sitter": "0.27.1"
   },

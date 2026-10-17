@@ -1,31 +1,92 @@
 import { AccessFilter, FileAnalysis, GraphData, GraphNode, ReferenceRecord, RelationGroup, SymbolRecord } from './model';
+
+// Keep each file's contribution separate so edits never rebuild unrelated files.
+class FileBuckets<T extends { name: string }> {
+  private names = new Map<string, Map<string, T[]>>();
+  private cache = new Map<string, T[]>();
+  clear() { this.names.clear(); this.cache.clear(); }
+  add(uri: string, records: T[]) {
+    for (const record of records) {
+      let files = this.names.get(record.name);
+      if (!files) this.names.set(record.name, files = new Map());
+      let bucket = files.get(uri);
+      if (!bucket) files.set(uri, bucket = []);
+      bucket.push(record);
+      this.cache.delete(record.name);
+    }
+  }
+  remove(uri: string, records: T[]) {
+    for (const name of new Set(records.map(record => record.name))) {
+      const files = this.names.get(name);
+      files?.delete(uri);
+      if (!files?.size) this.names.delete(name);
+      this.cache.delete(name);
+    }
+  }
+  get(name: string, order: Map<string, number>): T[] {
+    let records = this.cache.get(name);
+    if (!records) {
+      records = [...(this.names.get(name) ?? [])]
+        .sort(([a], [b]) => order.get(a)! - order.get(b)!).flatMap(([, values]) => values);
+      this.cache.set(name, records);
+    }
+    return records;
+  }
+  inFile(name: string, uri: string): T[] { return this.names.get(name)?.get(uri) ?? []; }
+}
+
 export class RelationIndex {
   files = new Map<string, FileAnalysis>();
-  private byName = new Map<string, SymbolRecord[]>();
+  private byName = new FileBuckets<SymbolRecord>();
   private byId = new Map<string, SymbolRecord>();
-  private references = new Map<string, ReferenceRecord[]>();
-  clear() { this.files.clear(); this.rebuild(); }
-  update(file: FileAnalysis) { this.files.set(file.uri, file); this.rebuild(); }
-  remove(uri: string) { this.files.delete(uri); this.rebuild(); }
-  private rebuild() {
-    this.byName.clear(); this.byId.clear(); this.references.clear();
-    for (const file of this.files.values()) {
-      for (const symbol of file.symbols) {
-        this.byId.set(symbol.id, symbol);
-        this.byName.set(symbol.name, [...(this.byName.get(symbol.name) ?? []), symbol]);
-      }
-      for (const ref of file.references) this.references.set(ref.name, [...(this.references.get(ref.name) ?? []), ref]);
-    }
+  private references = new FileBuckets<ReferenceRecord>();
+  private fileOrder = new Map<string, number>();
+  private nextOrder = 0;
+  private targets = new Map<string, { definitions: SymbolRecord[]; headerStatics: SymbolRecord[]; declarations: SymbolRecord[] }>();
+  clear() {
+    this.files.clear(); this.byName.clear(); this.byId.clear(); this.references.clear();
+    this.fileOrder.clear(); this.nextOrder = 0; this.targets.clear();
+  }
+  update(file: FileAnalysis) {
+    const previous = this.files.get(file.uri);
+    if (previous) this.unindex(previous);
+    else this.fileOrder.set(file.uri, this.nextOrder++);
+    this.files.set(file.uri, file);
+    for (const symbol of file.symbols) { this.byId.set(symbol.id, symbol); this.targets.delete(symbol.name); }
+    this.byName.add(file.uri, file.symbols);
+    this.references.add(file.uri, file.references);
+  }
+  remove(uri: string) {
+    const previous = this.files.get(uri);
+    if (!previous) return;
+    this.unindex(previous); this.files.delete(uri); this.fileOrder.delete(uri);
+  }
+  private unindex(file: FileAnalysis) {
+    for (const symbol of file.symbols) { this.byId.delete(symbol.id); this.targets.delete(symbol.name); }
+    this.byName.remove(file.uri, file.symbols);
+    this.references.remove(file.uri, file.references);
   }
   symbols(): SymbolRecord[] { return [...this.byId.values()]; }
   symbol(id: string) { return this.byId.get(id); }
+  private targetsFor(name: string) {
+    let targets = this.targets.get(name);
+    if (!targets) {
+      const all = this.byName.get(name, this.fileOrder);
+      targets = {
+        definitions: all.filter(s => s.storage === 'global' && s.definition && s.kind !== 'type'),
+        headerStatics: all.filter(s => s.storage === 'static' && /\.h$/i.test(s.location.uri)),
+        declarations: all.filter(s => (s.kind === 'function' || s.kind === 'variable') && !s.definition && !s.scope)
+      };
+      this.targets.set(name, targets);
+    }
+    return targets;
+  }
   private resolve(ref: ReferenceRecord): SymbolRecord[] {
     if (ref.targetId) {
       const target = this.byId.get(ref.targetId);
       return target ? [target] : [];
     }
-    const all = this.byName.get(ref.name) ?? [];
-    const here = all.filter(s => s.location.uri === ref.location.uri);
+    const here = this.byName.inFile(ref.name, ref.location.uri);
     const locals = here.filter(s => s.scope && s.scope.start <= ref.location.start && s.scope.end > ref.location.start && s.location.start <= ref.location.start);
     let localTargets: SymbolRecord[] = [], externDeclarations: SymbolRecord[] = [];
     if (locals.length) {
@@ -41,12 +102,12 @@ export class RelationIndex {
     if (statics.some(s => s.conditions.length === 0)) return [...localTargets, ...statics];
     const sameFile = here.filter(s => s.storage === 'global' && s.definition && s.kind !== 'type');
     if (sameFile.some(s => s.conditions.length === 0)) return [...localTargets, ...statics, ...sameFile];
-    const definitions = all.filter(s => s.storage === 'global' && s.definition && s.kind !== 'type');
+    const { definitions, headerStatics, declarations } = this.targetsFor(ref.name);
     // A header-local static is only a candidate in files that include that header.
-    const included = all.filter(s => s.storage === 'static' && /\.h$/i.test(s.location.uri) &&
+    const included = headerStatics.filter(s =>
       this.files.get(ref.location.uri)?.includes.some(p => s.location.uri.endsWith('/' + p)));
     if (definitions.length || included.length) return [...localTargets, ...statics, ...definitions, ...included];
-    return [...localTargets, ...externDeclarations, ...statics, ...all.filter(s => (s.kind === 'function' || s.kind === 'variable') && !s.definition && !s.scope &&
+    return [...localTargets, ...externDeclarations, ...statics, ...declarations.filter(s =>
       (s.storage !== 'static' || s.location.uri === ref.location.uri))];
   }
   resolveAt(uri: string, offset: number): SymbolRecord[] {
@@ -62,7 +123,7 @@ export class RelationIndex {
     const target = this.byId.get(id);
     if (!target) return [];
     const groups = new Map<string, RelationGroup>();
-    for (const ref of this.references.get(target.name) ?? []) {
+    for (const ref of this.references.get(target.name, this.fileOrder)) {
       const variable = target.kind === 'variable';
       if (variable) {
         if (!ref.access || (filter !== 'all' && ref.access !== filter &&
