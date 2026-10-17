@@ -133,8 +133,41 @@ export async function run() {
   await api.view.handleMessage({ type: 'access', value: 'address' });
   assert.deepEqual(api.view.state.graph.root.children.map((n: any) => n.name), ['escape']);
   assert.equal(api.view.state.context.location.start, variableDocument.getText().indexOf('state'), 'hidden selected site resets preview to root');
+  // Keep all tracking regressions running so failures identify each lost-selection path.
+  const trackingFailures: string[] = [];
+  const expectRoot = (name: string, message: string) => {
+    if (api.view.state.graph?.root.name !== name) trackingFailures.push(`${message}: expected ${name}, got ${api.view.state.graph?.root.name}`);
+  };
+  // A double-click selects the whole identifier, with the active cursor at its end.
+  const writerOffset = variableDocument.getText().indexOf('writer(void)');
+  variableEditor.selection = new vscode.Selection(variableDocument.positionAt(writerOffset), variableDocument.positionAt(writerOffset + 'writer'.length));
+  await new Promise(resolve => setTimeout(resolve, 250));
+  expectRoot('writer', 'unlocked tracking follows a selected identifier');
+  variableEditor.selection = new vscode.Selection(variableDocument.positionAt(writerOffset + 2), variableDocument.positionAt(writerOffset + 2));
+  api.view.track(variableEditor);
+  const sameGraph = api.view.state.graph;
+  api.view.track(variableEditor);
+  if (api.view.state.graph !== sameGraph) trackingFailures.push('moving within the same symbol rebuilds its graph');
+  const pendingFile = api.workspace.index.files.get(variableUri.toString());
+  api.workspace.index.remove(variableUri.toString());
+  const entryOffset = variableDocument.getText().indexOf('entry(void)');
+  variableEditor.selection = new vscode.Selection(variableDocument.positionAt(entryOffset), variableDocument.positionAt(entryOffset));
+  api.view.track(variableEditor); // Selection arrives while this file has no index entry.
+  await new Promise(resolve => setTimeout(resolve, 200));
+  api.workspace.index.update(pendingFile);
+  api.workspace.changed.fire();
+  await new Promise(resolve => setTimeout(resolve, 200));
+  expectRoot('entry', 'selection during indexing is retried automatically');
+  await api.view.handleMessage({ type: 'lock' });
+  const switchedEditor = await vscode.window.showTextDocument(document);
+  const switchedPosition = document.positionAt(document.getText().indexOf('background_task(void)'));
+  switchedEditor.selection = new vscode.Selection(switchedPosition, switchedPosition);
+  await new Promise(resolve => setTimeout(resolve, 200));
+  await api.view.handleMessage({ type: 'lock' });
+  expectRoot('background_task', 'unlock follows the most recently selected C editor');
+  assert.deepEqual(trackingFailures, []);
   const output = process.env.C_RELATION_TEST_OUTPUT!;
   await mkdir(path.dirname(output), { recursive: true });
-  await writeFile(output, JSON.stringify({ passed: true, checks: ['variable selection and access filters', 'variable actual-site preview preserves editor', 'variable access filter validation', 'variable uses continue into caller tree', 'activation', '93-file index completion', 'indexing does not open documents', 'WASM worker', 'click tracking', 'variable icon data', 'call sites', 'Context preserves editor', 'mode/depth/expand/collapse', 'locked root', 'explicit source open', 'invalid message target', '#if0 setting reindex', 'unsaved buffer', 'file create/delete', 'ambiguous symbol clears stale graph and Context', 'candidate selection'] }, null, 2));
+  await writeFile(output, JSON.stringify({ passed: true, checks: ['selected identifier tracking', 'selection retry after indexing', 'unlock follows latest editor', 'same-symbol graph reuse', 'variable selection and access filters', 'variable actual-site preview preserves editor', 'variable access filter validation', 'variable uses continue into caller tree', 'activation', '93-file index completion', 'indexing does not open documents', 'WASM worker', 'click tracking', 'variable icon data', 'call sites', 'Context preserves editor', 'mode/depth/expand/collapse', 'locked root', 'explicit source open', 'invalid message target', '#if0 setting reindex', 'unsaved buffer', 'file create/delete', 'ambiguous symbol clears stale graph and Context', 'candidate selection'] }, null, 2));
   console.log('C Relation extension integration checks passed');
 }

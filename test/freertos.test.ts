@@ -43,7 +43,24 @@ export async function run() {
   assert.ok(api.view.state.graph.root.children.some((node: any) => node.name === 'uxTaskGetNumberOfTasks'));
   await api.view.handleMessage({ type: 'access', value: 'write' });
   assert.equal(api.view.state.graph.root.children.some((node: any) => node.name === 'uxTaskGetNumberOfTasks'), false);
-  const variableResult = { ...result, variable: api.view.state.graph.root.name, accessKinds: [...accessKinds], variableFilters: true };
+  const variableName = api.view.state.graph.root.name;
+  await vscode.commands.executeCommand('cRelation.open');
+  await api.view.handleMessage({ type: 'depth', value: 3 });
+  const trackingMs: Record<string, number> = {};
+  for (const name of ['vTaskSuspendAll', 'xTaskResumeAll', 'uxCurrentNumberOfTasks', 'xSchedulerRunning']) {
+    const startOffset = api.workspace.index.files.get(tasks.uri.toString()).symbols.find((symbol: any) => symbol.name === name && symbol.definition).location.start;
+    assert.ok(startOffset >= 0);
+    const started = Date.now();
+    tasksEditor.selection = new vscode.Selection(tasks.positionAt(startOffset), tasks.positionAt(startOffset + name.length));
+    while (api.view.state.graph?.root.name !== name && Date.now() - started < 2000) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(api.view.state.graph?.root.name, name, `automatic selection tracking: ${name}`);
+    trackingMs[name] = Date.now() - started;
+    const graph = api.view.state.graph;
+    tasksEditor.selection = new vscode.Selection(tasks.positionAt(startOffset + 2), tasks.positionAt(startOffset + 2));
+    await new Promise(resolve => setTimeout(resolve, 200));
+    assert.equal(api.view.state.graph, graph, 'same-symbol cursor movement does not rebuild or resend the graph');
+  }
+  const variableResult = { ...result, variable: variableName, accessKinds: [...accessKinds], variableFilters: true, trackingMs };
   await writeFile(process.env.C_RELATION_TEST_OUTPUT!, JSON.stringify(variableResult, null, 2));
   console.log('FreeRTOS full-workspace verification', JSON.stringify(variableResult));
 }

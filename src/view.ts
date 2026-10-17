@@ -18,11 +18,14 @@ export class RelationView implements vscode.WebviewViewProvider, vscode.Disposab
   private refreshTimer?: ReturnType<typeof setTimeout>;
   private openingSource = false;
   private lastEditor?: vscode.TextEditor;
+  private pendingTrack = false;
   private syntaxCache?: { text: string; tokens: SyntaxToken[][] };
   constructor(private workspace: WorkspaceIndex, private extensionUri: vscode.Uri) {
     this.listener = workspace.changed.event(() => {
       clearTimeout(this.refreshTimer);
-      this.refreshTimer = setTimeout(() => this.refresh(), 70);
+      this.refreshTimer = setTimeout(() => {
+        if (!this.pendingTrack || !this.track(this.lastEditor)) this.refresh();
+      }, 70);
     });
   }
   resolveWebviewView(view: vscode.WebviewView) {
@@ -40,16 +43,24 @@ export class RelationView implements vscode.WebviewViewProvider, vscode.Disposab
     this.refresh();
   }
   track(editor: vscode.TextEditor | undefined) {
-    if (!editor || this.state.locked || this.openingSource || !/\.[ch]$/i.test(editor.document.uri.path)) return;
+    if (!editor || !/\.[ch]$/i.test(editor.document.uri.path)) return false;
     this.lastEditor = editor;
-    const candidates = this.workspace.index.resolveAt(editor.document.uri.toString(), editor.document.offsetAt(editor.selection.active));
-    if (!candidates.length) return;
+    if (this.state.locked || this.openingSource) return false;
+    this.pendingTrack = false;
+    const position = editor.selection.isEmpty ? editor.selection.active : editor.selection.start;
+    const word = editor.document.getWordRangeAtPosition(position, /[A-Za-z_][A-Za-z0-9_]*/);
+    if (!word) return false;
+    const candidates = this.workspace.index.resolveAt(editor.document.uri.toString(), editor.document.offsetAt(word.start));
+    if (!candidates.length) { this.pendingTrack = true; return false; }
     if (candidates.length > 1) {
       this.root = undefined; this.selection = undefined; this.expanded = {};
       this.state.graph = undefined; this.state.context = undefined;
-      this.state.candidates = candidates; this.refresh(); return;
+      this.state.candidates = candidates; this.refresh(); return true;
     }
+    // Cursor movement inside an unchanged symbol must not resend a large graph to WSL.
+    if (this.root?.id === candidates[0].id && this.state.graph) return false;
     this.setRoot(candidates[0]);
+    return true;
   }
   private setRoot(symbol: SymbolRecord) {
     if (symbol.id !== this.root?.id) { this.expanded = {}; this.selection = symbol.id; }
