@@ -20,6 +20,8 @@ export async function run() {
   assert.equal(api.workspace.index.files.size, expected.length);
   assert.equal(api.workspace.failures.size, 0);
   assert.deepEqual(opened, [], 'indexing does not create C editor documents');
+  const expandedCallSites = [...api.workspace.index.files.values()].reduce((count: number, file: any) => count + file.references.filter((ref: any) => ref.kind === 'call' && ref.expansion).length, 0);
+  assert.ok(expandedCallSites > 0, 'real FreeRTOS macro invocations produce expanded call sites');
   const document = await vscode.workspace.openTextDocument(vscode.Uri.joinPath(vscode.workspace.workspaceFolders![0].uri, 'queue.c'));
   const editor = await vscode.window.showTextDocument(document);
   const offset = document.getText().indexOf('prvUnlockQueue');
@@ -29,7 +31,7 @@ export async function run() {
   assert.equal(api.view.state.graph?.root.name, 'prvUnlockQueue');
   assert.ok(api.view.state.graph.root.children.length, 'queue function has incoming references');
   assert.ok(api.view.state.context.tokens.flat().some((token: any) => token.kind === 'function' && token.text === 'prvUnlockQueue'));
-  const result = { passed: true, files: expected.length, elapsedMs, openedDuringIndex: opened.length, root: api.view.state.graph.root.name, relations: api.view.state.graph.root.children.length };
+  const result = { passed: true, files: expected.length, elapsedMs, openedDuringIndex: opened.length, expandedCallSites, root: api.view.state.graph.root.name, relations: api.view.state.graph.root.children.length };
   await api.view.handleMessage({ type: 'mode', value: 'callees' });
   const callees = api.view.state.graph.root.children;
   assert.ok(callees.length > 0, 'FreeRTOS queue function has outgoing calls');

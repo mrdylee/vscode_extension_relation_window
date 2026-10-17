@@ -120,13 +120,18 @@ function showDetails(node: GraphNode, anchor: HTMLButtonElement) {
   popup.append(meta);
   if (node.cycle) popup.append(el('div', 'condition detail-warning', 'Recursion: further expansion stopped on this path.'));
   if (node.ambiguous) popup.append(el('div', 'condition detail-warning', 'Candidate: conditions or multiple definitions prevent a unique match.'));
-  if (node.callKind === 'macro') popup.append(el('div', 'condition detail-warning', 'Macro invocation: replacement text is not expanded into function calls.'));
+  if (node.callKind === 'macro') popup.append(el('div', 'condition detail-warning', 'Macro invocation: expansion is unavailable, incomplete, or leaves this recursive call.'));
   if (node.callKind === 'indirect') popup.append(el('div', 'condition detail-warning', 'Indirect call: the runtime function target has not been resolved.'));
   if (node.callKind === 'unresolved') popup.append(el('div', 'condition detail-warning', 'Unresolved call: no matching function or macro was found in the analyzed scope.'));
   if (node.conditions.length) popup.append(condition(node.conditions.join(' · ')));
   if (node.sites.length) popup.append(el('strong', 'detail-label', `${node.sites.length} ${node.sites[0].access ? 'variable use' : 'call/reference'} locations`));
   if (node.sites.some(site => site.access === 'address')) popup.append(el('div', 'condition', 'This location uses the address. Writes inside the receiving function are not tracked.'));
   for (const site of node.sites) {
+    if (site.expansion) {
+      popup.append(el('strong', 'detail-label', `Macro-expanded call · ${site.expansion.chain.map(frame => frame.name).join(' → ')}`));
+      for (const frame of site.expansion.chain) popup.append(el('div', 'detail-meta', `${frame.name} · ${filename(frame.location.uri)}:${frame.location.line + 1}`));
+      popup.append(condition(site.expansion.text));
+    }
     const b = button('', () => send('preview', { id: site.id }));
     const kind = el('span', 'site-kind', site.kind === 'call' ? 'Call' : site.kind === 'declaration' ? 'Declaration' : 'Reference'); kind.dataset.kind = site.kind;
     b.append(site.access ? accessBadge(site.access) : kind, el('span', 'detail-path', filename(site.location.uri)),
@@ -138,7 +143,7 @@ function showDetails(node: GraphNode, anchor: HTMLButtonElement) {
     b.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); send('open', { id: site.id }); } };
     popup.append(b);
   }
-  if (node.symbolId && !node.cycle && (!node.callKind || node.callKind === 'direct')) {
+  if (node.symbolId && !node.cycle && (!node.callKind || ['direct', 'expanded', 'inferred'].includes(node.callKind))) {
     const actions = el('div', 'node-actions');
     actions.append(button(node.expanded ? '− Collapse' : '+ Expand', () => send(node.expanded ? 'collapse' : 'expand', { key: node.key })),
       button('Levels…', () => send('expandSpecial', { key: node.key }), 'Levels to expand from this node (Shift+→)'));

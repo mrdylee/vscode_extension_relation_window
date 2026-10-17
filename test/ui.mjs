@@ -27,6 +27,7 @@ try {
   collect(fixture.variableGraphs.all.root);
   collect(fixture.calleeGraph.root);
   collect(fixture.memberGraph.root);
+  collect(fixture.macroGraph.root);
   function preview(id) {
     const location = items.get(id);
     const file = fixture.files.find(f => f.uri === location.uri);
@@ -272,6 +273,20 @@ try {
     await page.keyboard.press('Escape');
   }
   await page.screenshot({ path: 'output/playwright/callees.png', fullPage: true });
+  state.graph = fixture.macroGraph;
+  preview(state.graph.root.symbolId);
+  await page.evaluate(state => window.dispatchEvent(new MessageEvent('message', { data: { type: 'state', state } })), state);
+  const macroTarget = page.locator('[data-node-name="macro_target"] .node-title');
+  await macroTarget.click();
+  assert.ok((await page.locator('.code-line.highlight').textContent()).includes('WRAP(7)'));
+  await macroTarget.focus(); await macroTarget.press('Space');
+  assert.ok((await popup.textContent()).includes('Macro-expanded call · WRAP → CALL'));
+  assert.ok((await popup.textContent()).includes('macro.h'));
+  assert.ok(await popup.locator('.syntax-function').count());
+  assert.equal(await popup.locator('.node-actions').count(), 1);
+  assert.ok((await macroTarget.boundingBox()).height <= 26);
+  await page.screenshot({ path: 'output/playwright/macro-calls.png', fullPage: true });
+  await page.keyboard.press('Escape');
   await relationSelector.selectOption('callers');
   state.graph = fixture.memberGraph; state.accessFilter = 'all';
   preview(state.graph.root.symbolId);

@@ -142,7 +142,10 @@ export class RelationIndex {
       const target = this.byId.get(ref.targetId);
       return target ? [target] : [];
     }
-    const here = this.byName.inFile(ref.name, ref.location.uri).filter(s => !s.memberOf && s.kind !== 'type');
+    if (ref.macroIds?.length) return ref.macroIds.map(id => this.byId.get(id)).filter((symbol): symbol is SymbolRecord => !!symbol);
+    const macroIds = ref.macroIds ?? (this.files.get(ref.location.uri)?.projectScoped ? [] : undefined);
+    const active = (symbol: SymbolRecord) => symbol.kind !== 'macro' || !macroIds || macroIds.includes(symbol.id);
+    const here = this.byName.inFile(ref.name, ref.location.uri).filter(s => !s.memberOf && s.kind !== 'type' && active(s));
     const locals = here.filter(s => s.scope && s.scope.start <= ref.location.start && s.scope.end > ref.location.start && s.location.start <= ref.location.start);
     let localTargets: SymbolRecord[] = [], externDeclarations: SymbolRecord[] = [];
     const widths = [...new Set(locals.map(s => s.scope!.end - s.scope!.start))].sort((a, b) => a - b);
@@ -163,7 +166,8 @@ export class RelationIndex {
     if (statics.some(s => s.conditions.length === 0)) return [...localTargets, ...statics];
     const sameFile = here.filter(s => s.storage === 'global' && s.definition && s.kind !== 'type');
     if (sameFile.some(s => s.conditions.length === 0)) return [...localTargets, ...statics, ...sameFile];
-    const { definitions, headerStatics, declarations } = this.targetsFor(ref.name);
+    const targets = this.targetsFor(ref.name);
+    const definitions = targets.definitions.filter(active), { headerStatics, declarations } = targets;
     // A header-local static is only a candidate in files that include that header.
     const included = headerStatics.filter(s =>
       this.files.get(ref.location.uri)?.includes.some(p => s.location.uri.endsWith('/' + p)));
@@ -187,7 +191,7 @@ export class RelationIndex {
       const candidates = this.resolve(ref);
       for (const symbol of candidates.length ? candidates : [undefined]) {
         const callKind = ref.indirect || symbol?.kind === 'variable' ? 'indirect'
-          : symbol?.kind === 'function' ? 'direct' : symbol?.kind === 'macro' ? 'macro' : 'unresolved';
+          : symbol?.kind === 'function' ? ref.callKind ?? 'direct' : symbol?.kind === 'macro' ? 'macro' : 'unresolved';
         const key = symbol?.id ?? `${callKind}:${ref.name}`;
         const group: RelationGroup = groups.get(key) ?? { key, symbol, name: symbol?.name ?? ref.name,
           kind: symbol?.kind ?? 'unknown', sites: [], callKind };

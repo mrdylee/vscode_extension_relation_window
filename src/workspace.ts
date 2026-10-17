@@ -14,7 +14,13 @@ export class WorkspaceIndex implements vscode.Disposable {
   status = 'Preparing C index…';
   failures = new Map<string, string>();
   private worker: Worker;
-  private requests = new Map<number, { resolve: (file: FileAnalysis) => void; reject: (error: Error) => void }>();
+  private requests = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
+  private rawVersions = new Map<string, number>();
+  private appliedDerived = new Map<string, number>();
+  private revision = 0;
+  private derivedRevision = -1;
+  private deriving?: Promise<void>;
+  private indexing = false;
   private jobs = new Set<Promise<void>>();
   private timers = new Map<string, ReturnType<typeof setTimeout>>();
   private versions = new Map<string, number>();
@@ -74,7 +80,10 @@ export class WorkspaceIndex implements vscode.Disposable {
     const key = uri.toString();
     this.versions.set(key, (this.versions.get(key) ?? 0) + 1);
     clearTimeout(this.timers.get(key)); this.timers.delete(key);
-    this.index.remove(key); this.failures.delete(key); this.changed.fire();
+    this.index.remove(key); this.rawVersions.delete(key); this.appliedDerived.delete(key); this.revision++;
+    this.worker.postMessage({ type: 'remove', uri: key });
+    this.failures.delete(key); this.changed.fire();
+    if (!this.indexing) void this.derive();
   }
   private schedule(uri: vscode.Uri) {
     if (this.disposed || !this.eligible(uri)) return;
@@ -87,7 +96,7 @@ export class WorkspaceIndex implements vscode.Disposable {
   private enqueue(uri: vscode.Uri) {
     const job = this.analyze(uri);
     this.jobs.add(job);
-    void job.finally(() => this.jobs.delete(job));
+    void job.finally(() => { this.jobs.delete(job); if (!this.indexing && !this.jobs.size && !this.timers.size) void this.derive(); });
     return job;
   }
   private async analyze(uri: vscode.Uri) {
@@ -101,20 +110,49 @@ export class WorkspaceIndex implements vscode.Disposable {
       const doc = vscode.workspace.textDocuments.find(document => !document.isClosed && document.uri.toString() === key);
       const text = doc ? doc.getText() : Buffer.from(await vscode.workspace.fs.readFile(uri)).toString('utf8');
       if (text.length > 2_000_000) throw new Error('File exceeds the 2,000,000 character analysis limit');
-      const id = ++this.serial;
-      const result = await new Promise<FileAnalysis>((resolve, reject) => {
-        this.requests.set(id, { resolve, reject });
-        this.worker.postMessage({ id, uri: key, text, skip: this.skipInactive });
-      });
+      const request = this.request<FileAnalysis>({ uri: key, text, skip: this.skipInactive });
+      const result = await request.promise;
       if (this.disposed || epoch !== this.epoch || version !== this.versions.get(key)) return;
+      this.rawVersions.set(key, request.id); this.appliedDerived.delete(key); this.revision++;
       this.index.update(result); this.failures.delete(key); this.changed.fire();
     } catch (error) {
       if (this.disposed || epoch !== this.epoch || version !== this.versions.get(key)) return;
-      this.index.remove(key); this.failures.set(key, String(error)); this.changed.fire();
+      this.index.remove(key); this.rawVersions.delete(key); this.appliedDerived.delete(key); this.revision++;
+      this.worker.postMessage({ type: 'remove', uri: key });
+      this.failures.set(key, String(error)); this.changed.fire();
     }
+  }
+  private request<T>(message: object) {
+    const id = ++this.serial;
+    const promise = new Promise<T>((resolve, reject) => {
+      this.requests.set(id, { resolve: value => resolve(value as T), reject });
+      this.worker.postMessage({ ...message, id });
+    });
+    return { id, promise };
+  }
+  private derive(): Promise<void> {
+    if (this.deriving) return this.deriving;
+    if (this.disposed || this.workerError || this.indexing || this.jobs.size || this.timers.size || this.derivedRevision === this.revision) return Promise.resolve();
+    this.deriving = (async () => {
+      while (!this.disposed && !this.indexing && !this.jobs.size && !this.timers.size && this.derivedRevision !== this.revision) {
+        const revision = this.revision;
+        const versions = [...this.rawVersions].map(([uri, id]) => [uri, id, this.appliedDerived.get(uri) ?? -id]);
+        const result = await this.request<{ stale: boolean; files: FileAnalysis[]; versions: [string, number][] }>({ type: 'derive', versions }).promise;
+        if (this.disposed || revision !== this.revision) continue;
+        if (result.stale) break;
+        for (const file of result.files) this.index.update(file);
+        for (const [uri, stamp] of result.versions) this.appliedDerived.set(uri, stamp);
+        this.derivedRevision = revision; this.failures.delete('derived'); this.changed.fire();
+      }
+    })().catch(error => {
+      if (!this.disposed) { this.failures.set('derived', `Call analysis: ${String(error)}`); this.changed.fire(); }
+    }).finally(() => { this.deriving = undefined; });
+    return this.deriving;
   }
   async reindex() {
     const epoch = ++this.epoch;
+    this.indexing = true; this.rawVersions.clear(); this.appliedDerived.clear(); this.revision++;
+    this.worker.postMessage({ type: 'reset' });
     this.scopes.clear();
     this.index.clear(); this.failures.clear();
     this.status = 'Indexing C sources…'; this.changed.fire();
@@ -141,18 +179,25 @@ export class WorkspaceIndex implements vscode.Disposable {
         await this.enqueue(uri);
       }
       if (epoch === this.epoch) {
+        this.indexing = false;
+        this.status = 'Resolving macro calls…'; this.changed.fire();
+        await this.derive();
+        if (epoch !== this.epoch) return;
         this.status = uris.length > 10000 ? 'Partial index: 10,000 file limit reached' : 'Index ready';
         this.changed.fire();
       }
     } catch (error) {
       if (this.disposed || epoch !== this.epoch) return;
+      this.indexing = false;
       this.status = `Index error: ${String(error)}`; this.changed.fire();
     }
   }
   async whenIdle() {
-    while (this.jobs.size || this.timers.size || this.status.startsWith('Indexing')) {
+    while (this.jobs.size || this.timers.size || this.indexing || this.deriving || this.derivedRevision !== this.revision) {
       await Promise.all([...this.jobs]);
-      if (this.jobs.size || this.timers.size || this.status.startsWith('Indexing')) await new Promise(r => setTimeout(r, 30));
+      await this.derive();
+      if (this.disposed || this.workerError || this.failures.has('derived')) break;
+      if (this.jobs.size || this.timers.size || this.indexing) await new Promise(r => setTimeout(r, 30));
     }
   }
   dispose() {

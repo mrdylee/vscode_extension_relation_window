@@ -1,0 +1,31 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { Worker } from 'node:worker_threads';
+import path from 'node:path';
+
+test('discarded derived responses are retried until the caller acknowledges them', async () => {
+  const worker = new Worker(path.resolve('dist/analysis-worker.cjs'), { workerData: { assets: path.resolve('dist') } });
+  let id = 0; const pending = new Map();
+  worker.on('message', message => { const request = pending.get(message.id); pending.delete(message.id); if (message.error) request?.reject(new Error(message.error)); else request?.resolve(message.result); });
+  worker.on('error', error => { for (const request of pending.values()) request.reject(error); pending.clear(); });
+  const request = message => { const serial = ++id; return { id: serial, result: new Promise((resolve, reject) => { pending.set(serial, { resolve, reject }); worker.postMessage({ ...message, id: serial }); }) }; };
+  try {
+    const main = request({ uri: 'file:///main.c', text: '#include "api.h"\nvoid run(void){CALL();}', skip: true }); await main.result;
+    const header = request({ uri: 'file:///api.h', text: '#define CALL() foo()\nvoid foo(void){}', skip: true }); await header.result;
+    const versions = [['file:///main.c', main.id, -main.id], ['file:///api.h', header.id, -header.id]];
+    const first = await request({ type: 'derive', versions }).result;
+    assert.ok(first.files.some(file => file.references.some(ref => ref.name === 'foo' && ref.expansion)));
+    // Simulate a discarded old revision: do not acknowledge first.versions.
+    const retry = await request({ type: 'derive', versions }).result;
+    assert.deepEqual(retry.versions, first.versions);
+    assert.equal(retry.files.length, first.files.length);
+    for (const [uri, stamp] of retry.versions) versions.find(entry => entry[0] === uri)[2] = stamp;
+    assert.equal((await request({ type: 'derive', versions }).result).files.length, 0);
+    const edited = request({ uri: 'file:///api.h', text: 'void foo(void){}', skip: true }); await edited.result;
+    versions[1] = ['file:///api.h', edited.id, -edited.id];
+    const cleared = await request({ type: 'derive', versions }).result;
+    assert.ok(cleared.files.some(file => file.uri === 'file:///main.c' && !file.references.some(ref => ref.expansion)), 'header edit restores raw calls');
+    const stale = await request({ type: 'derive', versions: [['file:///main.c', -123, 0]] }).result;
+    assert.equal(stale.stale, true);
+  } finally { await worker.terminate(); }
+});

@@ -123,7 +123,7 @@ export class RelationView implements vscode.WebviewViewProvider, vscode.Disposab
         const node = typeof m.key === 'string' ? this.nodes.get(m.key) : undefined;
         if (!node) return;
         this.selection = node.callKind || node.sites[0]?.access ? node.sites[0].id : node.symbolId ?? node.sites[0]?.id;
-        if (node.symbolId && !node.cycle && (!node.callKind || node.callKind === 'direct')) {
+        if (node.symbolId && !node.cycle && (!node.callKind || ['direct', 'expanded', 'inferred'].includes(node.callKind))) {
           // Preserve a deeper inherited expansion, including explicit ancestor overrides.
           let levels = this.state.depth, path = '';
           for (const part of node.key.split('/')) {

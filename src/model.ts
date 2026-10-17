@@ -1,6 +1,6 @@
 export type Kind = 'function' | 'variable' | 'type' | 'macro' | 'unknown';
 export type RelationMode = 'references' | 'callers' | 'callees';
-export type CallKind = 'direct' | 'macro' | 'indirect' | 'unresolved';
+export type CallKind = 'direct' | 'macro' | 'indirect' | 'unresolved' | 'expanded' | 'inferred';
 export type Access = 'read' | 'write' | 'readwrite' | 'address';
 export type AccessFilter = 'all' | Access;
 export interface CType {
@@ -25,10 +25,27 @@ export interface ReferenceRecord {
   id: string; name: string; kind: 'call' | 'reference' | 'declaration';
   location: Location; ownerId?: string; functionId?: string; targetId?: string; access?: Access; conditions: string[]; indirect?: boolean;
   member?: Extract<TypedExpression, { kind: 'member' }>;
+  expansion?: { chain: { name: string; location: Location }[]; text: string };
+  callKind?: CallKind;
+  macroIds?: string[];
 }
+export interface MacroDefinition {
+  name: string; parameters?: string[]; variadic?: string; body: string;
+  location: Location; conditions: string[];
+}
+export type PreprocessorEvent =
+  | { kind: 'define'; location: Location; conditions: string[]; macro: MacroDefinition }
+  | { kind: 'undef'; location: Location; conditions: string[]; name: string }
+  | { kind: 'include'; location: Location; conditions: string[]; path: string; system: boolean };
+export interface FunctionBody { id: string; location: Location; body: Location }
 export interface FileAnalysis {
   uri: string; text: string; symbols: SymbolRecord[]; references: ReferenceRecord[];
   includes: string[]; issues: string[]; systemIncludes?: string[];
+  preprocessor?: PreprocessorEvent[]; functions?: FunctionBody[];
+  inactive?: { start: number; end: number }[];
+  directives?: { start: number; end: number }[];
+  guard?: { name: string; condition: string };
+  projectScoped?: boolean;
 }
 export interface RelationSite extends ReferenceRecord { ambiguous: boolean; candidates: string[] }
 export interface RelationGroup {

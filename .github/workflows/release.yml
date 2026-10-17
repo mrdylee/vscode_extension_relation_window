@@ -24,6 +24,7 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run test:performance
+      - run: npm run test:worker
       - run: npm run test:extension
         if: runner.os != 'Linux'
       - run: xvfb-run -a npm run test:extension

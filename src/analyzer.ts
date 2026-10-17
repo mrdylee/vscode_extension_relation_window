@@ -1,6 +1,7 @@
 import { Parser, Language, Node } from 'web-tree-sitter';
-import { Access, FileAnalysis, Location, SymbolRecord } from './model';
+import { Access, FileAnalysis, Location, ReferenceRecord, SymbolRecord } from './model';
 import { aggregateId, declaredType, typedExpression } from './type-info';
+import { deriveMacroCalls } from './project-analysis';
 
 function ancestor(node: Node, type: string): Node | null {
   for (let current = node.parent; current; current = current.parent) if (current.type === type) return current;
@@ -48,7 +49,7 @@ export async function createAnalyzer(runtime: string, grammar: string) {
   await Parser.init({ locateFile: () => runtime });
   const parser = new Parser();
   parser.setLanguage(await Language.load(grammar));
-  return { analyze(uri: string, text: string, skipInactive = true): FileAnalysis {
+  const analyzer = { analyze(uri: string, text: string, skipInactive = true): FileAnalysis {
     const tree = parser.parse(text);
     if (!tree) throw new Error('C parser returned no tree');
     const file: FileAnalysis = { uri, text, symbols: [], references: [], includes: [], issues: [] };
@@ -70,6 +71,8 @@ export async function createAnalyzer(runtime: string, grammar: string) {
         const alternative = node.childForFieldName('alternative');
         const value = condition && ['preproc_if', 'preproc_elif'].includes(node.type) ? constant(condition) : undefined;
         const label = node.text.slice(0, node.text.indexOf('\n')).trim();
+        if (skipInactive && value === false) (file.inactive ??= []).push({ start: condition!.endIndex, end: alternative?.startIndex ?? node.endIndex });
+        if (skipInactive && value === true && alternative) (file.inactive ??= []).push({ start: alternative.startIndex, end: alternative.endIndex });
         if (!skipInactive || value !== false) {
           const next = value === true && skipInactive ? context : [...context, label];
           for (const child of node.namedChildren) {
@@ -86,6 +89,11 @@ export async function createAnalyzer(runtime: string, grammar: string) {
       for (const child of node.namedChildren) visit(child, context);
     }
     visit(tree.rootNode, []);
+    const top = tree.rootNode.namedChildren.filter(node => node.type !== 'comment');
+    const guard = top.length === 1 && top[0].type === 'preproc_ifdef' && top[0].text.startsWith('#ifndef') ? top[0] : undefined;
+    const guardName = guard?.childForFieldName('name')?.text;
+    if (guard && guardName && !guard.childForFieldName('alternative') && guard.namedChildren.some(node => node.type === 'preproc_def' && node.childForFieldName('name')?.text === guardName))
+      file.guard = { name: guardName, condition: guard.text.slice(0, guard.text.indexOf('\n')).trim() };
 
     function aggregateOwner(node: Node) {
       for (let parent = node.parent; parent; parent = parent.parent) {
@@ -110,7 +118,7 @@ export async function createAnalyzer(runtime: string, grammar: string) {
         block = parameters?.id === definitionParameters?.id ? enclosingFunction : parameters;
       }
       const external = extent.namedChildren.some(n => n.type === 'storage_class_specifier' && n.text === 'extern');
-      const scope = block ? { start: block.startIndex, end: block.endIndex } : undefined;
+      const scope = block && kind !== 'macro' ? { start: block.startIndex, end: block.endIndex } : undefined;
       const storage = external ? 'global' : scope ? 'local' : extent.namedChildren.some(n => n.type === 'storage_class_specifier' && n.text === 'static') ? 'static' : 'global';
       const symbol: SymbolRecord = { id: `${uri}#${name.startIndex}`, name: name.text, kind,
         location: location(name), extent: location(extent), definition, pointer, storage, scope,
@@ -119,21 +127,41 @@ export async function createAnalyzer(runtime: string, grammar: string) {
       return symbol;
     }
     for (const node of nodes) {
+      if (node.type.startsWith('preproc_')) for (const child of node.children) {
+        if (!child.type.startsWith('#') && child.type !== 'preproc_directive') continue;
+        let end = text.indexOf('\n', child.startIndex);
+        while (end >= 0 && /\\\r?$/.test(text.slice(child.startIndex, end))) end = text.indexOf('\n', end + 1);
+        (file.directives ??= []).push({ start: child.startIndex, end: end < 0 ? text.length : end + 1 });
+      }
       if (node.type === 'ERROR') file.issues.push(`Line ${node.startPosition.row + 1}: incomplete or unsupported C syntax`);
       if (node.isMissing) file.issues.push(`Line ${node.startPosition.row + 1}: missing ${node.type}`);
       if (node.type === 'preproc_include') {
         const path = node.childForFieldName('path')?.text;
         if (path) file.includes.push(path.slice(1, -1));
         if (path?.startsWith('<')) (file.systemIncludes ??= []).push(path.slice(1, -1));
+        if (path && /^['"<]/.test(path)) (file.preprocessor ??= []).push({ kind: 'include', location: location(node), conditions: conditions.get(node.id) ?? [], path: path.slice(1, -1), system: path.startsWith('<') });
       }
       if (['preproc_def', 'preproc_function_def'].includes(node.type)) {
         const name = node.childForFieldName('name');
-        if (name) addSymbol(name, node, 'macro', true);
+        if (name) {
+          addSymbol(name, node, 'macro', true);
+          const parameters = node.childForFieldName('parameters')?.text.slice(1, -1).split(',').map(p => p.trim()).filter(Boolean);
+          let variadic: string | undefined;
+          if (parameters?.at(-1)?.endsWith('...')) variadic = parameters.pop()!.slice(0, -3).trim() || '__VA_ARGS__';
+          (file.preprocessor ??= []).push({ kind: 'define', location: location(node), conditions: conditions.get(node.id) ?? [],
+            macro: { name: name.text, location: location(name), body: node.childForFieldName('value')?.text ?? '', parameters, variadic, conditions: conditions.get(node.id) ?? [] } });
+        }
       }
+      if (node.type === 'preproc_call' && node.childForFieldName('directive')?.text === '#undef')
+        (file.preprocessor ??= []).push({ kind: 'undef', name: node.childForFieldName('argument')?.text.trim() ?? '', location: location(node), conditions: conditions.get(node.id) ?? [] });
       if (node.type === 'function_definition') {
         const declaration = node.childForFieldName('declarator');
         const name = declaration && declarator(declaration).name;
-        if (name) functionOwners.set(node.id, addSymbol(name, node, 'function', true).id);
+        if (name) {
+          const symbol = addSymbol(name, node, 'function', true); functionOwners.set(node.id, symbol.id);
+          const body = node.childForFieldName('body');
+          if (body) (file.functions ??= []).push({ id: symbol.id, location: location(node), body: location(body) });
+        }
       }
       if (['struct_specifier', 'union_specifier', 'enum_specifier'].includes(node.type) &&
         (node.childForFieldName('body') || ['translation_unit', 'compound_statement'].includes(node.parent?.type ?? ''))) {
@@ -228,5 +256,30 @@ export async function createAnalyzer(runtime: string, grammar: string) {
     file.issues = [...new Set(file.issues)];
     tree.delete();
     return file;
-  } };
+  }, calls(uri: string, text: string) {
+    const tree = parser.parse(text);
+    if (!tree) throw new Error('C parser returned no expanded tree');
+    const references: ReferenceRecord[] = [];
+    const locate = (node: Node): Location => ({ uri, start: node.startIndex, end: node.endIndex,
+      line: node.startPosition.row, column: node.startPosition.column, endLine: node.endPosition.row, endColumn: node.endPosition.column });
+    function visit(node: Node, inBody = false) {
+      if (node.type === 'function_definition') { const body = node.childForFieldName('body'); if (body) visit(body, true); return; }
+      if (['sizeof_expression', 'alignof_expression', 'attribute_specifier', 'attribute_declaration'].includes(node.type)) return;
+      if (inBody && node.type === 'call_expression') {
+        const expression = node.childForFieldName('function'); let callable = expression;
+        while (callable?.type === 'parenthesized_expression') callable = callable.namedChildren[0];
+        if (expression && callable) {
+          const direct = callable.type === 'identifier';
+          const name = direct ? callable : expression;
+          references.push({ id: `${uri}@${name.startIndex}`, name: name.text, kind: 'call', location: locate(name),
+            access: 'read', conditions: [], indirect: !direct });
+        }
+      }
+      for (const child of node.namedChildren) visit(child, inBody);
+    }
+    visit(tree.rootNode);
+    const issues = tree.rootNode.hasError ? ['Expanded C contains incomplete or unsupported syntax'] : [];
+    tree.delete(); return { references, issues };
+  }, derive(files: FileAnalysis[]): FileAnalysis[] { return deriveMacroCalls(files, analyzer.analyze, analyzer.calls); } };
+  return analyzer;
 }

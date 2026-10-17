@@ -10,13 +10,13 @@
 
 ## Feature 1 — macro expansion
 
-- [ ] Add test/macros.test.ts to npm test. Start with `#define CALL(x) foo(x)` and assert foo is an expanded Callees target and incoming caller run at the CALL token. Verify failure.
-- [ ] Extend src/model.ts with preprocessing events, macro definitions, expansion provenance and effective-call metadata. Collect ordered define/include/undef events, function-body locations and full call extents in src/analyzer.ts.
-- [ ] Create src/c-tokens.ts for C preprocessing tokens with source origins, strings/comments and line-splice handling. Create src/macro-expansion.ts with ordered environment replay, includes, conditional candidates, argument substitution/prescan, #/##, variadics, hide sets and explicit limits.
-- [ ] Add analyzer project derivation: expand function bodies, reparse with Tree-sitter, map calls to original tokens, remove raw calls that expansion suppresses and deduplicate variants. No name-only call scanner.
-- [ ] Extend Worker protocol and WorkspaceIndex with raw-file version storage and serialized derived refresh. Clear/remove excluded files and discard stale results; whenIdle/reindex await completion. Add edit/header/delete/conditional regressions.
-- [ ] Render Macro-expanded call labels, expansion chain and text in existing popup; keep nodes compact and calls expandable. Test browser and VS Code actual-site navigation.
-- [ ] Run unit/typecheck, UI, Extension Host, FreeRTOS and large-workspace checks. Perform review-work against v0.1.27; record findings, fix/retest, then commit feature and review record before Feature 2.
+- [x] Add test/macros.test.ts to npm test. Start with `#define CALL(x) foo(x)` and assert foo is an expanded Callees target and incoming caller run at the CALL token. Verify failure.
+- [x] Extend src/model.ts with preprocessing events, macro definitions, expansion provenance and effective-call metadata. Collect ordered define/include/undef events, function-body locations and full call extents in src/analyzer.ts.
+- [x] Create src/c-tokens.ts for C preprocessing tokens with source origins, strings/comments and line-splice handling. Create src/macro-expansion.ts with ordered environment replay, includes, conditional candidates, argument substitution/prescan, #/##, variadics, hide sets and explicit limits.
+- [x] Add analyzer project derivation: expand function bodies, reparse with Tree-sitter, map calls to original tokens, remove raw calls that expansion suppresses and deduplicate variants. No name-only call scanner.
+- [x] Extend Worker protocol and WorkspaceIndex with raw-file version storage and serialized derived refresh. Clear/remove excluded files and discard stale results; whenIdle/reindex await completion. Add edit/header/delete/conditional regressions.
+- [x] Render Macro-expanded call labels, expansion chain and text in existing popup; keep nodes compact and calls expandable. Test browser and VS Code actual-site navigation.
+- [x] Run unit/typecheck, UI, Extension Host, FreeRTOS and large-workspace checks. Perform review-work against v0.1.27; record findings, fix/retest, then commit feature and review record before Feature 2.
 
 ## Feature 2 — function pointers and callbacks
 
