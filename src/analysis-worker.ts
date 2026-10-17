@@ -8,6 +8,7 @@ type Request = { id: number; uri: string; text: string; skip: boolean; type?: 'a
   | { type: 'remove'; uri: string } | { type: 'reset' };
 const raw = new Map<string, { id: number; file: FileAnalysis }>();
 const stamps = new WeakMap<FileAnalysis, number>(); let serial = 0;
+const forIndex = (file: FileAnalysis): FileAnalysis => ({ ...file, programs: undefined, initializers: undefined, statementConditions: undefined });
 let queue = Promise.resolve();
 parentPort!.on('message', (request: Request) => {
   queue = queue.then(async () => {
@@ -26,13 +27,13 @@ parentPort!.on('message', (request: Request) => {
         parser.derive(files).forEach((file, i) => {
           let stamp = file === files[i] ? -request.versions[i][1] : stamps.get(file);
           if (stamp === undefined) { stamp = ++serial; stamps.set(file, stamp); }
-          if (stamp !== request.versions[i][2]) { changed.push(file); versions.push([file.uri, stamp]); }
+          if (stamp !== request.versions[i][2]) { changed.push(forIndex(file)); versions.push([file.uri, stamp]); }
         });
         parentPort!.postMessage({ id: request.id, result: { stale: false, files: changed, versions } });
       } else {
         const result = parser.analyze(request.uri, request.text, request.skip);
         raw.set(request.uri, { id: request.id, file: result });
-        parentPort!.postMessage({ id: request.id, result });
+        parentPort!.postMessage({ id: request.id, result: forIndex(result) });
       }
     } catch (error) {
       parentPort!.postMessage({ id: request.id, error: String(error) });

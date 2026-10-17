@@ -1,28 +1,13 @@
 import { Parser, Language, Node } from 'web-tree-sitter';
-import { Access, FileAnalysis, Location, ReferenceRecord, SymbolRecord } from './model';
-import { aggregateId, declaredType, typedExpression } from './type-info';
+import { Access, FileAnalysis, FlowExpression, Location, ReferenceRecord, SymbolRecord } from './model';
+import { aggregateId, declaredType, declarator, typedExpression } from './type-info';
 import { deriveMacroCalls } from './project-analysis';
+import { flowFacts } from './flow-parser';
+import { inferPointerCalls } from './pointer-targets';
 
 function ancestor(node: Node, type: string): Node | null {
   for (let current = node.parent; current; current = current.parent) if (current.type === type) return current;
   return null;
-}
-function declarator(node: Node): { name?: Node; functionLike: boolean; pointer: boolean } {
-  const chain: Node[] = [];
-  let current: Node | null = node;
-  while (current) {
-    chain.push(current);
-    if (['identifier', 'type_identifier', 'field_identifier'].includes(current.type)) break;
-    current = current.childForFieldName('declarator') ??
-      (current.type === 'parenthesized_declarator' ? current.namedChildren[0] : null);
-  }
-  const name = chain.at(-1);
-  const wrappers = chain.slice(0, -1).reverse().filter(n => n.type !== 'parenthesized_declarator');
-  return {
-    name: name && ['identifier', 'type_identifier', 'field_identifier'].includes(name.type) ? name : undefined,
-    functionLike: wrappers[0]?.type === 'function_declarator',
-    pointer: wrappers.some(n => n.type === 'pointer_declarator')
-  };
 }
 // Unknown macros are not assumed undefined: the source folder has no build configuration.
 function constant(node: Node): boolean | undefined {
@@ -159,6 +144,7 @@ export async function createAnalyzer(runtime: string, grammar: string) {
         const name = declaration && declarator(declaration).name;
         if (name) {
           const symbol = addSymbol(name, node, 'function', true); functionOwners.set(node.id, symbol.id);
+          symbol.type = declaredType(node, declaration!, uri);
           const body = node.childForFieldName('body');
           if (body) (file.functions ??= []).push({ id: symbol.id, location: location(node), body: location(body) });
         }
@@ -187,9 +173,9 @@ export async function createAnalyzer(runtime: string, grammar: string) {
           const target = child.type === 'init_declarator' ? child.childForFieldName('declarator')! : child;
           const info = declarator(target);
           if (!info.name) continue;
-          const kind = node.type === 'type_definition' ? 'type' : info.functionLike ? 'function' : 'variable';
+          const kind = node.type === 'type_definition' ? 'type' : info.functionLike && node.type !== 'parameter_declaration' ? 'function' : 'variable';
           const external = node.namedChildren.some(n => n.type === 'storage_class_specifier' && n.text === 'extern');
-          const symbol = addSymbol(info.name, node, kind, kind !== 'function' && (!external || child.type === 'init_declarator'), info.pointer);
+          const symbol = addSymbol(info.name, node, kind, kind !== 'function' && (!external || child.type === 'init_declarator'), info.pointer || (node.type === 'parameter_declaration' && info.functionLike));
           symbol.type = declaredType(node, target, uri);
           if (node.type === 'field_declaration') {
             const owner = aggregateOwner(node);
@@ -220,6 +206,7 @@ export async function createAnalyzer(runtime: string, grammar: string) {
           const functionId = functionOwners.get(fn!.id);
           file.references.push({ id: `${uri}@${expression.startIndex}:indirect`, name: expression.text, kind: 'call',
             location: location(expression), ownerId: functionId, functionId, indirect: true,
+            flowKey: `${functionId}:call:${node.startIndex}`,
             access: 'read', conditions: conditions.get(node.id) ?? [] });
         }
       }
@@ -248,38 +235,54 @@ export async function createAnalyzer(runtime: string, grammar: string) {
       while (callable.parent?.type === 'parenthesized_expression') callable = callable.parent;
       const call = callable.parent?.type === 'call_expression' && callable.parent.childForFieldName('function')?.id === callable.id;
       file.references.push({ id: `${uri}@${node.startIndex}`, name: node.text, kind: call ? 'call' : 'reference',
+        flowKey: call && fn ? `${functionOwners.get(fn.id)}:call:${callable.parent!.startIndex}` : undefined,
         access: access(node), functionId: fn ? functionOwners.get(fn.id) : undefined,
         location: location(node), ownerId: call && fn ? functionOwners.get(fn.id) : inInitializer && initializerOwners.has(initializer!.id)
           ? initializerOwners.get(initializer!.id) : fn ? functionOwners.get(fn.id) : undefined,
         conditions: conditions.get(node.id) ?? [] });
     }
     file.issues = [...new Set(file.issues)];
+    file.statementConditions = nodes.filter(node => ['return_statement', 'expression_statement'].includes(node.type) && conditions.get(node.id)?.length)
+      .map(node => ({ start: node.startIndex, conditions: conditions.get(node.id)! }));
+    Object.assign(file, flowFacts(tree.rootNode, uri, location, new Set(nodes.map(node => node.id)), skipInactive, '', node => conditions.get(node.id) ?? []));
     tree.delete();
     return file;
-  }, calls(uri: string, text: string) {
+  }, calls(uri: string, text: string, original?: (start: number, end: number) => Location, namespace = '', context?: (location: Location) => string[]) {
     const tree = parser.parse(text);
     if (!tree) throw new Error('C parser returned no expanded tree');
     const references: ReferenceRecord[] = [];
-    const locate = (node: Node): Location => ({ uri, start: node.startIndex, end: node.endIndex,
+    const generatedLocation = (node: Node): Location => ({ uri, start: node.startIndex, end: node.endIndex,
       line: node.startPosition.row, column: node.startPosition.column, endLine: node.endPosition.row, endColumn: node.endPosition.column });
-    function visit(node: Node, inBody = false) {
-      if (node.type === 'function_definition') { const body = node.childForFieldName('body'); if (body) visit(body, true); return; }
+    const locate = (node: Node): Location => original ? original(node.startIndex, node.endIndex) : generatedLocation(node);
+    function visit(node: Node, owner?: string) {
+      if (node.type === 'function_definition') {
+        const body = node.childForFieldName('body'), name = declarator(node.childForFieldName('declarator')!).name;
+        if (body && name) visit(body, `${uri}#${locate(name).start}`); return;
+      }
       if (['sizeof_expression', 'alignof_expression', 'attribute_specifier', 'attribute_declaration'].includes(node.type)) return;
-      if (inBody && node.type === 'call_expression') {
+      if (owner && node.type === 'call_expression') {
         const expression = node.childForFieldName('function'); let callable = expression;
         while (callable?.type === 'parenthesized_expression') callable = callable.namedChildren[0];
         if (expression && callable) {
           const direct = callable.type === 'identifier';
           const name = direct ? callable : expression;
-          references.push({ id: `${uri}@${name.startIndex}`, name: name.text, kind: 'call', location: locate(name),
-            access: 'read', conditions: [], indirect: !direct });
+          references.push({ id: `${uri}@${name.startIndex}`, name: name.text, kind: 'call', location: generatedLocation(name),
+            access: 'read', conditions: [], indirect: !direct, flowKey: `${owner}${namespace}:call:${node.startIndex}` });
         }
       }
-      for (const child of node.namedChildren) visit(child, inBody);
+      for (const child of node.namedChildren) visit(child, owner);
     }
     visit(tree.rootNode);
     const issues = tree.rootNode.hasError ? ['Expanded C contains incomplete or unsupported syntax'] : [];
-    tree.delete(); return { references, issues };
-  }, derive(files: FileAnalysis[]): FileAnalysis[] { return deriveMacroCalls(files, analyzer.analyze, analyzer.calls); } };
+    const facts = flowFacts(tree.rootNode, uri, locate, undefined, true, namespace, node => context?.(locate(node)) ?? []);
+    tree.delete(); return { references, issues, ...facts };
+  }, initializer(uri: string, text: string, original: (start: number, end: number) => Location) {
+    const prefix = 'int __macro_value = ', tree = parser.parse(prefix + text + ';');
+    if (!tree) throw new Error('C parser returned no initializer tree');
+    const facts = flowFacts(tree.rootNode, uri, node => original(Math.max(0, node.startIndex - prefix.length), Math.max(0, node.endIndex - prefix.length)));
+    const value: FlowExpression = facts.initializers[0]?.value ?? { kind: 'unknown', location: original(0, text.length) };
+    const issues = tree.rootNode.hasError ? ['Expanded initializer has incomplete or unsupported syntax'] : [];
+    tree.delete(); return { value, issues };
+  }, derive(files: FileAnalysis[]): FileAnalysis[] { return inferPointerCalls(deriveMacroCalls(files, analyzer.analyze, analyzer.calls, analyzer.initializer)); } };
   return analyzer;
 }

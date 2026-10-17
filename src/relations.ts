@@ -45,10 +45,11 @@ export class RelationIndex {
   private members = new Map<string, Map<string, SymbolRecord[]>>();
   private filesByName = new Map<string, Set<string>>();
   private visibility = new Map<string, Set<string>>();
+  private layouts = new Map<string, { type: SymbolRecord['type']; value: ReturnType<MemberResolver['layout']> }>();
   private memberResolver = new MemberResolver({
     symbols: name => this.byName.get(name, this.fileOrder),
     symbol: id => this.byId.get(id),
-    fields: (id, name) => this.members.get(id)?.get(name) ?? [],
+    fields: (id, name) => name === undefined ? [...(this.members.get(id)?.values() ?? [])].flat() : this.members.get(id)?.get(name) ?? [],
     visibleFiles: uri => this.visibleFiles(uri),
     identifier: (name, location) => this.resolve({ id: '', name, location, kind: 'reference', conditions: [] })
   });
@@ -59,12 +60,14 @@ export class RelationIndex {
     this.files.clear(); this.byName.clear(); this.byId.clear(); this.references.clear();
     this.fileOrder.clear(); this.nextOrder = 0; this.targets.clear(); this.outgoing.clear();
     this.members.clear(); this.filesByName.clear(); this.visibility.clear();
+    this.layouts.clear();
   }
   update(file: FileAnalysis) {
     const previous = this.files.get(file.uri);
     if (previous) this.unindex(previous);
     else this.fileOrder.set(file.uri, this.nextOrder++);
     this.files.set(file.uri, file);
+    this.layouts.clear();
     this.visibility.clear();
     const basename = file.uri.split('/').pop()!;
     let paths = this.filesByName.get(basename);
@@ -95,6 +98,7 @@ export class RelationIndex {
     this.unindex(previous); this.files.delete(uri); this.fileOrder.delete(uri);
   }
   private unindex(file: FileAnalysis) {
+    this.layouts.clear();
     this.visibility.clear();
     const basename = file.uri.split('/').pop()!;
     const paths = this.filesByName.get(basename);
@@ -106,6 +110,13 @@ export class RelationIndex {
   }
   symbols(): SymbolRecord[] { return [...this.byId.values()]; }
   symbol(id: string) { return this.byId.get(id); }
+  resolveReference(ref: ReferenceRecord) { return this.resolve(ref); }
+  layout(symbol: SymbolRecord) {
+    const previous = this.layouts.get(symbol.id);
+    if (previous && previous.type === symbol.type) return previous.value;
+    const value = this.memberResolver.layout(symbol);
+    this.layouts.set(symbol.id, { type: symbol.type, value }); return value;
+  }
   private visibleFiles(uri: string): Set<string> {
     const cached = this.visibility.get(uri);
     if (cached) return cached;
@@ -151,7 +162,7 @@ export class RelationIndex {
     const widths = [...new Set(locals.map(s => s.scope!.end - s.scope!.start))].sort((a, b) => a - b);
     for (const width of widths) {
       const nearest = locals.filter(s => s.scope!.end - s.scope!.start === width);
-      const externs = nearest.filter(s => s.storage === 'global' && !s.definition);
+      const externs = nearest.filter(s => !s.definition && (s.storage === 'global' || s.kind === 'function'));
       externDeclarations.push(...externs);
       localTargets.push(...nearest.filter(s => !externs.includes(s)));
       // Conditional shadows may be absent, so keep searching enclosing scopes.
@@ -169,8 +180,7 @@ export class RelationIndex {
     const targets = this.targetsFor(ref.name);
     const definitions = targets.definitions.filter(active), { headerStatics, declarations } = targets;
     // A header-local static is only a candidate in files that include that header.
-    const included = headerStatics.filter(s =>
-      this.files.get(ref.location.uri)?.includes.some(p => s.location.uri.endsWith('/' + p)));
+    const included = headerStatics.filter(s => this.visibleFiles(ref.location.uri).has(s.location.uri));
     if (definitions.length || included.length) return [...localTargets, ...statics, ...definitions, ...included];
     return [...localTargets, ...externDeclarations, ...statics, ...declarations.filter(s =>
       (s.storage !== 'static' || s.location.uri === ref.location.uri))];
@@ -181,7 +191,7 @@ export class RelationIndex {
     const contains = (s: { location: { start: number; end: number } }) => s.location.start <= offset && offset < s.location.end;
     const symbol = file.symbols.find(contains);
     if (symbol?.definition) return [symbol];
-    const ref = file.references.find(ref => !ref.indirect && contains(ref));
+    const ref = file.references.find(ref => !ref.indirect && ref.callKind !== 'inferred' && contains(ref));
     return ref ? this.resolve(ref) : symbol ? [symbol] : [];
   }
   private callees(target: SymbolRecord): RelationGroup[] {
@@ -194,9 +204,9 @@ export class RelationIndex {
           : symbol?.kind === 'function' ? ref.callKind ?? 'direct' : symbol?.kind === 'macro' ? 'macro' : 'unresolved';
         const key = symbol?.id ?? `${callKind}:${ref.name}`;
         const group: RelationGroup = groups.get(key) ?? { key, symbol, name: symbol?.name ?? ref.name,
-          kind: symbol?.kind ?? 'unknown', sites: [], callKind };
+          kind: symbol?.kind ?? ref.unresolvedKind ?? 'unknown', sites: [], callKind };
         group.sites.push({ ...ref, access: undefined, candidates: candidates.map(s => s.id),
-          ambiguous: candidates.length > 1 || candidates.some(s => s.conditions.length > 0) || ref.conditions.length > 0 });
+          ambiguous: ref.callKind === 'inferred' || candidates.length > 1 || candidates.some(s => s.conditions.length > 0) || ref.conditions.length > 0 });
         groups.set(key, group);
       }
     }
@@ -225,7 +235,7 @@ export class RelationIndex {
       const conditional = candidates.some(s => s.conditions.length > 0);
       const headerStatic = candidates.some(s => s.storage === 'static' && s.location.uri !== ref.location.uri);
       group.sites.push({ ...ref, access: variable ? ref.access : undefined,
-        ambiguous: candidates.length > 1 || conditional || headerStatic, candidates: candidates.map(s => s.id) });
+        ambiguous: ref.callKind === 'inferred' || candidates.length > 1 || conditional || headerStatic, candidates: candidates.map(s => s.id) });
       groups.set(key, group);
     }
     return [...groups.values()].sort((a, b) => a.name.localeCompare(b.name));

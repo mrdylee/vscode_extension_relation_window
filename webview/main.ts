@@ -119,7 +119,7 @@ function showDetails(node: GraphNode, anchor: HTMLButtonElement) {
     el('span', 'detail-path', decodeURIComponent(node.location.uri)), el('span', 'detail-location', `:${node.location.line + 1}`));
   popup.append(meta);
   if (node.cycle) popup.append(el('div', 'condition detail-warning', 'Recursion: further expansion stopped on this path.'));
-  if (node.ambiguous) popup.append(el('div', 'condition detail-warning', 'Candidate: conditions or multiple definitions prevent a unique match.'));
+  if (node.ambiguous) popup.append(el('div', 'condition detail-warning', 'Candidate: inferred targets, conditions or multiple definitions prevent a unique match.'));
   if (node.callKind === 'macro') popup.append(el('div', 'condition detail-warning', 'Macro invocation: expansion is unavailable, incomplete, or leaves this recursive call.'));
   if (node.callKind === 'indirect') popup.append(el('div', 'condition detail-warning', 'Indirect call: the runtime function target has not been resolved.'));
   if (node.callKind === 'unresolved') popup.append(el('div', 'condition detail-warning', 'Unresolved call: no matching function or macro was found in the analyzed scope.'));
@@ -127,6 +127,20 @@ function showDetails(node: GraphNode, anchor: HTMLButtonElement) {
   if (node.sites.length) popup.append(el('strong', 'detail-label', `${node.sites.length} ${node.sites[0].access ? 'variable use' : 'call/reference'} locations`));
   if (node.sites.some(site => site.access === 'address')) popup.append(el('div', 'condition', 'This location uses the address. Writes inside the receiving function are not tracked.'));
   for (const site of node.sites) {
+    if (site.inference) {
+      popup.append(el('strong', 'detail-label', `Inferred call · ${site.inference.expression}`));
+      popup.append(condition(site.inference.expression));
+      if (site.inference.incomplete) popup.append(el('div', 'condition detail-warning', 'Other targets may exist. ' + site.inference.reasons.join(' · ')));
+      for (const [i, frame] of site.inference.evidence.entries()) {
+        const id = site.id + ':evidence:' + i;
+        const item = button('', () => send('preview', { id }));
+        item.className = 'site evidence';
+        item.append(el('span', 'site-kind', 'Evidence'), el('span', 'detail-path', frame.reason + ' · '), el('span', 'detail-location', `${filename(frame.location.uri)}:${frame.location.line + 1}`));
+        item.ondblclick = () => send('open', { id });
+        item.onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); send('open', { id }); } };
+        popup.append(item);
+      }
+    }
     if (site.expansion) {
       popup.append(el('strong', 'detail-label', `Macro-expanded call · ${site.expansion.chain.map(frame => frame.name).join(' → ')}`));
       for (const frame of site.expansion.chain) popup.append(el('div', 'detail-meta', `${frame.name} · ${filename(frame.location.uri)}:${frame.location.line + 1}`));

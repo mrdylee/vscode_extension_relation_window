@@ -1,4 +1,4 @@
-import { FileAnalysis, MacroDefinition, PreprocessorEvent, ReferenceRecord } from './model';
+import { FileAnalysis, FlowExpression, FlowProgram, GlobalInitializer, Location, MacroDefinition, PreprocessorEvent, ReferenceRecord } from './model';
 import { joinTokens, locationIn, tokenizeC } from './c-tokens';
 import { MacroExpander } from './macro-expansion';
 
@@ -69,18 +69,20 @@ function activeText(file: FileAnalysis, start: number, end: number) {
 }
 
 // The analyzer callback uses the already initialized C parser, in the Worker.
-export function deriveMacroCalls(raw: FileAnalysis[], analyze: Analyze, parseCalls: (uri: string, text: string) => { references: ReferenceRecord[]; issues: string[] }): FileAnalysis[] {
+export function deriveMacroCalls(raw: FileAnalysis[], analyze: Analyze, parseCalls: (uri: string, text: string, original?: (start: number, end: number) => Location, namespace?: string, context?: (location: Location) => string[]) => { references: ReferenceRecord[]; issues: string[]; programs: FlowProgram[]; initializers: GlobalInitializer[] },
+  parseInitializer: (uri: string, text: string, original: (start: number, end: number) => Location) => { value: FlowExpression; issues: string[] }): FileAnalysis[] {
   const files = new Map(raw.map(file => [file.uri, file]));
   let cache = caches.get(analyze); if (!cache) caches.set(analyze, cache = new Map());
   for (const uri of cache.keys()) if (!files.has(uri)) cache.delete(uri);
   const paths = raw.map(file => file.uri).join('\n');
   return raw.map(file => {
-    if (!file.functions?.length) return file;
+    if (!file.functions?.length && !file.initializers?.length) return file;
     const previous = cache!.get(file.uri);
     if (previous?.raw === file && previous.paths === paths && [...previous.dependencies].every(dep => files.get(dep.uri) === dep)) return previous.result;
     const dependencies = new Set<FileAnalysis>();
     const issues = new Set<string>(); const events = timeline(file, files, issues, dependencies);
     const lookup = environment(events);
+    const sourceLocation = locationIn(file.text, file.uri);
     const macroIds = (name: string, offset: number) => lookup(name, offset).filter((m): m is MacroDefinition => !!m).map(m => `${m.location.uri}#${m.location.start}`);
     let references = file.references.map(ref => {
       const ids = macroIds(ref.name, ref.location.start);
@@ -90,35 +92,74 @@ export function deriveMacroCalls(raw: FileAnalysis[], analyze: Analyze, parseCal
       const result = { ...file, projectScoped: true };
       cache!.set(file.uri, { raw: file, paths, dependencies, result }); return result;
     }
-    const sourceConditions = new Map(file.references.map(ref => [ref.location.start, ref.conditions]));
-    for (const fn of file.functions) {
-      const tokens = tokenizeC(activeText(file, fn.body.start, fn.body.end), locationIn(file.text, file.uri, fn.body.start));
+    let initializers = (file.initializers ?? []).map(init => {
+      const tokens = tokenizeC(file.text.slice(init.location.start, init.location.end), (start, end) => sourceLocation(init.location.start + start, init.location.start + end));
+      const expander = new MacroExpander(lookup), variants = expander.expand(tokens);
+      expander.issues.forEach(issue => issues.add(issue));
+      if (!variants.some(variant => variant.changed)) return init;
+      const values = variants.map(variant => {
+        const offsets: number[] = []; let length = 0;
+        for (const token of variant.tokens) { offsets.push(length); length += token.text.length + 1; }
+        const original = (start: number, end: number): Location => {
+          const pick = (position: number) => { let low = 0, high = offsets.length; while (low + 1 < high) { const mid = (low + high) >>> 1; if (offsets[mid] <= position) low = mid; else high = mid; } return variant.tokens[low]?.location ?? init.location; };
+          const a = pick(start), b = pick(Math.max(start, end - 1));
+          return { ...a, end: Math.max(a.end, b.end), endLine: b.endLine, endColumn: b.endColumn };
+        };
+        const parsed = parseInitializer(file.uri, joinTokens(variant.tokens), original);
+        if (parsed.issues.length) issues.add('Macro-expanded initializer near line ' + (init.location.line + 1) + ' has unsupported syntax');
+        return parsed.value;
+      });
+      const value: FlowExpression = values.length === 1 ? values[0] : { kind: 'choice', values, location: init.location };
+      return { ...init, value };
+    });
+    const sourceConditions = new Map([...file.symbols.map(symbol => [symbol.location.start, symbol.conditions] as const), ...file.references.map(ref => [ref.location.start, ref.conditions] as const),
+      ...(file.statementConditions ?? []).map(statement => [statement.start, statement.conditions] as const)]);
+    let programs = file.programs ?? [];
+    for (const fn of file.functions ?? []) {
+      const tokens = tokenizeC(activeText(file, fn.body.start, fn.body.end), (start, end) => sourceLocation(fn.body.start + start, fn.body.start + end));
       const expander = new MacroExpander(lookup), variants = expander.expand(tokens);
       expander.issues.forEach(issue => issues.add(issue));
       if (!variants.some(variant => variant.changed)) continue;
       const calls: ReferenceRecord[] = [], seen = new Set<string>();
-      for (const variant of variants) {
+      const generatedPrograms: FlowProgram[] = [];
+      const generatedInitializers: GlobalInitializer[] = [];
+      const parsedVariants = new Map<string, ReturnType<typeof parseCalls>>();
+      for (const [variantIndex, variant] of variants.entries()) {
         const prefix = file.text.slice(fn.location.start, fn.body.start);
         const offsets: number[] = []; let length = prefix.length;
         for (const token of variant.tokens) { offsets.push(length); length += token.text.length + 1; }
-        const generated = parseCalls(file.uri, prefix + joinTokens(variant.tokens));
         const previews = new Map<number, string[]>();
         const expansions = new Map<string, NonNullable<ReferenceRecord['expansion']>>();
         for (const token of variant.tokens) if (token.invocation) {
           const parts = previews.get(token.invocation.start) ?? []; parts.push(token.text); previews.set(token.invocation.start, parts);
         }
-        if (generated.issues.length) issues.add(`Macro expansion near line ${fn.body.line + 1}: generated C has incomplete or unsupported syntax`);
         const origin = (position: number) => {
           let low = 0, high = offsets.length;
           while (low + 1 < high) { const mid = (low + high) >>> 1; if (offsets[mid] <= position) low = mid; else high = mid; }
           return position >= prefix.length ? variant.tokens[low] : undefined;
         };
+        const mapLocation = (start: number, end: number): Location => {
+          const first = origin(start), last = origin(Math.max(start, end - 1));
+          if (!first) return sourceLocation(fn.location.start + start, fn.location.start + end);
+          const finish = last?.location ?? first.location;
+          return { ...first.location, end: Math.max(first.location.end, finish.end), endLine: finish.endLine, endColumn: finish.endColumn };
+        };
+        const code = prefix + joinTokens(variant.tokens);
+        const syntaxKey = code + '\n' + variant.tokens.map(token => token.location.start + ':' + token.location.end).join(',');
+        let generated = parsedVariants.get(syntaxKey);
+        if (!generated) {
+          generated = parseCalls(file.uri, code, mapLocation, `:variant:${variantIndex}`, location => sourceConditions.get(location.start) ?? []);
+          parsedVariants.set(syntaxKey, generated);
+          generatedPrograms.push(...generated.programs);
+          generatedInitializers.push(...generated.initializers);
+        }
+        if (generated.issues.length) issues.add(`Macro expansion near line ${fn.body.line + 1}: generated C has incomplete or unsupported syntax`);
         for (const ref of generated.references) {
           if (ref.kind !== 'call' || !ref.access) continue;
           const token = origin(ref.location.start); if (!token) continue;
           const chain = token.chain ?? [];
           const conditions = [...new Set([...variant.conditions, ...(sourceConditions.get(token.location.start) ?? [])])];
-          const key = `${ref.name}:${token.location.start}:${ref.location.start}:${chain.map(frame => frame.name).join('/')}`;
+          const key = `${ref.name}:${token.location.start}:${ref.location.start}:${chain.map(frame => frame.name).join('/')}:${ref.flowKey}`;
           if (seen.has(key)) continue; seen.add(key);
           let expansion: ReferenceRecord['expansion'];
           if (chain.length) {
@@ -134,12 +175,14 @@ export function deriveMacroCalls(raw: FileAnalysis[], analyze: Analyze, parseCal
             expansion, macroIds: token.unexpanded ? macroIds(ref.name, token.location.start) : [] });
         }
       }
+      programs = programs.filter(program => program.id !== fn.id).concat(generatedPrograms);
+      initializers = initializers.filter(init => !init.id.startsWith(fn.id + ':static:')).concat(generatedInitializers);
       // Retain source-level macro/address references, but replace effective calls.
       const replaced = new Set(calls.map(ref => `${ref.name}:${ref.location.start}`));
       references = references.flatMap(ref => ref.functionId === fn.id && ref.kind === 'call'
         ? replaced.has(`${ref.name}:${ref.location.start}`) && !ref.macroIds?.length ? [] : [{ ...ref, kind: 'reference' as const }] : [ref]).concat(calls);
     }
-    const result = { ...file, projectScoped: true, references, issues: [...file.issues, ...issues] };
+    const result = { ...file, programs, initializers, projectScoped: true, references, issues: [...file.issues, ...issues] };
     cache!.set(file.uri, { raw: file, paths, dependencies, result }); return result;
   });
 }

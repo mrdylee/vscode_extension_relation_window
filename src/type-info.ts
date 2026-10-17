@@ -1,6 +1,24 @@
 import { Node } from 'web-tree-sitter';
 import { CType, Location, TypedExpression } from './model';
 
+export function declarator(node: Node): { name?: Node; functionLike: boolean; pointer: boolean } {
+  const chain: Node[] = [];
+  let current: Node | null = node;
+  while (current) {
+    chain.push(current);
+    if (['identifier', 'type_identifier', 'field_identifier'].includes(current.type)) break;
+    current = current.childForFieldName('declarator') ??
+      (current.type === 'parenthesized_declarator' ? current.namedChildren[0] : null);
+  }
+  const name = chain.at(-1);
+  const wrappers = chain.slice(0, -1).reverse().filter(n => n.type !== 'parenthesized_declarator');
+  return {
+    name: name && ['identifier', 'type_identifier', 'field_identifier'].includes(name.type) ? name : undefined,
+    functionLike: wrappers[0]?.type === 'function_declarator',
+    pointer: wrappers.some(n => n.type === 'pointer_declarator')
+  };
+}
+
 export function aggregateId(node: Node, uri: string) {
   const name = node.childForFieldName('name');
   return name ? `${uri}#${name.startIndex}` : `${uri}#${node.startIndex}:aggregate`;

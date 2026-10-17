@@ -27,5 +27,20 @@ test('discarded derived responses are retried until the caller acknowledges them
     assert.ok(cleared.files.some(file => file.uri === 'file:///main.c' && !file.references.some(ref => ref.expansion)), 'header edit restores raw calls');
     const stale = await request({ type: 'derive', versions: [['file:///main.c', -123, 0]] }).result;
     assert.equal(stale.stale, true);
+    worker.postMessage({ type: 'reset' });
+    const callbackMain=request({uri:'file:///callbacks.c',text:'typedef void (*CB)(void);extern CB slot;void one(void){}void two(void){}void run(void){slot();}',skip:true});await callbackMain.result;
+    const slot=request({uri:'file:///slot.c',text:'typedef void (*CB)(void);void one(void);void two(void);CB slot=one;',skip:true});await slot.result;
+    const callbacks=[['file:///callbacks.c',callbackMain.id,-callbackMain.id],['file:///slot.c',slot.id,-slot.id]];
+    const target=await request({type:'derive',versions:callbacks}).result;
+    assert.ok(target.files.every(file=>!file.programs&&!file.initializers),'Worker-only flow facts are not copied into the extension host');
+    assert.ok(target.files.find(file=>file.uri==='file:///callbacks.c').references.some(ref=>ref.name==='one'&&ref.callKind==='inferred'));
+    for(const [uri,stamp] of target.versions)callbacks.find(entry=>entry[0]===uri)[2]=stamp;
+    assert.equal((await request({type:'derive',versions:callbacks}).result).files.length,0,'cached callback results keep acknowledged identity');
+    const next=request({uri:'file:///slot.c',text:'typedef void (*CB)(void);void two(void);CB slot=two;',skip:true});await next.result;
+    callbacks[1]=['file:///slot.c',next.id,-next.id];
+    const updated=await request({type:'derive',versions:callbacks}).result;
+    const refs=updated.files.find(file=>file.uri==='file:///callbacks.c').references;
+    assert.ok(refs.some(ref=>ref.name==='two'&&ref.callKind==='inferred'));
+    assert.equal(refs.some(ref=>ref.name==='one'&&ref.callKind==='inferred'),false);
   } finally { await worker.terminate(); }
 });

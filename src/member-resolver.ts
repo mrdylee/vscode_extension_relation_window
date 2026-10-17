@@ -1,10 +1,10 @@
 import { CType, Location, SymbolRecord, TypedExpression } from './model';
 
-interface ResolvedType { id: string; layers: CType['layers']; conditions: string[] }
+interface ResolvedType { id: string; layers: CType['layers']; conditions: string[]; scalar?: boolean }
 interface Lookup {
   symbols(name: string): SymbolRecord[];
   symbol(id: string): SymbolRecord | undefined;
-  fields(id: string, name: string): SymbolRecord[];
+  fields(id: string, name?: string): SymbolRecord[];
   visibleFiles(uri: string): Set<string>;
   identifier(name: string, location: Location): SymbolRecord[];
 }
@@ -48,6 +48,7 @@ export class MemberResolver {
   private normalize(type: CType | undefined, declaration: SymbolRecord, unitUri: string, seen = new Set<string>(), depth = 0): ResolvedType[] {
     if (!type || depth >= 32) return [];
     const targets = type.id ? [this.lookup.symbol(type.id)].filter((s): s is SymbolRecord => !!s) : this.namedTypes(type, declaration, unitUri);
+    if (!targets.length) return [{ id: '', layers: type.layers, conditions: [], scalar: /^(?:(?:signed|unsigned|short|long)\s+)*(?:void|char|int|float|double|_Bool|bool|signed|unsigned|short|long)$/.test(type.name) }];
     const result: ResolvedType[] = [];
     for (const symbol of targets.slice(0, 64)) {
       if (seen.has(symbol.id)) continue;
@@ -94,5 +95,12 @@ export class MemberResolver {
       }
     }
     return [...result.values()].slice(0, 64);
+  }
+  layout(symbol: SymbolRecord) {
+    const seen = new Set<string>();
+    return this.normalize(symbol.type, symbol, symbol.location.uri).filter(type => {
+      const key = type.id + '/' + type.layers.join(',') + '/' + type.scalar;
+      if (seen.has(key)) return false; seen.add(key); return true;
+    }).map(type => ({ ...type, fields: this.lookup.fields(type.id) }));
   }
 }

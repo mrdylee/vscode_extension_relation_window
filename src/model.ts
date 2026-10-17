@@ -28,7 +28,28 @@ export interface ReferenceRecord {
   expansion?: { chain: { name: string; location: Location }[]; text: string };
   callKind?: CallKind;
   macroIds?: string[];
+  flowKey?: string;
+  inference?: { expression: string; evidence: { location: Location; reason: string }[]; incomplete: boolean; reasons: string[] };
+  unresolvedKind?: Kind;
 }
+export type FlowExpression = { location: Location } & (
+  | { kind: 'name'; name: string; localId?: string; alternatives?: string[]; globalFallback?: boolean }
+  | { kind: 'number'; value: string }
+  | { kind: 'member'; object: FlowExpression; field: string; arrow: boolean }
+  | { kind: 'index'; object: FlowExpression; index: FlowExpression }
+  | { kind: 'address' | 'dereference' | 'cast'; object: FlowExpression }
+  | { kind: 'choice' | 'sequence'; values: FlowExpression[] }
+  | { kind: 'assign'; left: FlowExpression; right: FlowExpression; operator: string }
+  | { kind: 'call'; callee: FlowExpression; args: FlowExpression[]; key: string }
+  | { kind: 'initializer'; entries: { path: (string | number)[]; value: FlowExpression }[] }
+  | { kind: 'unknown'; children?: FlowExpression[] });
+export type FlowStatement =
+  | { kind: 'expression' | 'return'; value: FlowExpression }
+  | { kind: 'branch'; condition: FlowExpression; then: FlowStatement[]; otherwise: FlowStatement[] }
+  | { kind: 'loop'; condition: FlowExpression; body: FlowStatement[] };
+export interface FlowLocal { id: string; name: string; type?: CType; location: Location; scope: { start: number; end: number }; parameter?: number; conditions?: string[]; persistent?: boolean }
+export interface FlowProgram { id: string; locals: FlowLocal[]; params: string[]; body: FlowStatement[] }
+export interface GlobalInitializer { id: string; value: FlowExpression; location: Location }
 export interface MacroDefinition {
   name: string; parameters?: string[]; variadic?: string; body: string;
   location: Location; conditions: string[];
@@ -46,6 +67,8 @@ export interface FileAnalysis {
   directives?: { start: number; end: number }[];
   guard?: { name: string; condition: string };
   projectScoped?: boolean;
+  programs?: FlowProgram[]; initializers?: GlobalInitializer[];
+  statementConditions?: { start: number; conditions: string[] }[];
 }
 export interface RelationSite extends ReferenceRecord { ambiguous: boolean; candidates: string[] }
 export interface RelationGroup {

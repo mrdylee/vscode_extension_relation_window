@@ -94,7 +94,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test test/core.test.ts test/macros.test.ts test/members.test.ts test/syntax.test.ts test/updates.test.ts",
+    "test": "tsx --test test/core.test.ts test/macros.test.ts test/pointer-calls.test.ts test/members.test.ts test/syntax.test.ts test/updates.test.ts",
     "test:extension": "npm run build && node scripts/test-extension.mjs",
     "test:worker": "npm run build && node --test test/analysis-worker.test.mjs",
     "test:performance": "tsx test/index-performance.ts",

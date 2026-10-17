@@ -180,7 +180,7 @@ export class WorkspaceIndex implements vscode.Disposable {
       }
       if (epoch === this.epoch) {
         this.indexing = false;
-        this.status = 'Resolving macro calls…'; this.changed.fire();
+        this.status = 'Resolving calls and callbacks…'; this.changed.fire();
         await this.derive();
         if (epoch !== this.epoch) return;
         this.status = uris.length > 10000 ? 'Partial index: 10,000 file limit reached' : 'Index ready';

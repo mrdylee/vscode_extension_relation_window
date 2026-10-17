@@ -89,7 +89,10 @@ export class RelationView implements vscode.WebviewViewProvider, vscode.Disposab
     const visit = (node: GraphNode) => {
       this.nodes.set(node.key, node);
       if (node.symbolId) this.locations.set(node.symbolId, { location: node.location, label: node.name });
-      for (const site of node.sites) this.locations.set(site.id, { location: site.location, label: `${site.name} · ${site.kind}` });
+      for (const site of node.sites) {
+        this.locations.set(site.id, { location: site.location, label: `${site.name} · ${site.kind}` });
+        site.inference?.evidence.forEach((frame, i) => this.locations.set(site.id + ':evidence:' + i, { location: frame.location, label: frame.reason }));
+      }
       node.children.forEach(visit);
     };
     if (this.state.graph) visit(this.state.graph.root);

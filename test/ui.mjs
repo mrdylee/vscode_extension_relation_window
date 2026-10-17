@@ -20,7 +20,10 @@ try {
   const items = new Map();
   function collect(node) {
     if (node.symbolId) items.set(node.symbolId, node.location);
-    for (const site of node.sites) items.set(site.id, site.location);
+    for (const site of node.sites) {
+      items.set(site.id, site.location);
+      site.inference?.evidence.forEach((frame, i) => items.set(site.id + ':evidence:' + i, frame.location));
+    }
     node.children.forEach(collect);
   }
   collect(fixture.expandedGraph.root);
@@ -28,6 +31,7 @@ try {
   collect(fixture.calleeGraph.root);
   collect(fixture.memberGraph.root);
   collect(fixture.macroGraph.root);
+  collect(fixture.pointerGraph.root);
   function preview(id) {
     const location = items.get(id);
     const file = fixture.files.find(f => f.uri === location.uri);
@@ -286,6 +290,21 @@ try {
   assert.equal(await popup.locator('.node-actions').count(), 1);
   assert.ok((await macroTarget.boundingBox()).height <= 26);
   await page.screenshot({ path: 'output/playwright/macro-calls.png', fullPage: true });
+  await page.keyboard.press('Escape');
+  state.graph = fixture.pointerGraph;
+  await page.evaluate(state => window.dispatchEvent(new MessageEvent('message', { data: { type: 'state', state } })), state);
+  const pointerTarget = page.locator('[data-node-name="callback_target"] .node-title');
+  await pointerTarget.click();
+  assert.ok((await page.locator('.code-line.highlight').textContent()).includes('callbacks.run()'));
+  assert.ok((await pointerTarget.boundingBox()).height <= 26);
+  assert.equal(await pointerTarget.locator('.symbol-icon').evaluate(node => getComputedStyle(node).borderStyle), 'dashed');
+  await pointerTarget.focus(); await pointerTarget.press('Space');
+  assert.ok((await popup.textContent()).includes('Inferred call · callbacks.run'));
+  assert.ok(await popup.locator('.evidence').count());
+  assert.equal(await popup.locator('.node-actions').count(), 1);
+  await popup.locator('.evidence').first().click();
+  assert.ok((await page.locator('.code-line.highlight').textContent()).includes('callback_target'));
+  await page.screenshot({ path: 'output/playwright/inferred-calls.png', fullPage: true });
   await page.keyboard.press('Escape');
   await relationSelector.selectOption('callers');
   state.graph = fixture.memberGraph; state.accessFilter = 'all';

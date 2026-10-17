@@ -20,12 +20,12 @@
 
 ## Feature 2 — function pointers and callbacks
 
-- [ ] Add test/pointer-calls.test.ts. Start with `void (*fp)(void)=foo; fp(); fp=bar; fp();` and assert per-site targets foo then bar, labelled inferred. Verify failure before implementation.
-- [ ] Add expression/control-flow facts to model and analyzer (including reparsed expanded bodies): initializers, assignments, branch/loop blocks, calls/arguments and returns. Encode designated and positional struct/array initializer entries.
-- [ ] Create src/pointer-targets.ts: object-slot identity, target/unknown sets and evidence; flow-sensitive locals; field/index lookup via declared types; bounded parameter/global/return fixed point. Retain unknown markers for opaque mutations and unsupported paths.
-- [ ] Integrate derived inferred calls into project analysis and incoming/outgoing relations, without losing ordinary variable reads or raw source selection. Include callback registration/forwarding, instance-separated tables, dynamic indices, null/unknown overwrites, conditional targets, cross-file symbols and edit/delete invalidation fixtures.
-- [ ] Render Inferred call and provenance/unknown details in existing popup with candidate styling. Add browser and Extension Host navigation tests for callback tables and candidates.
-- [ ] Run feature and full tests. Perform review-work for pointer analysis and interaction with macro expansion; record/fix/retest findings before final packaging.
+- [x] Add test/pointer-calls.test.ts. Start with `void (*fp)(void)=foo; fp(); fp=bar; fp();` and assert per-site targets foo then bar, labelled inferred. Verify failure before implementation.
+- [x] Add expression/control-flow facts to model and analyzer (including reparsed expanded bodies): initializers, assignments, branch/loop blocks, calls/arguments and returns. Encode designated and positional struct/array initializer entries.
+- [x] Create src/pointer-targets.ts: object-slot identity, target/unknown sets and evidence; flow-sensitive locals; field/index lookup via declared types; bounded parameter/global/return fixed point. Retain unknown markers for opaque mutations and unsupported paths.
+- [x] Integrate derived inferred calls into project analysis and incoming/outgoing relations, without losing ordinary variable reads or raw source selection. Include callback registration/forwarding, instance-separated tables, dynamic indices, null/unknown overwrites, conditional targets, cross-file symbols and edit/delete invalidation fixtures.
+- [x] Render Inferred call and provenance/unknown details in existing popup with candidate styling. Add browser and Extension Host navigation tests for callback tables and candidates.
+- [x] Run feature and full tests. Perform review-work for pointer analysis and interaction with macro expansion; record/fix/retest findings before final packaging.
 
 ## Final delivery
 
