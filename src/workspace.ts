@@ -56,7 +56,7 @@ export class WorkspaceIndex implements vscode.Disposable {
     let value = this.exclusions.get(key);
     if (!value) {
       const patterns = [...builtInExcludes, ...vscode.workspace.getConfiguration('cRelation', folder.uri).get<string[]>('exclude', [])];
-      value = { patterns, matchers: patterns.map(pattern => new Minimatch(pattern, { dot: true, nonegate: true, nocomment: true, noext: true })) };
+      value = { patterns, matchers: patterns.map(pattern => new Minimatch(pattern, { dot: true, nonegate: true, nocomment: true, noext: true, nocase: process.platform === 'win32' })) };
       this.exclusions.set(key, value);
     }
     return value;
@@ -64,7 +64,7 @@ export class WorkspaceIndex implements vscode.Disposable {
   private eligible(uri: vscode.Uri) {
     const folder = vscode.workspace.getWorkspaceFolder(uri);
     return /\.[ch]$/i.test(uri.path) && !!folder &&
-      !this.excludes(folder).matchers.some(matcher => matcher.match(path.posix.relative(folder.uri.path, uri.path)));
+      !this.excludes(folder).matchers.some(matcher => matcher.match(vscode.workspace.asRelativePath(uri, false).replace(/\\/g, '/')));
   }
   private remove(uri: vscode.Uri) {
     const key = uri.toString();

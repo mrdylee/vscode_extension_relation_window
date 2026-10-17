@@ -200,6 +200,10 @@ export async function run() {
   assert.ok(vscode.window.activeTextEditor?.selection.active.isEqual(countPosition));
   assert.equal(api.view.state.graph?.root.name, 'fault_count', 'Context variable click switches to variable relations');
   const excludedDocument = await vscode.workspace.openTextDocument(excludedUri);
+  if (process.platform === 'win32') {
+    assert.equal(api.workspace.eligible(excludedUri.with({ path: excludedUri.path.toLowerCase() })), false, 'Windows exclusions ignore path casing');
+    assert.equal(api.workspace.eligible(excludedUri.with({ path: excludedUri.path.toUpperCase() })), false, 'Windows drive and folder casing do not change exclusions');
+  }
   const excludedEditor = await vscode.window.showTextDocument(excludedDocument);
   await excludedEditor.edit(edit => edit.insert(new vscode.Position(0, 0), '// unsaved excluded edit\n'));
   const generatedUri = vscode.Uri.joinPath(root, 'generated', 'late.c');
@@ -207,7 +211,8 @@ export async function run() {
   await vscode.workspace.fs.writeFile(generatedUri, Buffer.from('void excluded_late(void){}'));
   await new Promise(resolve => setTimeout(resolve, 500));
   await api.workspace.whenIdle();
-  assert.equal(api.workspace.index.files.has(excludedUri.toString()), false, 'editing excluded files does not add them');
+  assert.equal(api.workspace.index.files.has(excludedUri.toString()), false, `editing excluded files does not add them: ${excludedUri} / ${excludedDocument.uri}`);
+  assert.equal(api.workspace.index.files.has(excludedDocument.uri.toString()), false, 'normalized editor URI is also excluded');
   assert.equal(api.workspace.index.files.has(generatedUri.toString()), false, 'watchers honor glob exclusions');
   await vscode.workspace.getConfiguration('cRelation').update('exclude', [], vscode.ConfigurationTarget.Workspace);
   await new Promise(resolve => setTimeout(resolve, 500));

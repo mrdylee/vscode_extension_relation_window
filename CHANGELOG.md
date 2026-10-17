@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.16 — 2026-10-17
+
+- Include the large-workspace improvements prepared in 0.1.15, which was not published because Windows integration validation failed.
+- Normalize workspace-relative paths and match Windows exclusion patterns without case sensitivity so excluded files remain excluded when edited.
+
 ## 0.1.15 — 2026-10-17
 
 - Replace full-project index rebuilding with file-level updates; remove repeated reference-array copies.
