@@ -1,0 +1,61 @@
+name: Test and release VSIX
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run test:extension
+        if: runner.os != 'Linux'
+      - run: xvfb-run -a npm run test:extension
+        if: runner.os == 'Linux'
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Verify release tag
+        run: node -e 'if (process.env.GITHUB_REF_NAME !== "v" + require("./package.json").version) process.exit(1)'
+      - run: npm run package
+      - name: Prepare downloads and checksums
+        run: |
+          version=$(node -p 'require("./package.json").version')
+          for platform in windows macos wsl; do
+            cp "artifacts/c-relation-explorer-$version.vsix" "artifacts/c-relation-explorer-$version-$platform.vsix"
+          done
+          cd artifacts
+          sha256sum *.vsix > SHA256SUMS.txt
+      - name: Publish release with all assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          version=$(node -p 'require("./package.json").version')
+          gh release create "$RELEASE_TAG" artifacts/*.vsix artifacts/SHA256SUMS.txt --verify-tag --draft --title "C Relation Explorer $version — Windows / macOS / WSL" --notes-file "docs/releases/$version.md"
+          gh release edit "$RELEASE_TAG" --draft=false --latest
