@@ -108,13 +108,13 @@ try {
   assert.equal(await caller.locator('.site').count(), 0);
   const popup = page.getByRole('dialog', { name: 'Symbol details' });
   await caller.hover();
-  await page.waitForTimeout(650);
-  assert.equal(await popup.isVisible(), false, 'hover waits for one second');
+  await page.waitForTimeout(300);
+  assert.equal(await popup.isVisible(), false, 'hover waits for 500 ms');
   const callerBox = await caller.boundingBox();
   await page.mouse.move(callerBox.x + 12, callerBox.y + 12);
-  await page.waitForTimeout(650);
+  await page.waitForTimeout(300);
   assert.equal(await popup.isVisible(), false, 'moving within the node restarts the wait');
-  await popup.waitFor({ state: 'visible', timeout: 1500 });
+  await popup.waitFor({ state: 'visible', timeout: 500 });
   const popupColors = await popup.evaluate(p => ['.detail-name', '.detail-location', '.site-kind'].map(selector => getComputedStyle(p.querySelector(selector)).color));
   assert.equal(new Set(popupColors).size, 3, 'popup distinguishes symbol, location and reference kind');
 
@@ -277,7 +277,7 @@ try {
   assert.ok(await page.locator('.context').isVisible());
   assert.ok(await page.locator('.relation').isVisible());
   assert.equal(await divider.isVisible(), false);
-  await writeFile('test-results/ui.json', JSON.stringify({ passed: true, checks: ['Context click coordinates and drag selection', 'Context UTF-16 and CRLF coordinates', 'variable filters R/W/RW/address', 'variable badges preserve one-line height', 'variable click and popup preview exact use sites', 'variable access colors in dark/light themes', 'function mode preserved', 'one-second stationary hover with movement reset and leave cancellation', 'mouse click does not bypass delay', 'popup tint and condition syntax in dark/light themes', 'single-line graph nodes', 'hover popup without layout shift', 'Context selected call and symbol', 'syntax colors in dark/light themes', 'keyboard popup access and Escape', 'root preserved', 'variable icon', 'keyboard expansion/collapse/special', 'explicit source open', 'lock toggle', 'split resize', 'narrow layout', '80 candidates keep graph space and distinguish paths'], errors }, null, 2));
+  await writeFile('test-results/ui.json', JSON.stringify({ passed: true, checks: ['Context click coordinates and drag selection', 'Context UTF-16 and CRLF coordinates', 'variable filters R/W/RW/address', 'variable badges preserve one-line height', 'variable click and popup preview exact use sites', 'variable access colors in dark/light themes', 'function mode preserved', '500-ms stationary hover with movement reset and leave cancellation', 'mouse click does not bypass delay', 'popup tint and condition syntax in dark/light themes', 'single-line graph nodes', 'hover popup without layout shift', 'Context selected call and symbol', 'syntax colors in dark/light themes', 'keyboard popup access and Escape', 'root preserved', 'variable icon', 'keyboard expansion/collapse/special', 'explicit source open', 'lock toggle', 'split resize', 'narrow layout', '80 candidates keep graph space and distinguish paths'], errors }, null, 2));
   assert.deepEqual(errors, []);
   console.log('Browser UI checks passed, including variable access filters, colors and actual-site previews');
 } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }

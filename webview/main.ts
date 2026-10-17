@@ -87,7 +87,7 @@ function scheduleHover(node: GraphNode, anchor: HTMLButtonElement) {
   hideDetails();
   hoverTimer = setTimeout(() => {
     if (anchor.isConnected && anchor.matches(':hover')) showDetails(node, anchor);
-  }, 1000);
+  }, 500);
 }
 function condition(text: string) {
   const line = el('div', 'condition');

@@ -58,7 +58,7 @@ Other examples: `App/**/*.{c,h}` matches C/H files under App; `**/vendor/**` mat
 - **Double-click / Enter** opens the symbol or reference in the main editor.
 - **Context code click** moves the main editor to that location. When following selection, Relation also follows the clicked symbol. Drag to select and copy text without navigating.
 - **Following selection** means Relation follows symbols selected in the editor or Context. Click it to switch to **Pinned · Follow paused** and keep the current root. Click again to resume. Pinning does not stop indexing or manual branch expansion.
-- Hover over a node without moving for one second, or press **Space** on a focused node, to see details and individual call/reference locations. Click a location to preview the exact use in Context. **Escape** closes details.
+- Hover over a node without moving for 500 ms, or press **Space** on a focused node, to see details and individual call/reference locations. Click a location to preview the exact use in Context. **Escape** closes details.
 - **→** expands a focused node, **←** collapses it, and **Shift+→** lets you choose an expansion depth. The details popup also offers **Levels…**.
 - If multiple definitions match, use **Select definition** to choose the correct file.
 - Drag the divider to resize Context and Relation.

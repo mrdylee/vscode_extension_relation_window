@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.23 — 2026-10-17
+
+- Show Relation details after the pointer remains still for 500 ms instead of one second. Movement restarts the delay and leaving the node cancels it.
+
 ## 0.1.22 — 2026-10-17
 
 - Failed update requests no longer consume the 24-hour successful-check interval.
