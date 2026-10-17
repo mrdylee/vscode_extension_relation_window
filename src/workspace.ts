@@ -120,14 +120,18 @@ export class WorkspaceIndex implements vscode.Disposable {
     this.status = 'Indexing C sources…'; this.changed.fire();
     try {
       const uris: vscode.Uri[] = [];
+      const seen = new Set<string>();
       for (const folder of vscode.workspace.workspaceFolders ?? []) {
         const scope = this.scope(folder), exclude = `{${scope.exclude.join(',')}}`;
-        const include = scope.include.length === 1 ? scope.include[0] : scope.include.length ? `{${scope.include.join(',')}}` : '**/*.{c,h}';
-        // Include globs may match non-C files; filter them before imposing the source-file cap.
-        const found = await vscode.workspace.findFiles(new vscode.RelativePattern(folder, include), exclude, scope.include.length ? undefined : 10001 - uris.length);
-        if (this.disposed || epoch !== this.epoch) return;
-        for (const uri of found) {
-          if (this.eligible(uri)) uris.push(uri);
+        // Preserve each pattern: wrapping braces/commas in another brace group changes its meaning.
+        for (const include of scope.include.length ? scope.include : ['**/*.{c,h}']) {
+          const found = await vscode.workspace.findFiles(new vscode.RelativePattern(folder, include), exclude, scope.include.length ? undefined : 10001 - uris.length);
+          if (this.disposed || epoch !== this.epoch) return;
+          for (const uri of found) {
+            const key = uri.toString();
+            if (!seen.has(key) && this.eligible(uri)) { seen.add(key); uris.push(uri); }
+            if (uris.length > 10000) break;
+          }
           if (uris.length > 10000) break;
         }
         if (uris.length > 10000) break;

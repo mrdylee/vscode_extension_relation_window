@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.19 — 2026-10-17
+
+- Search each Include pattern independently so brace alternatives and literal commas retain their meaning when multiple patterns are configured. Deduplicate files before applying the initial file cap.
+- Add regressions for mixed brace patterns, comma-containing folder names, and consistent file-watcher/rebuild results.
+- Publish the menu stability, click expansion and Include/Exclude features prepared in 0.1.17–0.1.18.
+
 ## 0.1.18 — 2026-10-17
 
 - Add folder-scoped `cRelation.include` patterns. Empty includes all C/H files; Exclude always takes precedence. Apply both settings before the initial file cap and to runtime file events and unsaved edits.

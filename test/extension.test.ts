@@ -269,6 +269,25 @@ export async function run() {
   assert.deepEqual([...api.workspace.index.files.keys()].sort(), [appUri.toString(), document.uri.toString()].sort(), 'watchers and edits honor include; non-C files stay out');
   await api.workspace.reindex();
   assert.equal(api.workspace.index.files.size, 2, 'overlapping include patterns do not duplicate files');
+  const commaUri = vscode.Uri.joinPath(root, 'App,Main', 'comma.c');
+  await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(root, 'App,Main'));
+  await vscode.workspace.fs.writeFile(commaUri, Buffer.from('void comma_target(void){}'));
+  for (const [patterns, expected] of [
+    [['App/**/*.{c,h}', 'control.c', 'App/**'], [appUri.toString(), document.uri.toString()]],
+    [['App,Main/**', 'control.c'], [commaUri.toString(), document.uri.toString()]]
+  ]) {
+    await settings.update('include', patterns, vscode.ConfigurationTarget.Workspace);
+    await new Promise(resolve => setTimeout(resolve, 500));
+    await api.workspace.whenIdle();
+    await api.workspace.reindex();
+    assert.deepEqual([...api.workspace.index.files.keys()].sort(), expected.sort(), 'independent include patterns preserve braces and literal commas');
+    await vscode.workspace.fs.writeFile(appUri, Buffer.from('void app_edited(void){}'));
+    await new Promise(resolve => setTimeout(resolve, 500));
+    await api.workspace.whenIdle();
+    const afterEdit = [...api.workspace.index.files.keys()].sort();
+    await api.workspace.reindex();
+    assert.deepEqual([...api.workspace.index.files.keys()].sort(), afterEdit, 'watcher and rebuild agree for complex include patterns');
+  }
   await settings.update('include', ['no-such-folder/**'], vscode.ConfigurationTarget.Workspace);
   await new Promise(resolve => setTimeout(resolve, 500));
   await api.workspace.whenIdle();
