@@ -26,6 +26,7 @@ try {
   collect(fixture.expandedGraph.root);
   collect(fixture.variableGraphs.all.root);
   collect(fixture.calleeGraph.root);
+  collect(fixture.memberGraph.root);
   function preview(id) {
     const location = items.get(id);
     const file = fixture.files.find(f => f.uri === location.uri);
@@ -272,6 +273,22 @@ try {
   }
   await page.screenshot({ path: 'output/playwright/callees.png', fullPage: true });
   await relationSelector.selectOption('callers');
+  state.graph = fixture.memberGraph; state.accessFilter = 'all';
+  preview(state.graph.root.symbolId);
+  await page.evaluate(state => window.dispatchEvent(new MessageEvent('message', { data: { type: 'state', state } })), state);
+  const memberTitle = page.locator('[data-node-name="Motor.state"] .node-title');
+  assert.equal(await memberTitle.locator('.symbol-icon').textContent(), 'v');
+  assert.ok((await memberTitle.boundingBox()).height <= 26);
+  await memberTitle.focus(); await memberTitle.press('Space');
+  assert.ok((await popup.textContent()).includes('Member of Motor'));
+  await page.keyboard.press('Escape');
+  await page.locator('[data-node-name="motor_run"] .node-title').click();
+  assert.ok((await page.locator('.code-line.highlight').textContent()).includes('m->state=1'));
+  assert.equal(await page.locator('[data-node-name="sensor_run"]').count(), 0);
+  assert.equal(await page.getByRole('combobox', { name: 'Variable access' }).count(), 1);
+  await page.screenshot({ path: 'output/playwright/member-binding.png', fullPage: true });
+  state.graph = fixture.graph;
+  await page.evaluate(state => window.dispatchEvent(new MessageEvent('message', { data: { type: 'state', state } })), state);
   const prefix = '/* 한글 😀 */ ';
   const unicodePreview = { ...state.context, firstLine: 120, text: prefix + 'state++;\r', tokens: [[
     { text: prefix, kind: 'comment' }, { text: 'state', kind: 'variable' }, { text: '++;\r', kind: 'plain' }

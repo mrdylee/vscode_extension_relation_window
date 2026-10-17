@@ -1,5 +1,6 @@
 import { Parser, Language, Node } from 'web-tree-sitter';
 import { Access, FileAnalysis, Location, SymbolRecord } from './model';
+import { aggregateId, declaredType, typedExpression } from './type-info';
 
 function ancestor(node: Node, type: string): Node | null {
   for (let current = node.parent; current; current = current.parent) if (current.type === type) return current;
@@ -56,6 +57,7 @@ export async function createAnalyzer(runtime: string, grammar: string) {
     const declarationNames = new Set<number>();
     const functionOwners = new Map<number, string>();
     const initializerOwners = new Map<number, string>();
+    const aggregates = new Map<number, SymbolRecord>();
     const location = (node: Node): Location => ({ uri, start: node.startIndex, end: node.endIndex,
       line: node.startPosition.row, column: node.startPosition.column,
       endLine: node.endPosition.row, endColumn: node.endPosition.column });
@@ -85,6 +87,13 @@ export async function createAnalyzer(runtime: string, grammar: string) {
     }
     visit(tree.rootNode, []);
 
+    function aggregateOwner(node: Node) {
+      for (let parent = node.parent; parent; parent = parent.parent) {
+        if (['struct_specifier', 'union_specifier'].includes(parent.type)) return aggregates.get(parent.id);
+      }
+      return undefined;
+    }
+
     function addSymbol(name: Node, extent: Node, kind: SymbolRecord['kind'], definition: boolean, pointer = false) {
       if (declarationNames.has(name.id)) return file.symbols.find(s => s.location.start === name.startIndex)!;
       declarationNames.add(name.id);
@@ -92,8 +101,8 @@ export async function createAnalyzer(runtime: string, grammar: string) {
       let block = ancestor(extent, 'compound_statement') ?? enclosingFunction;
       const loop = ancestor(extent, 'for_statement');
       if (loop && (!block || loop.startIndex > block.startIndex)) block = loop;
-      if (extent.type === 'parameter_declaration') {
-        const parameters = ancestor(extent, 'parameter_list');
+      const parameters = ancestor(extent, 'parameter_list');
+      if (extent.type === 'parameter_declaration' || (kind === 'type' && parameters)) {
         const declaration = enclosingFunction?.childForFieldName('declarator');
         const functionName = declaration && declarator(declaration).name;
         const definitionParameters = functionName && ancestor(functionName, 'function_declarator')?.childForFieldName('parameters');
@@ -115,6 +124,7 @@ export async function createAnalyzer(runtime: string, grammar: string) {
       if (node.type === 'preproc_include') {
         const path = node.childForFieldName('path')?.text;
         if (path) file.includes.push(path.slice(1, -1));
+        if (path?.startsWith('<')) (file.systemIncludes ??= []).push(path.slice(1, -1));
       }
       if (['preproc_def', 'preproc_function_def'].includes(node.type)) {
         const name = node.childForFieldName('name');
@@ -125,14 +135,25 @@ export async function createAnalyzer(runtime: string, grammar: string) {
         const name = declaration && declarator(declaration).name;
         if (name) functionOwners.set(node.id, addSymbol(name, node, 'function', true).id);
       }
-      if (['struct_specifier', 'union_specifier', 'enum_specifier'].includes(node.type) && node.childForFieldName('body')) {
+      if (['struct_specifier', 'union_specifier', 'enum_specifier'].includes(node.type) &&
+        (node.childForFieldName('body') || ['translation_unit', 'compound_statement'].includes(node.parent?.type ?? ''))) {
         const name = node.childForFieldName('name');
-        if (name) addSymbol(name, node, 'type', true);
+        const symbol = addSymbol(name ?? node, node, 'type', !!node.childForFieldName('body'));
+        symbol.id = aggregateId(node, uri);
+        symbol.aggregate = node.type.split('_')[0] as SymbolRecord['aggregate'];
+        if (!name) {
+          const parentName = node.parent?.childrenForFieldName('declarator')[0];
+          const alias = parentName && declarator(parentName).name?.text;
+          const owner = aggregateOwner(node);
+          symbol.name = alias ? (owner ? `${owner.name}.${alias}` : alias) : `anonymous@${node.startPosition.row + 1}:${node.startPosition.column + 1}`;
+          symbol.location = { ...symbol.location, end: node.startIndex + symbol.aggregate!.length, endLine: node.startPosition.row, endColumn: node.startPosition.column + symbol.aggregate!.length };
+        }
+        aggregates.set(node.id, symbol);
       }
       // A trailing annotation macro can make an otherwise intact prototype an ERROR node.
       const annotatedPrototype = node.type === 'ERROR' && node.nextSibling?.text === ';' &&
         node.namedChildren.some(child => ['primitive_type', 'type_identifier', 'sized_type_specifier', 'struct_specifier', 'union_specifier', 'enum_specifier'].includes(child.type));
-      if (annotatedPrototype || ['declaration', 'parameter_declaration', 'type_definition'].includes(node.type)) {
+      if (annotatedPrototype || ['declaration', 'parameter_declaration', 'type_definition', 'field_declaration'].includes(node.type)) {
         const declarations = annotatedPrototype ? node.namedChildren.filter(child => child.type === 'function_declarator') : node.childrenForFieldName('declarator');
         for (const child of declarations) {
           const target = child.type === 'init_declarator' ? child.childForFieldName('declarator')! : child;
@@ -141,6 +162,12 @@ export async function createAnalyzer(runtime: string, grammar: string) {
           const kind = node.type === 'type_definition' ? 'type' : info.functionLike ? 'function' : 'variable';
           const external = node.namedChildren.some(n => n.type === 'storage_class_specifier' && n.text === 'extern');
           const symbol = addSymbol(info.name, node, kind, kind !== 'function' && (!external || child.type === 'init_declarator'), info.pointer);
+          symbol.type = declaredType(node, target, uri);
+          if (node.type === 'field_declaration') {
+            const owner = aggregateOwner(node);
+            symbol.memberOf = owner?.id;
+            symbol.containerName = owner?.name;
+          }
           if (child.type === 'init_declarator') initializerOwners.set(child.id, symbol.id);
           if (kind === 'variable' && child.type === 'init_declarator') {
             const fn = ancestor(node, 'function_definition');
@@ -168,7 +195,7 @@ export async function createAnalyzer(runtime: string, grammar: string) {
             access: 'read', conditions: conditions.get(node.id) ?? [] });
         }
       }
-      if (node.type !== 'identifier' || declarationNames.has(node.id)) continue;
+      if (!['identifier', 'field_identifier'].includes(node.type) || declarationNames.has(node.id)) continue;
       const fn = ancestor(node, 'function_definition');
       const body = fn?.childForFieldName('body');
       const initializer = ancestor(node, 'init_declarator');
@@ -176,6 +203,16 @@ export async function createAnalyzer(runtime: string, grammar: string) {
       const inBody = body && node.startIndex >= body.startIndex;
       const inInitializer = value && node.startIndex >= value.startIndex;
       if (!inBody && !inInitializer) continue;
+      if (node.type === 'field_identifier') {
+        const expression = node.parent?.type === 'field_expression' ? typedExpression(node.parent, location) : undefined;
+        if (expression?.kind === 'member') {
+          const functionId = fn ? functionOwners.get(fn.id) : undefined;
+          file.references.push({ id: `${uri}@${node.startIndex}`, name: node.text, kind: 'reference',
+            location: location(node), ownerId: functionId, functionId, access: access(node.parent!),
+            conditions: conditions.get(node.id) ?? [], member: expression });
+        }
+        continue;
+      }
       // Labels, member field names and attributes are not ordinary identifier references.
       if (['labeled_statement', 'goto_statement', 'attribute_specifier', 'attribute_declaration'].includes(node.parent?.type ?? '')) continue;
       if (ancestor(node, 'parameter_list') && !inInitializer) continue;

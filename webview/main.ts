@@ -50,6 +50,7 @@ function accessBadge(access: Access, compact = false) {
   return badge;
 }
 function kindLabel(node: GraphNode) {
+  if (node.containerName) return `Member of ${node.containerName}`;
   return node.kind === 'function' && node.definition !== undefined
     ? `Function ${node.definition ? 'definition' : 'declaration'}` : kindNames[node.kind];
 }

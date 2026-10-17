@@ -79,7 +79,7 @@ All icons remain **16×16**. Function icons retain the original rounded `ƒ` sha
 | Outlined `ƒ` | Function declaration: a prototype without a body |
 | Filled `ƒ` | Function definition: an implementation with a body |
 | Generic `ƒ` | Function reference whose declaration/definition form is not identified; uses the outlined style too, so inspect the popup label |
-| Blue `v` | Variable, including a function-pointer variable |
+| Blue `v` | Variable, including a function-pointer variable or struct/union member |
 | Green `T` | Type, such as a typedef |
 | Amber `#` | Macro |
 | `?` | Unknown symbol kind |
@@ -92,7 +92,26 @@ Variable-use badges are **R** (read), **W** (write), **RW** (read/write) and **&
 
 Selecting a variable switches the relation filter to **Variable · All uses**, **R · Read**, **W · Write**, **RW · Read/write**, or **& · Address passed**. Read and write filters both include RW operations. Clicking a use node previews the first matching use; its details list other locations.
 
-Address passing does not prove that a callee writes the variable. Pointer aliases and writes to array elements or structure members are not fully tracked.
+Address passing does not prove that a callee writes the variable. Pointer aliases and writes through pointers or to array elements are not tracked. Named struct/union fields are supported as described below.
+
+## Struct and union members
+
+From v0.1.26, click the field token in `m->state` or `m.state`, or its declaration. Relation uses the declared receiver type and shows a compact qualified name such as **Motor.state** with the existing blue `v` icon. The popup labels it **Member of Motor**. A different type's **Sensor.state** and a global variable named **state** stay separate.
+
+```c
+struct Motor { int state; };
+struct Sensor { int state; };
+void run(struct Motor *m, struct Sensor *s) {
+    m->state = 1;  // Motor.state: write
+    s->state++;   // Sensor.state: read/write
+}
+```
+
+Use the existing R/W/RW/& filters to inspect actual field uses. Clicking a use previews its exact source position in Context; increasing depth follows the containing function's callers.
+
+Supported paths include declared variables and parameters, typedefs and pointer typedefs, array indexing, parentheses, dereference/address expressions, named nested fields, unions and bit fields. Type definitions in headers must be inside the analysis scope. Transitive includes are followed; quoted includes prefer an existing relative path. Without compiler include paths or known conditional values, ambiguous definitions remain candidates.
+
+Casts, function-return receivers, macro-generated types, anonymous-member promotion and designated-initializer member references are not supported. Unknown types are not guessed from field names. Access applies to the named field itself: writes through a pointer field or to an array element do not imply a write to the whole field. Callback members remain **Indirect call** leaves in Callees; runtime targets are not inferred. Type/expression traversal is bounded to 32 steps and intermediate candidates to 64, so more complex cases may have missing relationships.
 
 ## Skip inactive branches
 

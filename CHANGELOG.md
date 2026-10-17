@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.26 — 2026-10-17
+
+- Bind named struct/union member uses through declared receiver types, separating same-named fields and ordinary variables.
+- Support typedef/pointer aliases, nested named fields, arrays/dereference, unions/bit fields, lexical type scopes and forward-completed tags across indexed headers.
+- Reuse variable access filters, exact Context locations and caller traversal. Show compact qualified names and a member-owner popup label with the existing icons.
+- Preserve uncertain header/conditional candidates and avoid name-only fallback for unsupported expressions. Runtime pointer targets, casts, function-return receivers, anonymous-member promotion and designated-initializer references remain unsupported.
+- Document member navigation and analysis limits in the bundled Help. Preserve v0.1.25 for rollback; main remains at v0.1.24.
+
 ## 0.1.25 — 2026-10-17
 
 - Add Callees to the existing Relation selector, with outgoing depth expansion, recursion limits and exact repeated call sites.

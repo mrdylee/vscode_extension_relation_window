@@ -15,7 +15,10 @@ async function main() {
   index.update(analyzer.analyze('file:///demo/outgoing.c', '#define CHECK() check_fault(0)\nvoid outgoing(void (*handler)(void), struct Ops *ops){\ncheck_fault(1);\ncheck_fault(2);\nCHECK();\nhandler();\nops->run();\nmissing();\n}'));
   const outgoing = index.symbols().find(s => s.name === 'outgoing')!;
   const calleeGraph = index.graph(outgoing.id, 'callees', 2);
+  index.update(analyzer.analyze('file:///demo/members.c', 'typedef struct { int state; } Motor;\ntypedef struct { int state; } Sensor;\nvoid motor_run(Motor *m){m->state=1;}\nvoid sensor_run(Sensor *s){s->state++;}\nvoid start(Motor *m){motor_run(m);}\n'));
+  const motorField = index.symbols().find(s => s.containerName === 'Motor' && s.name === 'state')!;
+  const memberGraph = index.graph(motorField.id, 'callees', 2);
   await mkdir('test-results', { recursive: true });
-  await writeFile('test-results/ui-fixture.json', JSON.stringify({ graph, expandedGraph, calleeGraph, variableGraphs, files: [...index.files.values()].map(file => ({ ...file, tokens: highlightC(file.text) })) }));
+  await writeFile('test-results/ui-fixture.json', JSON.stringify({ graph, expandedGraph, calleeGraph, memberGraph, variableGraphs, files: [...index.files.values()].map(file => ({ ...file, tokens: highlightC(file.text) })) }));
 }
 void main();

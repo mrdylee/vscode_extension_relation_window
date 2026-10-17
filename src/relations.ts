@@ -1,4 +1,5 @@
 import { AccessFilter, FileAnalysis, GraphData, GraphNode, ReferenceRecord, RelationGroup, RelationMode, SymbolRecord } from './model';
+import { MemberResolver } from './member-resolver';
 
 // Keep each file's contribution separate so edits never rebuild unrelated files.
 class FileBuckets<T extends { name: string }> {
@@ -41,19 +42,43 @@ export class RelationIndex {
   private byId = new Map<string, SymbolRecord>();
   private references = new FileBuckets<ReferenceRecord>();
   private outgoing = new Map<string, ReferenceRecord[]>();
+  private members = new Map<string, Map<string, SymbolRecord[]>>();
+  private filesByName = new Map<string, Set<string>>();
+  private visibility = new Map<string, Set<string>>();
+  private memberResolver = new MemberResolver({
+    symbols: name => this.byName.get(name, this.fileOrder),
+    symbol: id => this.byId.get(id),
+    fields: (id, name) => this.members.get(id)?.get(name) ?? [],
+    visibleFiles: uri => this.visibleFiles(uri),
+    identifier: (name, location) => this.resolve({ id: '', name, location, kind: 'reference', conditions: [] })
+  });
   private fileOrder = new Map<string, number>();
   private nextOrder = 0;
   private targets = new Map<string, { definitions: SymbolRecord[]; headerStatics: SymbolRecord[]; declarations: SymbolRecord[] }>();
   clear() {
     this.files.clear(); this.byName.clear(); this.byId.clear(); this.references.clear();
     this.fileOrder.clear(); this.nextOrder = 0; this.targets.clear(); this.outgoing.clear();
+    this.members.clear(); this.filesByName.clear(); this.visibility.clear();
   }
   update(file: FileAnalysis) {
     const previous = this.files.get(file.uri);
     if (previous) this.unindex(previous);
     else this.fileOrder.set(file.uri, this.nextOrder++);
     this.files.set(file.uri, file);
-    for (const symbol of file.symbols) { this.byId.set(symbol.id, symbol); this.targets.delete(symbol.name); }
+    this.visibility.clear();
+    const basename = file.uri.split('/').pop()!;
+    let paths = this.filesByName.get(basename);
+    if (!paths) this.filesByName.set(basename, paths = new Set());
+    paths.add(file.uri);
+    for (const symbol of file.symbols) {
+      this.byId.set(symbol.id, symbol); this.targets.delete(symbol.name);
+      if (symbol.memberOf) {
+        let fields = this.members.get(symbol.memberOf);
+        if (!fields) this.members.set(symbol.memberOf, fields = new Map());
+        const named = fields.get(symbol.name) ?? [];
+        named.push(symbol); fields.set(symbol.name, named);
+      }
+    }
     this.byName.add(file.uri, file.symbols);
     this.references.add(file.uri, file.references);
     for (const ref of file.references) {
@@ -70,16 +95,37 @@ export class RelationIndex {
     this.unindex(previous); this.files.delete(uri); this.fileOrder.delete(uri);
   }
   private unindex(file: FileAnalysis) {
-    for (const symbol of file.symbols) { this.byId.delete(symbol.id); this.targets.delete(symbol.name); this.outgoing.delete(symbol.id); }
+    this.visibility.clear();
+    const basename = file.uri.split('/').pop()!;
+    const paths = this.filesByName.get(basename);
+    paths?.delete(file.uri);
+    if (!paths?.size) this.filesByName.delete(basename);
+    for (const symbol of file.symbols) { this.byId.delete(symbol.id); this.targets.delete(symbol.name); this.outgoing.delete(symbol.id); this.members.delete(symbol.id); }
     this.byName.remove(file.uri, file.symbols);
     this.references.remove(file.uri, file.references);
   }
   symbols(): SymbolRecord[] { return [...this.byId.values()]; }
   symbol(id: string) { return this.byId.get(id); }
+  private visibleFiles(uri: string): Set<string> {
+    const cached = this.visibility.get(uri);
+    if (cached) return cached;
+    const visible = new Set([uri]), queue = [uri];
+    for (let i = 0; i < queue.length; i++) {
+      for (const include of this.files.get(queue[i])?.includes ?? []) {
+        const relative = new URL(include, queue[i]).href;
+        const quoted = !this.files.get(queue[i])?.systemIncludes?.includes(include);
+        const matches = quoted && this.files.has(relative) ? [relative] : [...(this.filesByName.get(encodeURIComponent(include.split('/').pop()!)) ?? [])]
+          .filter(candidate => decodeURIComponent(candidate).endsWith('/' + include));
+        for (const candidate of matches) if (!visible.has(candidate)) { visible.add(candidate); queue.push(candidate); }
+      }
+    }
+    this.visibility.set(uri, visible);
+    return visible;
+  }
   private targetsFor(name: string) {
     let targets = this.targets.get(name);
     if (!targets) {
-      const all = this.byName.get(name, this.fileOrder);
+      const all = this.byName.get(name, this.fileOrder).filter(s => !s.memberOf);
       targets = {
         definitions: all.filter(s => s.storage === 'global' && s.definition && s.kind !== 'type'),
         headerStatics: all.filter(s => s.storage === 'static' && /\.h$/i.test(s.location.uri)),
@@ -91,11 +137,12 @@ export class RelationIndex {
   }
   private resolve(ref: ReferenceRecord): SymbolRecord[] {
     if (ref.indirect) return [];
+    if (ref.member) return this.memberResolver.members(ref.member);
     if (ref.targetId) {
       const target = this.byId.get(ref.targetId);
       return target ? [target] : [];
     }
-    const here = this.byName.inFile(ref.name, ref.location.uri);
+    const here = this.byName.inFile(ref.name, ref.location.uri).filter(s => !s.memberOf && s.kind !== 'type');
     const locals = here.filter(s => s.scope && s.scope.start <= ref.location.start && s.scope.end > ref.location.start && s.location.start <= ref.location.start);
     let localTargets: SymbolRecord[] = [], externDeclarations: SymbolRecord[] = [];
     if (locals.length) {
@@ -181,10 +228,11 @@ export class RelationIndex {
     let count = 0, truncated = false;
     const make = (symbol: SymbolRecord | undefined, group: RelationGroup | undefined, key: string, remaining: number, path: Set<string>): GraphNode => {
       const cycle = !!symbol && path.has(symbol.id);
-      const node: GraphNode = { key, symbolId: symbol?.id, name: symbol?.name ?? group!.name,
+      const node: GraphNode = { key, symbolId: symbol?.id, name: symbol?.memberOf ? `${symbol.containerName}.${symbol.name}` : symbol?.name ?? group!.name,
         kind: symbol?.kind ?? group!.kind, location: symbol?.location ?? group!.sites[0].location,
         definition: symbol?.definition ?? (group?.sites.every(site => site.kind === 'declaration') ? false : undefined),
         callKind: group?.callKind,
+        containerName: symbol?.containerName,
         conditions: symbol?.conditions ?? [], sites: group?.sites ?? [], children: [], cycle,
         expanded: false, ambiguous: group?.sites.some(s => s.ambiguous) ?? false };
       count++;

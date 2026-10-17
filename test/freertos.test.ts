@@ -39,6 +39,16 @@ export async function run() {
   assert.equal(api.view.state.context.location.start, callee.sites[0].location.start);
   assert.equal(api.view.state.context.location.uri, document.uri.toString());
   await api.view.handleMessage({ type: 'mode', value: 'references' });
+  const member = api.workspace.index.files.get(document.uri.toString()).symbols.find((symbol: any) => symbol.memberOf && symbol.name === 'uxMessagesWaiting');
+  assert.ok(member, 'FreeRTOS queue member extracted');
+  const memberStarted = Date.now();
+  const memberWrites = api.workspace.index.relations(member.id, 'references', 'write');
+  const memberQueryMs = Date.now() - memberStarted;
+  assert.ok(memberWrites.length > 0, 'queue member writes resolve through typedefs and pointer declarations');
+  assert.ok(memberWrites.every((group: any) => group.sites.every((site: any) => site.member && ['write', 'readwrite'].includes(site.access))));
+  editor.selection = new vscode.Selection(document.positionAt(member.location.start), document.positionAt(member.location.start));
+  api.view.track(editor);
+  assert.equal(api.view.state.graph.root.name, 'QueueDefinition.uxMessagesWaiting');
   const tasks = await vscode.workspace.openTextDocument(vscode.Uri.joinPath(vscode.workspace.workspaceFolders![0].uri, 'tasks.c'));
   const tasksEditor = await vscode.window.showTextDocument(tasks);
   const variableOffset = tasks.getText().indexOf('uxCurrentNumberOfTasks');
@@ -83,7 +93,7 @@ export async function run() {
     await new Promise(resolve => setTimeout(resolve, 200));
     assert.equal(api.view.state.graph, graph, 'same-symbol cursor movement does not rebuild or resend the graph');
   }
-  const variableResult = { ...result, variable: variableName, accessKinds: [...accessKinds], variableFilters: true, trackingMs };
+  const variableResult = { ...result, variable: variableName, accessKinds: [...accessKinds], variableFilters: true, trackingMs, member: member.name, memberWriteFunctions: memberWrites.length, memberQueryMs };
   await writeFile(process.env.C_RELATION_TEST_OUTPUT!, JSON.stringify(variableResult, null, 2));
   console.log('FreeRTOS full-workspace verification', JSON.stringify(variableResult));
 }

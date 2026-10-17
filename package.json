@@ -2,7 +2,7 @@
   "name": "c-relation-explorer",
   "displayName": "C Relation Explorer",
   "description": "Build-free C references, caller/callee graphs and a linked Context preview.",
-  "version": "0.1.25",
+  "version": "0.1.26",
   "publisher": "local-james-black",
   "license": "MIT",
   "engines": {
@@ -94,14 +94,14 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test test/core.test.ts test/syntax.test.ts test/updates.test.ts",
+    "test": "tsx --test test/core.test.ts test/members.test.ts test/syntax.test.ts test/updates.test.ts",
     "test:extension": "npm run build && node scripts/test-extension.mjs",
     "test:performance": "tsx test/index-performance.ts",
     "test:large": "npm run build && node scripts/test-large-workspace.mjs",
     "test:freertos": "npm run build && node scripts/test-freertos.mjs",
     "test:ui": "npm run build && tsx test/create-ui-fixture.ts && node test/ui.mjs",
     "vscode:prepublish": "npm run build",
-    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license --out artifacts/c-relation-explorer-0.1.25.vsix"
+    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license --out artifacts/c-relation-explorer-0.1.26.vsix"
   },
   "dependencies": {
     "minimatch": "10.2.6",
