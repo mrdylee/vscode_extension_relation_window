@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.1.28 — 2026-10-18
+
+- Expand supported object/function macros, nested arguments, stringizing, token
+  pasting and variadics through ordered indexed define/include/undef events.
+  Keep original call positions and show expansion provenance in the popup.
+- Infer static function-pointer/callback candidates from assignments, forwarding,
+  registration, returns, static storage and typed struct/array tables. Retain
+  unknown targets, instance separation and candidate/evidence labels.
+- Follow inferred targets in existing Callees/Callers/References graphs and
+  preview/open evidence without adding another window or enlarging nodes.
+- Keep flow facts in the Worker; cache equivalent macro syntax, type/name
+  lookups, object/array slots and current function summaries. Bound propagation,
+  mutation slots and additional callback analysis time; surface partial results.
+- Fix conditional declarations/returns, value-copy semantics, transitive static
+  tables, source binding and macro-variant deduplication found in separate
+  per-feature review-work passes. Add 59 macro/callback regressions.
+- Update offline Help and README with examples, uncertainty and scope guidance.
+  Preserve main at v0.1.24; add reviewed feature checkpoint tags for rollback.
+
 ## 0.1.27 — 2026-10-17
 
 - Resolve a locally introduced struct/union tag when its definition follows the pointer declaration in the same block. Preserve already visible outer types and reject unrelated enclosing-block completions.

@@ -29,6 +29,6 @@
 
 ## Final delivery
 
-- [ ] Update README, offline Help, CHANGELOG and release notes, bump package/lock/VSIX version together. Explain supported inference and uncertainty/limits with examples.
-- [ ] Verify typecheck, all unit tests, UI, Extension Host, performance, FreeRTOS, large workspace and extracted VSIX. Review final diff and docs; resolve every actionable finding.
+- [x] Update README, offline Help, CHANGELOG and release notes, bump package/lock/VSIX version together. Explain supported inference and uncertainty/limits with examples.
+- [x] Verify typecheck, all unit tests, UI, Extension Host, performance, FreeRTOS, large workspace and extracted VSIX. Review final diff and docs; resolve every actionable finding.
 - [ ] Commit/push feature branch and release tag through the established reviewed release workflow. Verify all OS CI, public assets/checksums, remote SHA and clean tree; preserve main/prior versions. Mark goal complete only after both features and both review records are verified.

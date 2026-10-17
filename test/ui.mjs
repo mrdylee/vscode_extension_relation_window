@@ -172,6 +172,7 @@ try {
   await page.keyboard.press('Escape');
   await popup.waitFor({ state: 'hidden' });
   await caller.locator('.node-title').click();
+  await page.locator('[data-node-name="main"]').first().waitFor({ timeout: 3000 });
   assert.ok((await page.locator('.code-line.highlight').textContent()).includes('control_task(void)'));
   assert.ok(await page.evaluate(() => window.sent.some(m => m.type === 'selectNode')), 'node click requests preview and expansion together');
   await page.keyboard.press('Space');

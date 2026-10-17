@@ -53,9 +53,9 @@ Other examples: `App/**/*.{c,h}` matches C/H files under App; `**/vendor/**` mat
 
 ## Navigate Relation and Context
 
-- **References** shows direct calls, address references and declarations. **Callers** shows direct callers. The tree grows toward the code that calls or references the selected symbol.
+- **References** shows calls, address references and declarations. **Callers** includes direct, macro-expanded and inferred callback calls. The tree grows toward the code that calls or references the selected symbol.
 - **Callees · Called functions** grows in the opposite direction: from the selected function to the functions it calls. Repeated calls share one node; the popup lists each actual call site. Click a child to preview the call site in Context and expand its outgoing calls. Enter or double-click opens that call site in the editor.
-- In Callees, a **Macro invocation** is a leaf: its body is not expanded. **Indirect call** means a function-pointer or complex call expression whose runtime target is not resolved. **Unresolved call** means no matching definition/declaration was found in the analysis scope. These leaves are visible, but are not guessed direct function calls. Declared functions without an indexed body also have no outgoing calls to expand.
+- **Macro-expanded call** shows a call found after token expansion. **Inferred call** shows a possible function-pointer/callback target, with a dashed candidate icon and evidence. **Macro invocation**, **Indirect call** and **Unresolved call** leaves retain unavailable expansions, unknown indirect targets or names missing from the analyzed scope. Declared functions without an indexed body have no outgoing calls to expand.
 - Variable selections keep their Read/Write filters and incoming caller tree, even when the remembered function mode is Callees. Returning to a function restores that mode.
 - **1 level – 8 levels** controls the initial tree depth. Click a Relation symbol to preview it in Context and expand from that node by the selected depth. The root stays in place; already deeper branches remain open. Repeated clicks do not grow the same node indefinitely.
 - **Double-click / Enter** opens the symbol or reference in the main editor.
@@ -92,7 +92,7 @@ Variable-use badges are **R** (read), **W** (write), **RW** (read/write) and **&
 
 Selecting a variable switches the relation filter to **Variable · All uses**, **R · Read**, **W · Write**, **RW · Read/write**, or **& · Address passed**. Read and write filters both include RW operations. Clicking a use node previews the first matching use; its details list other locations.
 
-Address passing does not prove that a callee writes the variable. Pointer aliases and writes through pointers or to array elements are not tracked. Named struct/union fields are supported as described below.
+Address passing does not prove that a callee writes the variable. These R/W lists do not add uses through aliases or writes through pointers/to array elements. Callback target inference separately follows supported pointer values. Named struct/union fields are supported as described below.
 
 ## Struct and union members
 
@@ -111,13 +111,35 @@ Use the existing R/W/RW/& filters to inspect actual field uses. Clicking a use p
 
 Supported paths include declared variables and parameters, typedefs and pointer typedefs, array indexing, parentheses, dereference/address expressions, named nested fields, unions and bit fields. Type definitions in headers must be inside the analysis scope. Transitive includes are followed; quoted includes prefer an existing relative path. Without compiler include paths or known conditional values, ambiguous definitions remain candidates.
 
-Casts, function-return receivers, macro-generated types, anonymous-member promotion and designated-initializer member references are not supported. Unknown types are not guessed from field names. Access applies to the named field itself: writes through a pointer field or to an array element do not imply a write to the whole field. Callback members remain **Indirect call** leaves in Callees; runtime targets are not inferred. Type/expression traversal is bounded to 32 steps and intermediate candidates to 64, so more complex cases may have missing relationships.
+Casts, function-return receivers, macro-generated types, anonymous-member promotion and designated-initializer member references are not supported for selecting member R/W relationships. Unknown types are not guessed from field names. Writes through a pointer field or to an array element do not imply a write to the whole field. Callback target inference is a separate analysis described below. Type/expression traversal is bounded to 32 steps and intermediate candidates to 64, so more complex cases may have missing relationships.
+
+## Macro-expanded calls and callback targets (v0.1.28)
+
+Use the existing **Callees**, **Callers** and **References** modes. No build configuration is needed. Include the relevant headers, callback registrations and implementations in the analysis scope, and wait for **Index ready**.
+
+- Object/function macros, nested argument expansion, stringizing, token pasting, variadics and literal indexed includes are supported. The popup shows the expansion chain and tinted effective code. Clicking a call still previews its original invocation in Context.
+- Local pointer initialization/assignment, pointer aliases, branches/loops, callback argument forwarding/registration/returns, static state, struct tables and arrays supply possible targets. Constant array indices stay separate; unknown indices collect possible entries.
+- Known object instances stay separate. Unknown pointer fields may merge by declaration and remain uncertain.
+- **Inferred call** is always a static candidate, not proof of runtime execution. Its **Evidence** buttons preview function addresses, assignments and argument-passing locations. Enter/double-click opens an evidence location in the main editor. Selecting the node previews the actual indirect call and can expand the target's own calls.
+- Unknown values, opaque mutations and analysis limits retain an **Indirect call** leaf and **Other targets may exist** details. Arbitrary addresses, byte-level memory operations, every cast/pointer arithmetic case and runtime dynamic linking are not fully resolved.
+
+Example: run's Callees includes target as a dashed candidate. Clicking target previews ops.run().
+
+```c
+typedef void (*CB)(void);
+void target(void) {}
+struct Ops { CB run; };
+struct Ops ops = { .run = target };
+void run(void) { ops.run(); }
+```
+
+Analysis runs in the Worker. Macro expansion is bounded to 32 alternatives, 32 nested steps and 40,000 tokens per function. Callback propagation is bounded to 64 value/alias candidates, 256 mutation slots per function, 12 project passes, 4 loop passes and an approximately 10-second budget for additional callback inference. **Analysis notices** and unknown targets identify partial results; narrowing Include/Exclude scope can reveal more targets. Ordinary integer values are not propagated across functions, so array candidates may be broader; addresses stored in integer variables and converted back remain unknown. This is not a complete compiler preprocessor or a proof of every build/runtime path; computed include paths and build-specific header instantiation are outside the supported scope.
 
 ## Skip inactive branches
 
 **Skip inactive branches** excludes branches known to be inactive from literal `#if` / `#elif` conditions of `0` or `1`, including their `#else` branches and nesting. Context still displays the original source.
 
-It does not determine build-specific `#ifdef`, `#ifndef`, `defined(...)` or macro-expression conditions. Both possible branches remain visible as conditional candidates. Local `#define` / `#undef` changes and compiler build flags are not evaluated. Turn the option off to include `#if 0` code too.
+It does not determine build-specific `#ifdef`, `#ifndef`, `defined(...)` or macro-expression conditions. Both possible branches remain visible as conditional candidates. Call expansion follows ordered `#define` / `#undef` events and indexed includes, but does not evaluate compiler build flags. Turn the option off to include `#if 0` code too.
 
 ## If results are missing or slow
 
@@ -127,7 +149,7 @@ It does not determine build-specific `#ifdef`, `#ifndef`, `defined(...)` or macr
 4. Expand **Analysis notices**. Files above 2,000,000 UTF-16 code units are skipped. Unsupported C syntax can also produce notices. **Index ready** means indexing finished, not that every file was analyzed without errors.
 5. **Rebuild index** repeats analysis with the current settings. It does not change the scope or limits.
 
-The graph displays at most 300 nodes. Recursion stops expansion along that path. Macro expansion, runtime function-pointer targets and some compiler-specific syntax are not resolved. Missing relationships can therefore also be an analysis limitation.
+The graph displays at most 300 nodes. Recursion stops expansion along that path. Macro and callback analysis is bounded, and compiler-specific syntax may remain unsupported. Missing relationships can therefore also be an analysis limitation.
 
 ## WSL and updates
 
