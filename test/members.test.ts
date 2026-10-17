@@ -162,3 +162,49 @@ test('members declared in function definition parameters remain visible in its b
   const value = index({ 'main.c': source });
   assert.equal(at(value, source, 'x->state').length, 1);
 });
+
+test('members complete implicitly introduced local tags', () => {
+  const source = 'void run(void){struct Motor *m; struct Motor {int state;}; m->state=1;}';
+  const value = index({ 'main.c': source });
+  const members = at(value, source, 'm->state');
+  assert.equal(members.length, 1);
+  assert.equal(members[0].location.start, source.indexOf('state;'));
+});
+test('implicit local tags do not replace already visible outer tags', () => {
+  for (const header of [false, true]) {
+    const outer = 'struct Motor {int state;};';
+    const body = 'void run(void){struct Motor *m; struct Motor {int state;}; m->state=1;}';
+    const source = (header ? '#include "types.h"\n' : outer) + body;
+    const value = index({ 'main.c': source, ...(header ? { 'types.h': outer } : {}) });
+    const members = at(value, source, 'm->state');
+    assert.equal(members.length, 1);
+    assert.equal(members[0].location.uri, uri(header ? 'types.h' : 'main.c'));
+    assert.equal(members[0].location.start, outer.indexOf('state'));
+  }
+});
+test('implicit local completion stays separate from later file-scope tags', () => {
+  const source = 'void run(void){struct Motor *m; struct Motor {int state;}; m->state=1;} struct Motor {int state;};';
+  const value = index({ 'main.c': source });
+  assert.equal(at(value, source, 'm->state')[0]?.location.start, source.indexOf('state;'));
+});
+test('conditional receiver shadows retain outer member candidates', () => {
+  const source = 'struct Motor {int state;}; struct Sensor {int state;}; void run(void){struct Motor m;{\n#if BOARD\nstruct Sensor m;\n#endif\nm.state=1;}}';
+  const value = index({ 'main.c': source });
+  assert.deepEqual(at(value, source, 'm.state').map(s => s.containerName).sort(), ['Motor', 'Sensor']);
+  for (const member of at(value, source, 'm.state')) assert.ok(value.relations(member.id, 'references')[0].sites[0].ambiguous);
+});
+test('unconditional receiver shadows still hide outer member candidates', () => {
+  const source = 'struct Motor {int state;}; struct Sensor {int state;}; void run(void){struct Motor m;{struct Sensor m;m.state=1;}}';
+  const value = index({ 'main.c': source });
+  assert.deepEqual(at(value, source, 'm.state').map(s => s.containerName), ['Sensor']);
+});
+test('implicit tags do not bind to later definitions in an enclosing block', () => {
+  const source = 'void run(void){{struct Motor *m; m->state=1;} struct Motor {int state;};}';
+  const value = index({ 'main.c': source });
+  assert.deepEqual(at(value, source, 'm->state'), []);
+});
+test('conditional receiver shadows retain globals through multiple nested scopes', () => {
+  const source = 'struct Motor {int state;}; struct Sensor {int state;}; struct Third {int state;}; struct Motor m; void run(void){\n#if A\nstruct Sensor m;\n#endif\n{\n#if B\nstruct Third m;\n#endif\nm.state=1;}}';
+  const value = index({ 'main.c': source });
+  assert.deepEqual(at(value, source, 'm.state').map(s => s.containerName).sort(), ['Motor', 'Sensor', 'Third']);
+});

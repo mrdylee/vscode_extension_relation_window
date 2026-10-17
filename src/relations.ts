@@ -145,13 +145,18 @@ export class RelationIndex {
     const here = this.byName.inFile(ref.name, ref.location.uri).filter(s => !s.memberOf && s.kind !== 'type');
     const locals = here.filter(s => s.scope && s.scope.start <= ref.location.start && s.scope.end > ref.location.start && s.location.start <= ref.location.start);
     let localTargets: SymbolRecord[] = [], externDeclarations: SymbolRecord[] = [];
-    if (locals.length) {
-      const width = Math.min(...locals.map(s => s.scope!.end - s.scope!.start));
+    const widths = [...new Set(locals.map(s => s.scope!.end - s.scope!.start))].sort((a, b) => a - b);
+    for (const width of widths) {
       const nearest = locals.filter(s => s.scope!.end - s.scope!.start === width);
-      externDeclarations = nearest.filter(s => s.storage === 'global' && !s.definition);
-      if (!externDeclarations.length) return nearest;
-      // Block extern declarations hide outer locals but refer to linked definitions.
-      localTargets = nearest.filter(s => !externDeclarations.includes(s));
+      const externs = nearest.filter(s => s.storage === 'global' && !s.definition);
+      externDeclarations.push(...externs);
+      localTargets.push(...nearest.filter(s => !externs.includes(s)));
+      // Conditional shadows may be absent, so keep searching enclosing scopes.
+      if (nearest.some(s => s.conditions.length === 0)) {
+        if (!externDeclarations.length) return localTargets;
+        // Block extern declarations also need the linked file/global candidates.
+        break;
+      }
     }
     const statics = here.filter(s => s.storage === 'static' && s.definition);
     // A conditional definition may be absent; retain lower-priority candidates.

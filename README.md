@@ -93,6 +93,8 @@ Settings 화면에서는 `@id:cRelation.include` 또는 `@id:cRelation.exclude`�
 
 ### 새 버전 배포하기
 
+게시 전 순서는 **수정 → 테스트 → review-work → 지적 사항 수정·재검증 → 푸시·릴리스**입니다. 테스트 통과만으로 검토를 생략하지 않습니다. 검토 범위·발견 사항·해결 여부를 기록한 뒤 게시합니다.
+
 1. `package.json`, `package-lock.json`의 버전 및 `package` 스크립트의 VSIX 이름을 함께 올리고 CHANGELOG를 작성합니다.
 2. `docs/releases/<버전>.md`에 변경 사항과 설치 안내를 작성합니다.
 3. 변경을 커밋·푸시한 뒤 `v0.1.10` 같은 버전 태그를 푸시합니다. 태그와 패키지 버전이 일치해야 합니다.

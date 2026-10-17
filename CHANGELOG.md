@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.27 — 2026-10-17
+
+- Resolve a locally introduced struct/union tag when its definition follows the pointer declaration in the same block. Preserve already visible outer types and reject unrelated enclosing-block completions.
+- Retain outer variable and function candidates when a conditional local declaration may be absent, including nested scopes and block extern declarations.
+- Add member and ordinary-name regressions plus VS Code integration checks for both review findings. Require review-work, fixes and revalidation before publication.
+
 ## 0.1.26 — 2026-10-17
 
 - Bind named struct/union member uses through declared receiver types, separating same-named fields and ordinary variables.

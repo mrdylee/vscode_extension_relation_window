@@ -386,3 +386,20 @@ test('incremental replacement, rename, delete and reinsert match a fresh index',
   value.update(parse('', 'file:///demo/a.c')); equivalent();
   value.clear(); assert.equal(value.symbols().length, 0); assert.equal(value.files.size, 0);
 });
+
+test('conditional local callback retains the direct global callee candidate', () => {
+  const source = 'void target(void){} void run(void){\n#if BOARD\nvoid (*target)(void);\n#endif\ntarget();}';
+  const value = index({ 'a.c': source });
+  const run = value.symbols().find(s => s.name === 'run')!;
+  const groups = value.relations(run.id, 'callees');
+  assert.deepEqual(groups.map(g => g.callKind).sort(), ['direct', 'indirect']);
+  assert.ok(groups.every(g => g.sites[0].ambiguous));
+});
+test('conditional block extern retains both linked global and outer local uses', () => {
+  const source = 'void run(int state){{\n#if BOARD\nextern int state;\n#endif\nstate=1;}}';
+  const value = index({ 'a.c': source, 'b.c': 'int state;' });
+  const candidates = value.resolveAt('file:///demo/a.c', source.indexOf('state=1'));
+  assert.equal(candidates.length, 2);
+  assert.deepEqual(candidates.map(s => s.storage).sort(), ['global', 'local']);
+  for (const candidate of candidates) assert.equal(value.relations(candidate.id, 'references')[0].sites[0].access, 'write');
+});
