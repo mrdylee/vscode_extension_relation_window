@@ -178,7 +178,8 @@ function render(state: ViewState) {
   const depth = el('select'); depth.setAttribute('aria-label', '표시 단계');
   for (let n = 1; n <= 8; n++) { const option = el('option', '', `${n}단계`); option.value = String(n); depth.append(option); }
   depth.value = String(state.depth); depth.onchange = () => send('depth', { value: Number(depth.value) });
-  const lock = button(state.locked ? '고정 해제' : '고정', () => send('lock')); lock.setAttribute('aria-pressed', String(state.locked));
+  const lock = button(state.locked ? '고정됨 · 추적 중지' : '자동 추적 중', () => send('lock')); lock.setAttribute('aria-pressed', String(state.locked));
+  lock.title = state.locked ? '클릭하면 고정을 해제하고 선택한 코드의 관계를 자동으로 추적합니다.' : '클릭하면 현재 Relation을 고정하고 자동 추적을 멈춥니다.';
   const skipLabel = el('label', 'skip'); const skip = el('input'); skip.type = 'checkbox'; skip.checked = state.skipInactive;
   skip.onchange = () => send('skip', { value: skip.checked }); skipLabel.append(skip, document.createTextNode('#if 0 제외'));
   toolbar.append(brand, mode, depth, lock, skipLabel, button('새로 분석', () => send('refresh')));

@@ -119,8 +119,11 @@ try {
   await page.keyboard.press('Space');
   await popup.waitFor({ state: 'visible', timeout: 500 });
   await page.keyboard.press('Escape');
-  await page.getByRole('button', { name: '고정', exact: true }).click();
-  assert.equal(await page.getByRole('button', { name: '고정 해제', exact: true }).getAttribute('aria-pressed'), 'true');
+  await page.getByRole('button', { name: '자동 추적 중', exact: true }).click();
+  const pinned = page.getByRole('button', { name: '고정됨 · 추적 중지', exact: true });
+  assert.equal(await pinned.getAttribute('aria-pressed'), 'true');
+  await pinned.click();
+  assert.equal(await page.getByRole('button', { name: '자동 추적 중', exact: true }).getAttribute('aria-pressed'), 'false');
   const divider = page.getByRole('separator');
   await divider.focus();
   await page.keyboard.press('ArrowLeft');
