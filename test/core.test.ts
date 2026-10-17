@@ -1,0 +1,251 @@
+import { test, before } from 'node:test';
+import assert from 'node:assert/strict';
+import path from 'node:path';
+import { createAnalyzer } from '../src/analyzer';
+import { RelationIndex } from '../src/relations';
+
+let analyzer: Awaited<ReturnType<typeof createAnalyzer>>;
+before(async () => { analyzer = await createAnalyzer(path.resolve('node_modules/web-tree-sitter/web-tree-sitter.wasm'), path.resolve('node_modules/tree-sitter-c/tree-sitter-c.wasm')); });
+const parse = (text: string, uri = 'file:///demo/a.c', skip = true) => analyzer.analyze(uri, text, skip);
+function index(files: Record<string, string>) {
+  const value = new RelationIndex();
+  for (const [file, text] of Object.entries(files)) value.update(parse(text, `file:///demo/${file}`));
+  return value;
+}
+test('extracts repeated actual calls and exact Unicode locations, excluding comment/string/declaration', () => {
+  const file = parse('void fault(int);\nvoid task(void) { /* 한글 😀 */ fault(1);\n fault(2); /* fault(3); */ const char *s="fault(4)"; }');
+  assert.equal(file.symbols.find(s => s.name === 'task')?.kind, 'function');
+  const calls = file.references.filter(r => r.kind === 'call');
+  assert.deepEqual(calls.map(r => [r.name, r.location.line]), [['fault', 1], ['fault', 2]]);
+  assert.equal(calls[0].location.start, file.text.indexOf('fault(1)'));
+});
+test('filters inactive definitions and nested calls, keeps elif and unknown conditions', () => {
+  const source = '#if 0\nvoid old(void) {}\n#endif\nvoid task(void) {\n#if 0\n#if 1\nold();\n#endif\n#elif 1\ncurrent();\n#else\nother();\n#endif\n#if BOARD\na();\n#else\nb();\n#endif\n}';
+  const file = parse(source);
+  assert.equal(file.symbols.some(s => s.name === 'old'), false);
+  assert.deepEqual(file.references.filter(r => r.kind === 'call').map(r => r.name), ['current', 'a', 'b']);
+  assert.ok(file.references.find(r => r.name === 'a')!.conditions.length);
+  assert.ok(parse(source, 'file:///demo/a.c', false).symbols.some(s => s.name === 'old'));
+});
+test('file-local static calls never join same-named static functions in another file', () => {
+  const value = index({ 'a.c': 'static void helper(void){}\nvoid a(void){helper();}', 'b.c': 'static void helper(void){}\nvoid b(void){helper();}' });
+  const a = value.symbols().find(s => s.name === 'helper' && s.location.uri.endsWith('a.c'))!;
+  assert.ok(a);
+  assert.deepEqual(value.relations(a.id, 'callers').map(g => g.name), ['a']);
+});
+test('references include declarations and variable tables but callers exclude both', () => {
+  const value = index({ 'a.c': 'void fault(void){}\nvoid task(void){fault(); fault();}', 'a.h': 'void fault(void);\nvoid (*handlers[])(void) = { fault };' });
+  const fault = value.symbols().find(s => s.name === 'fault' && s.definition)!;
+  assert.ok(fault);
+  const refs = value.relations(fault.id, 'references');
+  assert.ok(refs.some(g => g.name === 'handlers' && g.kind === 'variable'));
+  assert.ok(refs.some(g => g.sites.some(s => s.kind === 'declaration')));
+  const callers = value.relations(fault.id, 'callers');
+  assert.deepEqual(callers.map(g => g.name), ['task']);
+  assert.equal(callers[0].sites.length, 2);
+});
+test('parameter and local pointer shadowing are not calls to a same-named global function', () => {
+  const value = index({ 'a.c': 'void fault(void){}\nvoid task(void (*fault)(void)){fault();}\nvoid other(void){void (*fault)(void)=0; fault();}' });
+  const fault = value.symbols().find(s => s.name === 'fault' && s.kind === 'function' && s.definition)!;
+  assert.ok(fault);
+  assert.equal(value.relations(fault.id, 'callers').length, 0);
+});
+test('ambiguous external definitions remain labelled candidates', () => {
+  const value = index({ 'a.c': 'void fault(void){}', 'b.c': 'void fault(void){}', 'use.c': 'void task(void){fault();}' });
+  assert.equal(value.resolveAt('file:///demo/use.c', 17).length, 2);
+  const fault = value.symbols().find(s => s.name === 'fault')!;
+  assert.equal(value.relations(fault.id, 'callers')[0].sites[0].ambiguous, true);
+});
+test('depth, selected-node expansion, and recursion produce finite graphs', () => {
+  const value = index({ 'a.c': 'void c(void){}\nvoid b(void){c();}\nvoid a(void){b(); a();}' });
+  const c = value.symbols().find(s => s.name === 'c')!;
+  assert.ok(c);
+  const one = value.graph(c.id, 'callers', 1)!;
+  assert.equal(one.root.children[0].name, 'b');
+  assert.equal(one.root.children[0].children.length, 0);
+  const two = value.graph(c.id, 'callers', 1, { [one.root.children[0].key]: 1 })!;
+  assert.equal(two.root.children[0].children[0].name, 'a');
+  const a = value.symbols().find(s => s.name === 'a')!;
+  assert.ok(value.graph(a.id, 'callers', 5)!.root.children.some(n => n.cycle));
+});
+test('editing and removing files invalidates old relationships', () => {
+  const value = index({ 'a.c': 'void fault(void){}', 'b.c': 'void task(void){fault();}' });
+  const id = value.symbols().find(s => s.name === 'fault')?.id;
+  assert.ok(id);
+  assert.equal(value.relations(id, 'callers').length, 1);
+  value.update(parse('void task(void){}', 'file:///demo/b.c'));
+  assert.equal(value.relations(id, 'callers').length, 0);
+  value.remove('file:///demo/a.c');
+  assert.equal(value.symbols().length, 1);
+});
+test('macro uses and compiler declaration attributes are not invented direct function calls', () => {
+  const value = index({ 'a.c': '#define CHECK(x) fault(x)\nvoid fault(int x){}\nvoid irq(void) __interrupt(1) { CHECK(1); fault(2); }' });
+  const file = value.files.get('file:///demo/a.c')!;
+  assert.equal(file.references.some(r => r.name === '__interrupt' && r.kind === 'call'), false);
+  const macro = value.symbols().find(s => s.name === 'CHECK')!;
+  assert.equal(macro.kind, 'macro');
+  const fault = value.symbols().find(s => s.name === 'fault')!;
+  assert.equal(value.relations(fault.id, 'callers')[0].sites.length, 1);
+});
+
+test('local initializer calls belong to the enclosing function and preserve caller depth', () => {
+  const value = index({ 'a.c': 'int target(void){return 1;} void task(void){int result=target(); int (*handler)(void)=target;} void entry(void){task();}' });
+  const target = value.symbols().find(s => s.name === 'target' && s.definition)!;
+  assert.deepEqual(value.relations(target.id, 'callers').map(g => [g.name, g.kind]), [['task', 'function']]);
+  assert.equal(value.graph(target.id, 'callers', 2)!.root.children[0].children[0].name, 'entry');
+  assert.ok(value.relations(target.id, 'references').some(g => g.name === 'handler' && g.kind === 'variable'));
+});
+
+test('prototype parameters do not shadow functions outside their parameter list', () => {
+  for (const declarations of [
+    'void register_cb(void (*target)(void));',
+    'void register_cb(void (*callback)(int target));',
+    'void register_cb(void (*callback)(int target)){}',
+  ]) {
+    const value = index({ 'impl.c': 'void target(void){}', 'use.c': `void target(void); ${declarations} void task(void){target();}` });
+    const target = value.symbols().find(s => s.name === 'target' && s.kind === 'function' && s.definition)!;
+    assert.deepEqual(value.relations(target.id, 'callers').map(g => g.name), ['task']);
+  }
+  const value = index({ 'a.c': 'void target(void){} void task(void){void register_cb(int target); target();}' });
+  const target = value.symbols().find(s => s.name === 'target' && s.kind === 'function' && s.definition)!;
+  assert.deepEqual(value.relations(target.id, 'callers').map(g => g.name), ['task']);
+});
+
+test('for initializer names stop shadowing after the loop, including unbraced bodies', () => {
+  for (const body of ['{target();}', 'target();']) {
+    const source = `void target(void){} void task(void){for(void (*target)(void)=0;target;)${body} target();}`;
+    const value = index({ 'a.c': source });
+    const target = value.symbols().find(s => s.name === 'target' && s.kind === 'function')!;
+    const callers = value.relations(target.id, 'callers');
+    assert.equal(callers.length, 1);
+    assert.equal(callers[0].sites.length, 1);
+    assert.equal(callers[0].sites[0].location.start, source.lastIndexOf('target();'));
+  }
+});
+
+test('unknown conditional static retains external definition or declaration candidates', () => {
+  for (const implementation of [true, false]) {
+    const source = '#if BOARD\nstatic void target(void){}\n#else\nvoid target(void);\n#endif\nvoid task(void){target();}';
+    const files: Record<string, string> = { 'use.c': source, 'unrelated.c': 'static void target(void){}' };
+    if (implementation) files['impl.c'] = 'void target(void){}';
+    const value = index(files);
+    const targets = value.resolveAt('file:///demo/use.c', source.lastIndexOf('target();'));
+    assert.equal(targets.length, 2);
+    assert.ok(targets.some(s => s.storage === 'static' && s.location.uri.endsWith('/use.c')));
+    const external = targets.find(s => s.storage === 'global')!;
+    assert.ok(external);
+    assert.equal(external.definition, implementation);
+    const caller = value.relations(external.id, 'callers')[0];
+    assert.equal(caller.name, 'task');
+    assert.equal(caller.sites[0].ambiguous, true);
+  }
+});
+
+test('known conditional static still shadows external definitions', () => {
+  for (const condition of ['0', '1']) {
+    const source = `#if ${condition}\nstatic void target(void){}\n#else\nvoid target(void);\n#endif\nvoid task(void){target();}`;
+    const value = index({ 'use.c': source, 'impl.c': 'void target(void){}' });
+    const targets = value.resolveAt('file:///demo/use.c', source.lastIndexOf('target();'));
+    assert.equal(targets.length, 1);
+    assert.equal(targets[0].storage, condition === '1' ? 'static' : 'global');
+  }
+});
+
+test('prototype with a trailing attribute macro resolves to its function definition', () => {
+  const source = 'static void unlock(int target) PRIVILEGED_FUNCTION;\nstatic void unlock(int target){}\nvoid task(void){unlock(1);}';
+  const value = index({ 'a.c': source });
+  const targets = value.resolveAt('file:///demo/a.c', source.indexOf('unlock') + 2);
+  assert.equal(targets.length, 1);
+  assert.equal(targets[0].name, 'unlock');
+  assert.equal(targets[0].definition, true);
+  assert.deepEqual(value.relations(targets[0].id, 'callers').map(g => g.name), ['task']);
+  assert.ok(value.relations(targets[0].id, 'references').some(g => g.sites.some(s => s.kind === 'declaration')));
+  assert.equal(value.symbols().some(s => s.name === 'PRIVILEGED_FUNCTION'), false);
+  assert.ok(value.symbols().filter(s => s.name === 'target').every(s => s.scope));
+});
+
+test('variable accesses distinguish direct reads, writes, updates, addresses and explicit initialization', () => {
+  const source = 'int state=0; void task(void){ int copy=state; state=copy; (state)+=2; ++state; (state)--; use(&(state)); use(state); sizeof(state); }';
+  const value = index({ 'a.c': source });
+  const state = value.symbols().find(s => s.name === 'state')!;
+  const sites = value.relations(state.id, 'references').flatMap(g => g.sites).sort((a,b) => a.location.start-b.location.start);
+  assert.deepEqual(sites.map(s => s.access), ['write', 'read', 'write', 'readwrite', 'readwrite', 'readwrite', 'address', 'read']);
+  assert.equal(value.relations(state.id, 'references').find(g => g.name === 'task')!.sites.length, 7);
+  const copy = value.symbols().find(s => s.name === 'copy')!;
+  assert.deepEqual(value.relations(copy.id, 'references')[0].sites.map(s => s.access), ['write', 'read']);
+});
+
+test('variable filters include readwrite and continue through the using function callers', () => {
+  const value = index({ 'a.c': 'int state; void reader(void){use(state);} void writer(void){state=1;} void updater(void){state++;} void escape(void){use(&state);} void entry(void){writer();}' });
+  const state = value.symbols().find(s => s.name === 'state')!;
+  assert.deepEqual(value.relations(state.id, 'callers', 'read').map(g => g.name), ['reader', 'updater']);
+  assert.deepEqual(value.relations(state.id, 'callers', 'write').map(g => g.name), ['updater', 'writer']);
+  assert.deepEqual(value.relations(state.id, 'references', 'readwrite').map(g => g.name), ['updater']);
+  assert.deepEqual(value.relations(state.id, 'references', 'address').map(g => g.name), ['escape']);
+  const graph = value.graph(state.id, 'callers', 2, {}, 'write')!;
+  assert.equal(graph.root.children.find(n => n.name === 'writer')!.children[0].name, 'entry');
+  assert.equal(graph.root.children.find(n => n.name === 'writer')!.children[0].sites[0].access, undefined);
+});
+
+test('extern variables resolve to definitions without hiding cross-file uses', () => {
+  const use = 'extern int state; void task(void){state=2;}';
+  const value = index({ 'a.c': 'int state;', 'use.c': use });
+  const state = value.symbols().find(s => s.name === 'state' && s.definition)!;
+  assert.deepEqual(value.resolveAt('file:///demo/use.c', use.indexOf('state')).map(s => s.id), [state.id]);
+  assert.deepEqual(value.relations(state.id, 'references').map(g => g.name), ['task']);
+  const external = index({ 'use.c': use });
+  const declaration = external.symbols().find(s => s.name === 'state')!;
+  assert.equal(declaration.definition, false);
+  assert.equal(external.relations(declaration.id, 'references')[0].sites[0].access, 'write');
+});
+
+test('variable scope, pointer reads, inactive writes and unevaluated operands remain distinct', () => {
+  const source = 'int state; void task(int *p){ *p=1; use(&*p); sizeof(*p); int state=1; state++; } void outer(void){state=3;\n#if 0\nstate=4;\n#endif\n}';
+  const value = index({ 'a.c': source });
+  const state = value.symbols().find(s => s.name === 'state' && !s.scope)!;
+  assert.deepEqual(value.relations(state.id, 'references').map(g => [g.name,g.sites.length]), [['outer',1]]);
+  const local = value.symbols().find(s => s.name === 'state' && s.scope)!;
+  assert.deepEqual(value.relations(local.id, 'references')[0].sites.map(s => s.access), ['write','readwrite']);
+  const p = value.symbols().find(s => s.name === 'p')!;
+  assert.deepEqual(value.relations(p.id, 'references')[0].sites.map(s => s.access), ['read','read']);
+});
+
+test('block extern shadows an outer parameter and links to the external definition', () => {
+  for (const definition of [true, false]) {
+    const source = 'void task(int state){state=0; {extern int state; state=1;} state=2;}';
+    const value = index({ 'use.c': source, ...(definition ? { 'state.c': 'int state;' } : {}) });
+    const local = value.symbols().find(s => s.name === 'state' && s.storage === 'local')!;
+    const external = value.symbols().find(s => s.name === 'state' && (definition ? s.definition && s.storage === 'global' : !s.definition))!;
+    const positions = (id: string) => value.relations(id, 'references', 'write').flatMap(g => g.sites.map(s => s.location.start));
+    assert.deepEqual(positions(local.id), [source.indexOf('state=0'), source.indexOf('state=2')]);
+    assert.deepEqual(positions(external.id), [source.indexOf('state=1')]);
+    for (const position of [source.indexOf('state;'), source.indexOf('state=1')])
+      assert.deepEqual(value.resolveAt('file:///demo/use.c', position).map(s => s.id), [external.id]);
+    const block = value.symbols().find(s => s.name === 'state' && !s.definition)!;
+    assert.ok(block.scope, 'extern retains lexical scope');
+  }
+});
+
+test('block extern function calls bypass a shadowed parameter', () => {
+  const source = 'void task(int target){ {extern void target(void); target();} }';
+  const value = index({ 'use.c': source, 'target.c': 'void target(void){}' });
+  const target = value.symbols().find(s => s.name === 'target' && s.kind === 'function' && s.definition)!;
+  assert.deepEqual(value.relations(target.id, 'callers').map(g => g.name), ['task']);
+  const parameter = value.symbols().find(s => s.name === 'target' && s.kind === 'variable')!;
+  assert.deepEqual(value.relations(parameter.id, 'references'), []);
+});
+
+test('conditional initialization writes bind only to their own definition', () => {
+  for (const storage of ['static ', '']) {
+    const source = `#if BOARD\n${storage}int state=1;\n#else\n${storage}int state=2;\n#endif\nvoid task(void){state++;}`;
+    const value = index({ 'a.c': source });
+    const targets = value.symbols().filter(s => s.name === 'state');
+    assert.equal(targets.length, 2);
+    for (const target of targets) {
+      const writes = value.relations(target.id, 'references', 'write').flatMap(g => g.sites);
+      assert.deepEqual(writes.filter(s => s.access === 'write').map(s => s.location.start), [target.location.start]);
+      assert.deepEqual(writes.find(s => s.access === 'write')!.candidates, [target.id]);
+      assert.equal(writes.find(s => s.access === 'readwrite')!.ambiguous, true, 'ordinary conditional uses retain both candidates');
+    }
+  }
+});

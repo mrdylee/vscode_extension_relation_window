@@ -1,0 +1,51 @@
+{
+  "results": [
+    {
+      "name": "#if 0 excludes its body and keeps else",
+      "body": "#if 0\nold();\n#else\ncurrent();\n#endif",
+      "expected": [
+        "current()"
+      ],
+      "actual": [
+        "current()"
+      ],
+      "passed": true
+    },
+    {
+      "name": "outer #if 0 excludes nested active branch",
+      "body": "#if 0\n#if 1\nnested();\n#endif\n#else\ncurrent();\n#endif",
+      "expected": [
+        "current()"
+      ],
+      "actual": [
+        "current()"
+      ],
+      "passed": true
+    },
+    {
+      "name": "#elif 1 selected after #if 0, trailing else excluded",
+      "body": "#if 0\nold();\n#elif 1\ncurrent();\n#else\nother();\n#endif",
+      "expected": [
+        "current()"
+      ],
+      "actual": [
+        "current()"
+      ],
+      "passed": true
+    },
+    {
+      "name": "unknown condition retains both possible branches, including known inner filtering",
+      "body": "#if FEATURE\n#if 0\nold();\n#else\nfeature();\n#endif\n#else\nfallback();\n#endif",
+      "expected": [
+        "feature()",
+        "fallback()"
+      ],
+      "actual": [
+        "feature()",
+        "fallback()"
+      ],
+      "passed": true
+    }
+  ],
+  "limitations": "Literal 0/1 only; no full preprocessor, macro expansion, or product integration."
+}

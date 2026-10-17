@@ -1,0 +1,79 @@
+{
+  "environment": {
+    "node": "v25.9.0",
+    "platform": "darwin",
+    "arch": "arm64"
+  },
+  "packages": {
+    "web-tree-sitter": "0.27.1",
+    "tree-sitter-c": "0.24.1"
+  },
+  "results": [
+    {
+      "name": "direct calls retain both source locations; declaration/comment/string/address are not calls",
+      "passed": true
+    },
+    {
+      "name": "same-named static definitions retain separate file identities, without resolving references",
+      "passed": true
+    },
+    {
+      "name": "both preprocessor branches remain visible without build flags",
+      "passed": true
+    },
+    {
+      "name": "function-pointer calls are syntax calls; a separate resolver is required",
+      "passed": true
+    },
+    {
+      "name": "macro invocation is parsed but its body is not expanded into a function call",
+      "passed": true
+    },
+    {
+      "name": "function-pointer table and initializer are identifiable as declaration syntax",
+      "passed": true
+    },
+    {
+      "name": "Korean and emoji before a multiline call preserve JavaScript text offsets",
+      "passed": true
+    },
+    {
+      "name": "local variable shadowing is retained in syntax; name-only matching would be unsafe",
+      "passed": true
+    }
+  ],
+  "observations": [
+    {
+      "source": "__interrupt void irq(void) { fault(); }",
+      "hasError": true,
+      "calls": [
+        "fault()"
+      ],
+      "errorNodes": [
+        "void"
+      ]
+    },
+    {
+      "source": "void irq(void) __interrupt(1) { fault(); }",
+      "hasError": false,
+      "calls": [
+        "__interrupt(1)",
+        "fault()"
+      ],
+      "errorNodes": []
+    },
+    {
+      "source": "void task(void) { fault(",
+      "hasError": true,
+      "calls": [],
+      "errorNodes": [
+        "void task(void) { fault("
+      ]
+    }
+  ],
+  "limitations": [
+    "Syntax extraction only; no project-wide resolver was implemented.",
+    "No VS Code extension or UI was executed.",
+    "No real project performance or cross-platform validation."
+  ]
+}

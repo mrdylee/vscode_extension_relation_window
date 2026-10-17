@@ -1,0 +1,9 @@
+node_modules/
+dist/
+artifacts/
+.vscode-test/
+test-results/
+output/
+*.vsix
+.DS_Store
+test-sources/

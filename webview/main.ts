@@ -1,0 +1,240 @@
+import type { Access, GraphNode, Kind } from '../src/model';
+import type { ViewState } from '../src/view-state';
+import { highlightC } from '../src/syntax';
+declare const __EXTENSION_VERSION__: string;
+declare function acquireVsCodeApi(): { postMessage(message: unknown): void };
+const api = acquireVsCodeApi();
+const send = (type: string, rest = {}) => api.postMessage({ type, ...rest });
+const app = document.getElementById('app')!;
+function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text = '') {
+  const node = document.createElement(tag); node.className = className; node.textContent = text; return node;
+}
+function button(text: string, action: () => void, title = text) {
+  const node = el('button', '', text); node.type = 'button'; node.title = title; node.onclick = action; return node;
+}
+const toolbar = el('header', 'toolbar');
+const panes = el('main', 'panes');
+const context = el('section', 'context pane');
+const relation = el('section', 'relation pane');
+const graph = el('div', 'graph');
+const graphHeader = el('div', 'pane-heading');
+const candidates = el('div', 'candidates');
+const footer = el('footer');
+const divider = el('div', 'divider'); divider.tabIndex = 0;
+divider.setAttribute('role', 'separator'); divider.setAttribute('aria-label', 'Context 영역 너비'); divider.setAttribute('aria-orientation', 'vertical');
+let split = 42;
+function resize(value: number) { split = Math.max(20, Math.min(75, value)); panes.style.setProperty('--split', `${split}%`); divider.setAttribute('aria-valuenow', String(Math.round(split))); }
+resize(split);
+divider.onpointerdown = event => { divider.setPointerCapture(event.pointerId); };
+divider.onpointermove = event => { if (divider.hasPointerCapture(event.pointerId)) resize((event.clientX - panes.getBoundingClientRect().left) / panes.clientWidth * 100); };
+divider.onpointerup = event => divider.releasePointerCapture(event.pointerId);
+divider.onkeydown = event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); resize(split + (event.key === 'ArrowLeft' ? -3 : 3)); } };
+relation.append(graphHeader, candidates, graph);
+panes.append(context, divider, relation); app.append(toolbar, panes, footer);
+let signature: string | undefined = '', previewSignature: string | undefined = '';
+let rootKey: string | undefined;
+const icons: Record<Kind, string> = { function: 'ƒ', variable: 'v', type: 'T', macro: '#', unknown: '?' };
+const kindNames: Record<Kind, string> = { function: '함수', variable: '변수', type: '타입', macro: '매크로', unknown: '미확인' };
+const accessNames: Record<Access, string> = { read: 'R · 읽기', write: 'W · 쓰기', readwrite: 'RW · 읽기/쓰기', address: '& · 주소 전달' };
+function accessBadge(access: Access, compact = false) {
+  const badge = el('span', 'access-badge', compact ? accessNames[access].split(' · ')[0] : accessNames[access]);
+  badge.dataset.access = access;
+  return badge;
+}
+function icon(kind: Kind) { const i = el('span', 'symbol-icon', icons[kind]); i.dataset.kind = kind; i.setAttribute('aria-hidden', 'true'); return i; }
+function filename(uri: string) { return decodeURIComponent(uri.split('/').pop() ?? uri); }
+const popup = el('div', 'node-details'); popup.hidden = true;
+popup.setAttribute('role', 'dialog'); popup.setAttribute('aria-label', '심볼 상세 정보'); popup.id = 'symbol-details';
+app.append(popup);
+let popupAnchor: HTMLButtonElement | undefined;
+let popupKey: string | undefined;
+let closeTimer: ReturnType<typeof setTimeout> | undefined;
+let hoverTimer: ReturnType<typeof setTimeout> | undefined;
+let restoringFocus = false;
+function hideDetails(restoreFocus = false) {
+  clearTimeout(hoverTimer); clearTimeout(closeTimer); popup.hidden = true; popupKey = undefined;
+  popupAnchor?.setAttribute('aria-expanded', 'false');
+  if (restoreFocus && popupAnchor?.isConnected) { restoringFocus = true; popupAnchor.focus(); restoringFocus = false; }
+}
+function scheduleClose() {
+  clearTimeout(hoverTimer); clearTimeout(closeTimer);
+  closeTimer = setTimeout(() => { if (!popup.contains(document.activeElement)) hideDetails(); }, 180);
+}
+function scheduleHover(node: GraphNode, anchor: HTMLButtonElement) {
+  clearTimeout(hoverTimer); clearTimeout(closeTimer);
+  if (popupKey === node.key && !popup.hidden) return;
+  hideDetails();
+  hoverTimer = setTimeout(() => {
+    if (anchor.isConnected && anchor.matches(':hover')) showDetails(node, anchor);
+  }, 1000);
+}
+function condition(text: string) {
+  const line = el('div', 'condition');
+  highlightC(text).forEach((tokens, index) => {
+    if (index) line.append(document.createTextNode('\n'));
+    for (const token of tokens) line.append(el('span', `syntax-${token.kind}`, token.text));
+  });
+  return line;
+}
+popup.onmouseenter = () => clearTimeout(closeTimer);
+popup.onmouseleave = scheduleClose;
+popup.addEventListener('focusout', event => { if (!popup.contains(event.relatedTarget as Node) && event.relatedTarget !== popupAnchor) hideDetails(); });
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && !popup.hidden) { event.preventDefault(); hideDetails(true); }
+});
+document.addEventListener('pointerdown', event => {
+  if (!popup.contains(event.target as Node) && !popupAnchor?.contains(event.target as Node)) hideDetails();
+});
+graph.addEventListener('scroll', () => hideDetails());
+window.addEventListener('resize', () => hideDetails());
+window.addEventListener('blur', () => hideDetails());
+function showDetails(node: GraphNode, anchor: HTMLButtonElement) {
+  if (restoringFocus) return;
+  clearTimeout(closeTimer);
+  if (popupKey === node.key && !popup.hidden) return;
+  hideDetails(); popupAnchor = anchor; popupKey = node.key;
+  anchor.setAttribute('aria-expanded', 'true');
+  popup.replaceChildren(el('strong', `detail-name syntax-${node.kind}`, node.symbolId ? node.name : node.sites[0]?.name ?? node.name));
+  const meta = el('div', 'detail-meta');
+  meta.append(el('span', `detail-kind syntax-${node.kind}`, kindNames[node.kind]), document.createTextNode(' · '),
+    el('span', 'detail-path', decodeURIComponent(node.location.uri)), el('span', 'detail-location', `:${node.location.line + 1}`));
+  popup.append(meta);
+  if (node.cycle) popup.append(el('div', 'condition detail-warning', '재귀: 이 경로의 추가 확장을 중단했습니다.'));
+  if (node.ambiguous) popup.append(el('div', 'condition detail-warning', '후보: 조건 또는 여러 정의로 대상을 확정하지 않았습니다.'));
+  if (node.conditions.length) popup.append(condition(node.conditions.join(' · ')));
+  if (node.sites.length) popup.append(el('strong', 'detail-label', `${node.sites[0].access ? '변수 사용' : '호출·참조'} 위치 ${node.sites.length}개`));
+  if (node.sites.some(site => site.access === 'address')) popup.append(el('div', 'condition', '주소를 사용한 위치입니다. 전달받은 함수에서 값을 변경하는지는 추적하지 않습니다.'));
+  for (const site of node.sites) {
+    const b = button('', () => send('preview', { id: site.id }));
+    const kind = el('span', 'site-kind', site.kind === 'call' ? '호출' : site.kind === 'declaration' ? '선언' : '참조'); kind.dataset.kind = site.kind;
+    b.append(site.access ? accessBadge(site.access) : kind, el('span', 'detail-path', filename(site.location.uri)),
+      el('span', 'detail-location', `:${site.location.line + 1}:${site.location.column + 1}`));
+    b.className = 'site'; b.dataset.site = site.id;
+    b.title = [site.location.uri, ...site.conditions].join('\n');
+    if (site.conditions.length) b.append(el('span', 'badge', '조건부'));
+    b.ondblclick = () => send('open', { id: site.id });
+    b.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); send('open', { id: site.id }); } };
+    popup.append(b);
+  }
+  if (node.symbolId && !node.cycle) {
+    const actions = el('div', 'node-actions');
+    actions.append(button(node.expanded ? '− 접기' : '+ 펼치기', () => send(node.expanded ? 'collapse' : 'expand', { key: node.key })),
+      button('단계…', () => send('expandSpecial', { key: node.key }), '선택한 노드에서 펼칠 단계 (Shift+→)'));
+    popup.append(actions);
+  }
+  popup.hidden = false;
+  const rect = anchor.getBoundingClientRect(), width = popup.offsetWidth, height = popup.offsetHeight;
+  let left = rect.right + 6;
+  if (left + width > innerWidth - 8) left = rect.left - width - 6;
+  popup.style.left = `${Math.max(8, Math.min(innerWidth - width - 8, left))}px`;
+  popup.style.top = `${Math.max(8, Math.min(innerHeight - height - 8, rect.top))}px`;
+}
+function drawNode(node: GraphNode): HTMLElement {
+  const branch = el('div', 'branch');
+  const card = el('article', 'node'); card.dataset.nodeName = node.name;
+  const openId = node.sites[0]?.access ? node.sites[0].id : node.symbolId ?? node.sites[0]?.id;
+  const title = button('', () => send('preview', { id: openId }), '');
+  title.className = 'node-title'; title.dataset.key = node.key;
+  title.dataset.preview = openId;
+  title.append(icon(node.kind), el('span', 'symbol-name', node.symbolId ? node.name : node.sites[0]?.name ?? node.name));
+  const accesses = [...new Set(node.sites.flatMap(site => site.access ? [site.access] : []))];
+  for (const access of accesses) title.append(accessBadge(access, true));
+  const status = [node.cycle ? '재귀' : '', node.ambiguous ? '후보' : '', node.conditions.length || node.sites.some(s => s.conditions.length) ? '조건부' : ''].filter(Boolean).join(', ');
+  if (status) title.classList.add('uncertain');
+  title.setAttribute('aria-label', [kindNames[node.kind] + ' ' + node.name, ...accesses.map(a => accessNames[a]), status].filter(Boolean).join(', '));
+  title.setAttribute('aria-haspopup', 'dialog'); title.setAttribute('aria-controls', popup.id); title.setAttribute('aria-expanded', 'false');
+  title.onmouseenter = () => scheduleHover(node, title);
+  title.onmousemove = () => scheduleHover(node, title);
+  title.onmouseleave = scheduleClose;
+  title.onfocus = () => { if (title.matches(':focus-visible')) showDetails(node, title); };
+  title.onblur = event => { if (!popup.contains(event.relatedTarget as Node)) hideDetails(); };
+  title.ondblclick = () => send('open', { id: openId });
+  title.onkeydown = event => {
+    if (event.key === ' ') { event.preventDefault(); showDetails(node, title); }
+    if (event.key === 'Tab' && !event.shiftKey && !popup.hidden && popupKey === node.key) {
+      const first = popup.querySelector<HTMLButtonElement>('button');
+      if (first) { event.preventDefault(); first.focus(); }
+    }
+    if (event.key === 'ArrowRight') { event.preventDefault(); send(event.shiftKey ? 'expandSpecial' : 'expand', { key: node.key }); }
+    if (event.key === 'ArrowLeft') { event.preventDefault(); send('collapse', { key: node.key }); }
+    if (event.key === 'Enter') { event.preventDefault(); send('open', { id: openId }); }
+  };
+  card.append(title);
+  branch.append(card);
+  if (node.children.length) { const children = el('div', 'children'); node.children.forEach(n => children.append(drawNode(n))); branch.append(children); }
+  return branch;
+}
+function render(state: ViewState) {
+  toolbar.replaceChildren();
+  const brand = el('strong', 'brand', `C Relations v${__EXTENSION_VERSION__}`);
+  const variable = state.graph?.root.kind === 'variable';
+  const mode = el('select'); mode.setAttribute('aria-label', variable ? '변수 접근 종류' : '관계 종류');
+  const options = variable ? [['all', '변수 · 모든 사용'], ['read', 'R · 읽기 (RW 포함)'], ['write', 'W · 쓰기 (RW 포함)'], ['readwrite', accessNames.readwrite], ['address', accessNames.address]]
+    : [['references', 'References · 모든 참조'], ['callers', 'Callers · 직접 호출']];
+  for (const [value, label] of options) {
+    const option = el('option', '', label); option.value = value; mode.append(option);
+  }
+  mode.value = variable ? state.accessFilter : state.mode; mode.onchange = () => send(variable ? 'access' : 'mode', { value: mode.value });
+  const depth = el('select'); depth.setAttribute('aria-label', '표시 단계');
+  for (let n = 1; n <= 8; n++) { const option = el('option', '', `${n}단계`); option.value = String(n); depth.append(option); }
+  depth.value = String(state.depth); depth.onchange = () => send('depth', { value: Number(depth.value) });
+  const lock = button(state.locked ? '고정 해제' : '고정', () => send('lock')); lock.setAttribute('aria-pressed', String(state.locked));
+  const skipLabel = el('label', 'skip'); const skip = el('input'); skip.type = 'checkbox'; skip.checked = state.skipInactive;
+  skip.onchange = () => send('skip', { value: skip.checked }); skipLabel.append(skip, document.createTextNode('#if 0 제외'));
+  toolbar.append(brand, mode, depth, lock, skipLabel, button('새로 분석', () => send('refresh')));
+  candidates.replaceChildren();
+  if (state.candidates.length) {
+    const label = el('label', '', `정의 ${state.candidates.length}개`); label.htmlFor = 'definition-choice';
+    const choice = el('select'); choice.id = 'definition-choice'; choice.setAttribute('aria-label', '정의 선택');
+    const placeholder = el('option', '', '파일을 선택하세요'); placeholder.value = ''; placeholder.disabled = true; placeholder.selected = true;
+    choice.append(placeholder);
+    for (const candidate of state.candidates) {
+      const option = el('option', '', `${decodeURIComponent(candidate.location.uri).replace(/^file:\/\//, '')}:${candidate.location.line + 1}`);
+      option.value = candidate.id; choice.append(option);
+    }
+    choice.onchange = () => send('choose', { id: choice.value });
+    candidates.append(label, choice);
+  }
+  graphHeader.replaceChildren(el('strong', '', 'Relation'), el('span', 'muted', state.graph?.root.name ?? state.candidates[0]?.name ?? '심볼을 선택하세요'));
+  if (state.graph) graphHeader.dataset.rootName = state.graph.root.name; else delete graphHeader.dataset.rootName;
+  const nextRoot = state.graph?.root.symbolId;
+  if (nextRoot !== rootKey) { rootKey = nextRoot; graph.scrollTop = 0; graph.scrollLeft = 0; }
+  const next = JSON.stringify(state.graph);
+  if (next !== signature) {
+    const key = (document.activeElement as HTMLElement)?.dataset.key;
+    hideDetails();
+    signature = next; graph.replaceChildren();
+    if (state.graph) graph.append(drawNode(state.graph.root));
+    else graph.append(el('div', 'empty', state.candidates.length ? '위에서 정의를 선택하면 참조 관계가 표시됩니다.' : 'C 소스에서 함수나 변수 이름을 클릭하면 참조 관계가 표시됩니다.'));
+    if (key) Array.from(graph.querySelectorAll<HTMLButtonElement>('.node-title')).find(b => b.dataset.key === key)?.focus({ preventScroll: true });
+  }
+  const preview = state.context;
+  const previewNext = JSON.stringify(preview);
+  if (previewNext !== previewSignature) {
+    previewSignature = previewNext; context.replaceChildren();
+    const heading = el('div', 'pane-heading'); heading.append(el('strong', '', `Context v${__EXTENSION_VERSION__}`), el('span', 'muted', preview ? `${preview.path}:${preview.location.line + 1}` : '코드 미리보기'));
+    context.append(heading);
+    if (preview) {
+      const code = el('div', 'code');
+      preview.text.split('\n').forEach((text, i) => {
+        const line = el('div', 'code-line'); const number = i + preview.firstLine;
+        if (number === preview.location.line) line.classList.add('highlight');
+        line.append(el('span', 'line-number', String(number + 1)));
+        const source = el('span', 'source');
+        for (const token of preview.tokens[i] ?? [{ text, kind: 'plain' }]) source.append(el('span', `syntax-${token.kind}`, token.text));
+        if (!text) source.append(document.createTextNode(' '));
+        line.append(source); code.append(line);
+      });
+      context.append(code); code.querySelector('.highlight')?.scrollIntoView({ block: 'center' });
+    } else context.append(el('div', 'empty', '관계의 함수 또는 호출 위치를 선택하세요.'));
+  }
+  popup.querySelectorAll<HTMLElement>('.site').forEach(site => site.classList.toggle('selected', site.dataset.site === `${preview?.location.uri}@${preview?.location.start}`));
+  graph.querySelectorAll<HTMLElement>('.node-title').forEach(title => title.classList.toggle('selected', title.dataset.preview === `${preview?.location.uri}#${preview?.location.start}` || title.dataset.preview === `${preview?.location.uri}@${preview?.location.start}`));
+  footer.replaceChildren(el('span', '', `${state.status} · ${state.fileCount}개 파일`), el('span', 'muted', 'Space 상세 · → 펼치기 · ← 접기 · Shift+→ 단계 · Enter 소스 열기'));
+  if (state.graph?.truncated) footer.append(el('span', 'warning', '300개 노드까지만 표시'));
+  if (state.issues.length) {
+    const details = el('details', 'warning'); details.append(el('summary', '', `분석 알림 ${state.issues.length}`), el('pre', '', state.issues.slice(0, 100).join('\n'))); footer.append(details);
+  }
+}
+window.addEventListener('message', event => { if (event.data?.type === 'state') render(event.data.state); });
+send('ready');

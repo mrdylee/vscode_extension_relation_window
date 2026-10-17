@@ -1,0 +1,104 @@
+{
+  "name": "c-relation-explorer",
+  "displayName": "C Relation Explorer",
+  "description": "Build-free C references, caller graphs and a linked Context preview.",
+  "version": "0.1.9",
+  "publisher": "local-james-black",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Visualization"
+  ],
+  "main": "./dist/extension.cjs",
+  "extensionKind": [
+    "workspace"
+  ],
+  "activationEvents": [
+    "onLanguage:c"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "cRelation.open",
+        "title": "C Relations: Open Relation and Context"
+      },
+      {
+        "command": "cRelation.reindex",
+        "title": "C Relations: Rebuild Index"
+      },
+      {
+        "command": "cRelation.checkForUpdates",
+        "title": "C Relations: Check for Updates"
+      }
+    ],
+    "viewsContainers": {
+      "panel": [
+        {
+          "id": "cRelations",
+          "title": "C Relations",
+          "icon": "media/relation.svg"
+        }
+      ]
+    },
+    "views": {
+      "cRelations": [
+        {
+          "type": "webview",
+          "id": "cRelation.explorer",
+          "name": "Relation + Context"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "C Relations",
+      "properties": {
+        "cRelation.skipInactive": {
+          "type": "boolean",
+          "default": true,
+          "description": "Exclude provably inactive #if 0/1 branches. Unknown conditions remain visible."
+        },
+        "cRelation.automaticUpdates": {
+          "type": "boolean",
+          "default": true,
+          "scope": "application",
+          "description": "Check GitHub Releases daily and ask before installing a newer version."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test test/core.test.ts test/syntax.test.ts test/updates.test.ts",
+    "test:extension": "npm run build && node scripts/test-extension.mjs",
+    "test:freertos": "npm run build && node scripts/test-freertos.mjs",
+    "test:ui": "npm run build && tsx test/create-ui-fixture.ts && node test/ui.mjs",
+    "vscode:prepublish": "npm run build",
+    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license --out artifacts/c-relation-explorer-0.1.9.vsix"
+  },
+  "dependencies": {
+    "tree-sitter-c": "0.24.1",
+    "web-tree-sitter": "0.27.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "@types/vscode": "^1.95.0",
+    "@vscode/test-electron": "^3.1.0",
+    "@vscode/vsce": "^4.0.0",
+    "esbuild": "^0.28.2",
+    "playwright": "^1.64.1",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mrdylee/vscode_extension_relation_window.git"
+  },
+  "homepage": "https://github.com/mrdylee/vscode_extension_relation_window#readme",
+  "bugs": {
+    "url": "https://github.com/mrdylee/vscode_extension_relation_window/issues"
+  }
+}
