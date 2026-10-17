@@ -221,8 +221,17 @@ function render(state: ViewState) {
         if (number === preview.location.line) line.classList.add('highlight');
         line.append(el('span', 'line-number', String(number + 1)));
         const source = el('span', 'source');
-        for (const token of preview.tokens[i] ?? [{ text, kind: 'plain' }]) source.append(el('span', `syntax-${token.kind}`, token.text));
+        let column = 0;
+        for (const token of preview.tokens[i] ?? [{ text, kind: 'plain' }]) {
+          const span = el('span', `syntax-${token.kind}`, token.text);
+          span.dataset.column = String(column); column += token.text.length; source.append(span);
+        }
         if (!text) source.append(document.createTextNode(' '));
+        line.onclick = event => {
+          if (window.getSelection()?.isCollapsed === false) return;
+          const token = (event.target as HTMLElement).closest<HTMLElement>('[data-column]');
+          send('navigateContext', { uri: preview.location.uri, line: number, column: Number(token?.dataset.column ?? 0), text: text.replace(/\r$/, '') });
+        };
         line.append(source); code.append(line);
       });
       context.append(code); code.querySelector('.highlight')?.scrollIntoView({ block: 'center' });

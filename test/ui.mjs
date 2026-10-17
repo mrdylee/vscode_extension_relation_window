@@ -67,6 +67,21 @@ try {
   await popup.locator('.site').nth(1).click();
   assert.ok((await page.locator('.code-line.highlight').textContent()).includes('check_fault(2)'));
   assert.equal(await page.locator('.code-line.highlight .syntax-function').textContent(), 'check_fault');
+  const contextCall = page.locator('.code-line.highlight .syntax-function');
+  await contextCall.click();
+  const contextNavigation = await page.evaluate(() => window.sent.filter(m => m.type === 'navigateContext').at(-1));
+  assert.ok(contextNavigation, 'Context code click sends navigation');
+  assert.equal(contextNavigation.uri, state.context.location.uri);
+  assert.equal(contextNavigation.line, state.context.location.line);
+  assert.equal(contextNavigation.column, state.context.text.split('\n')[contextNavigation.line].indexOf('check_fault'));
+  const navigationCount = await page.evaluate(() => window.sent.filter(m => m.type === 'navigateContext').length);
+  const callBox = await contextCall.boundingBox();
+  await page.mouse.move(callBox.x + 1, callBox.y + callBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(callBox.x + callBox.width - 1, callBox.y + callBox.height / 2, { steps: 5 });
+  await page.mouse.up();
+  assert.equal(await page.evaluate(() => window.sent.filter(m => m.type === 'navigateContext').length), navigationCount, 'drag selection does not navigate');
+  await page.evaluate(() => window.getSelection()?.removeAllRanges());
   assert.ok(await page.locator('.syntax-type').count() > 0);
   assert.equal(await page.locator('[data-root-name]').getAttribute('data-root-name'), 'check_fault');
   assert.equal(await page.locator('[data-node-name="fault_handlers"] .symbol-icon').getAttribute('data-kind'), 'variable');
@@ -167,6 +182,16 @@ try {
   state.graph = fixture.graph;
   await page.evaluate(state => window.dispatchEvent(new MessageEvent('message', { data: { type: 'state', state } })), state);
   assert.equal(await page.getByRole('combobox', { name: '관계 종류' }).inputValue(), 'callers', 'function mode is preserved');
+  const prefix = '/* 한글 😀 */ ';
+  const unicodePreview = { ...state.context, firstLine: 120, text: prefix + 'state++;\r', tokens: [[
+    { text: prefix, kind: 'comment' }, { text: 'state', kind: 'variable' }, { text: '++;\r', kind: 'plain' }
+  ]] };
+  await page.evaluate(state => window.dispatchEvent(new MessageEvent('message', { data: { type: 'state', state } })), { ...state, context: unicodePreview });
+  await page.locator('.context .syntax-variable').click();
+  const unicodeNavigation = await page.evaluate(() => window.sent.filter(m => m.type === 'navigateContext').at(-1));
+  assert.equal(unicodeNavigation.line, 120, 'Context uses original file line numbers');
+  assert.equal(unicodeNavigation.column, prefix.length, 'Context columns use UTF-16 including emoji');
+  assert.equal(unicodeNavigation.text, prefix + 'state++;', 'CRLF lines match VS Code line text');
   const manyCandidates = Array.from({ length: 80 }, (_, i) => ({ id: `port-${i}`, name: 'PORT_READY', location: { uri: `file:///workspace/portable/port-${i}/portmacro.h`, line: 10 } }));
   await page.evaluate(state => window.dispatchEvent(new MessageEvent('message', { data: { type: 'state', state } })), { ...state, graph: undefined, context: undefined, candidates: manyCandidates });
   const chooser = page.getByRole('combobox', { name: '정의 선택' });
@@ -181,7 +206,7 @@ try {
   assert.ok(await page.locator('.context').isVisible());
   assert.ok(await page.locator('.relation').isVisible());
   assert.equal(await divider.isVisible(), false);
-  await writeFile('test-results/ui.json', JSON.stringify({ passed: true, checks: ['variable filters R/W/RW/address', 'variable badges preserve one-line height', 'variable click and popup preview exact use sites', 'variable access colors in dark/light themes', 'function mode preserved', 'one-second stationary hover with movement reset and leave cancellation', 'mouse click does not bypass delay', 'popup tint and condition syntax in dark/light themes', 'single-line graph nodes', 'hover popup without layout shift', 'Context selected call and symbol', 'syntax colors in dark/light themes', 'keyboard popup access and Escape', 'root preserved', 'variable icon', 'keyboard expansion/collapse/special', 'explicit source open', 'lock toggle', 'split resize', 'narrow layout', '80 candidates keep graph space and distinguish paths'], errors }, null, 2));
+  await writeFile('test-results/ui.json', JSON.stringify({ passed: true, checks: ['Context click coordinates and drag selection', 'Context UTF-16 and CRLF coordinates', 'variable filters R/W/RW/address', 'variable badges preserve one-line height', 'variable click and popup preview exact use sites', 'variable access colors in dark/light themes', 'function mode preserved', 'one-second stationary hover with movement reset and leave cancellation', 'mouse click does not bypass delay', 'popup tint and condition syntax in dark/light themes', 'single-line graph nodes', 'hover popup without layout shift', 'Context selected call and symbol', 'syntax colors in dark/light themes', 'keyboard popup access and Escape', 'root preserved', 'variable icon', 'keyboard expansion/collapse/special', 'explicit source open', 'lock toggle', 'split resize', 'narrow layout', '80 candidates keep graph space and distinguish paths'], errors }, null, 2));
   assert.deepEqual(errors, []);
   console.log('Browser UI checks passed, including variable access filters, colors and actual-site previews');
 } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }

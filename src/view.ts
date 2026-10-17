@@ -42,10 +42,10 @@ export class RelationView implements vscode.WebviewViewProvider, vscode.Disposab
     view.onDidDispose(() => { this.webview = undefined; });
     this.refresh();
   }
-  track(editor: vscode.TextEditor | undefined) {
+  track(editor: vscode.TextEditor | undefined, explicit = false) {
     if (!editor || !/\.[ch]$/i.test(editor.document.uri.path)) return false;
     this.lastEditor = editor;
-    if (this.state.locked || this.openingSource) return false;
+    if (this.state.locked || (this.openingSource && !explicit)) return false;
     this.pendingTrack = false;
     const position = editor.selection.isEmpty ? editor.selection.active : editor.selection.start;
     const word = editor.document.getWordRangeAtPosition(position, /[A-Za-z_][A-Za-z0-9_]*/);
@@ -117,6 +117,24 @@ export class RelationView implements vscode.WebviewViewProvider, vscode.Disposab
     switch (m.type) {
       case 'ready': this.refresh(); this.track(vscode.window.activeTextEditor); break;
       case 'preview': if (typeof m.id === 'string' && this.locations.has(m.id)) { this.preview(m.id); this.publish(); } break;
+      case 'navigateContext': {
+        const preview = this.state.context;
+        if (!preview || m.uri !== preview.location.uri || !Number.isInteger(m.line) || !Number.isInteger(m.column)) return;
+        const line = Number(m.line), column = Number(m.column);
+        const text = preview.text.split('\n')[line - preview.firstLine]?.replace(/\r$/, '');
+        if (text === undefined || m.text !== text || column < 0 || column > text.length) return;
+        const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(preview.location.uri));
+        // A preview may lag behind an unsaved edit. Never jump using stale coordinates.
+        if (line >= document.lineCount || document.lineAt(line).text !== text) return;
+        const position = new vscode.Position(line, column);
+        const range = new vscode.Range(position, position);
+        const editor = await vscode.window.showTextDocument(document, {
+          viewColumn: this.lastEditor?.viewColumn ?? vscode.ViewColumn.One, selection: range, preview: true
+        });
+        editor.revealRange(range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+        this.track(editor, true);
+        break;
+      }
       case 'choose': if (typeof m.id === 'string') { const symbol = this.state.candidates.find(s => s.id === m.id); if (symbol) this.setRoot(symbol); } break;
       case 'mode': if (m.value === 'references' || m.value === 'callers') { this.state.mode = m.value; this.expanded = {}; this.refresh(); } break;
       case 'access': if (m.value === 'all' || m.value === 'read' || m.value === 'write' || m.value === 'readwrite' || m.value === 'address') {

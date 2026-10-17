@@ -166,8 +166,35 @@ export async function run() {
   await api.view.handleMessage({ type: 'lock' });
   expectRoot('background_task', 'unlock follows the most recently selected C editor');
   assert.deepEqual(trackingFailures, []);
+  const contextPosition = document.positionAt(document.getText().indexOf('control_task(void)'));
+  const contextClick = { type: 'navigateContext', uri: document.uri.toString(), line: contextPosition.line,
+    column: contextPosition.character, text: document.lineAt(contextPosition.line).text };
+  await api.view.handleMessage(contextClick);
+  assert.equal(vscode.window.activeTextEditor?.document.uri.toString(), document.uri.toString());
+  assert.ok(vscode.window.activeTextEditor?.selection.active.isEqual(contextPosition), 'Context click moves the main editor to the clicked token');
+  assert.equal(api.view.state.graph?.root.name, 'control_task', 'Context click changes the unlocked Relation root');
+  await api.view.handleMessage({ type: 'lock' });
+  await api.view.handleMessage({ ...contextClick, line: switchedPosition.line, column: switchedPosition.character,
+    text: document.lineAt(switchedPosition.line).text });
+  assert.ok(vscode.window.activeTextEditor?.selection.active.isEqual(switchedPosition));
+  assert.equal(api.view.state.graph?.root.name, 'control_task', 'locked Context navigation preserves the Relation root');
+  for (const invalid of [{ ...contextClick, uri: 'file:///unrelated.c' }, { ...contextClick, line: -1 },
+    { ...contextClick, column: 999999 }, { ...contextClick, text: 'outdated source' }]) await api.view.handleMessage(invalid);
+  assert.ok(vscode.window.activeTextEditor?.selection.active.isEqual(switchedPosition), 'invalid and stale Context requests do not navigate');
+  await api.view.handleMessage({ type: 'lock' });
+  const callPosition = document.positionAt(document.getText().indexOf('check_fault(10)'));
+  await api.view.handleMessage({ ...contextClick, line: callPosition.line, column: callPosition.character,
+    text: document.lineAt(callPosition.line).text });
+  assert.equal(api.view.state.graph?.root.name, 'check_fault');
+  const faultDocument = await vscode.workspace.openTextDocument(vscode.Uri.joinPath(root, 'fault.c'));
+  const countPosition = faultDocument.positionAt(faultDocument.getText().indexOf('fault_count'));
+  await api.view.handleMessage({ type: 'navigateContext', uri: faultDocument.uri.toString(), line: countPosition.line,
+    column: countPosition.character, text: faultDocument.lineAt(countPosition.line).text });
+  assert.equal(vscode.window.activeTextEditor?.document.uri.toString(), faultDocument.uri.toString(), 'Context can navigate into a different file');
+  assert.ok(vscode.window.activeTextEditor?.selection.active.isEqual(countPosition));
+  assert.equal(api.view.state.graph?.root.name, 'fault_count', 'Context variable click switches to variable relations');
   const output = process.env.C_RELATION_TEST_OUTPUT!;
   await mkdir(path.dirname(output), { recursive: true });
-  await writeFile(output, JSON.stringify({ passed: true, checks: ['selected identifier tracking', 'selection retry after indexing', 'unlock follows latest editor', 'same-symbol graph reuse', 'variable selection and access filters', 'variable actual-site preview preserves editor', 'variable access filter validation', 'variable uses continue into caller tree', 'activation', '93-file index completion', 'indexing does not open documents', 'WASM worker', 'click tracking', 'variable icon data', 'call sites', 'Context preserves editor', 'mode/depth/expand/collapse', 'locked root', 'explicit source open', 'invalid message target', '#if0 setting reindex', 'unsaved buffer', 'file create/delete', 'ambiguous symbol clears stale graph and Context', 'candidate selection'] }, null, 2));
+  await writeFile(output, JSON.stringify({ passed: true, checks: ['Context source navigation and relation reroot', 'Context cross-file variable navigation', 'Context lock and stale-message checks', 'selected identifier tracking', 'selection retry after indexing', 'unlock follows latest editor', 'same-symbol graph reuse', 'variable selection and access filters', 'variable actual-site preview preserves editor', 'variable access filter validation', 'variable uses continue into caller tree', 'activation', '93-file index completion', 'indexing does not open documents', 'WASM worker', 'click tracking', 'variable icon data', 'call sites', 'Context preserves editor', 'mode/depth/expand/collapse', 'locked root', 'explicit source open', 'invalid message target', '#if0 setting reindex', 'unsaved buffer', 'file create/delete', 'ambiguous symbol clears stale graph and Context', 'candidate selection'] }, null, 2));
   console.log('C Relation extension integration checks passed');
 }
