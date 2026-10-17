@@ -1,4 +1,6 @@
 export type Kind = 'function' | 'variable' | 'type' | 'macro' | 'unknown';
+export type RelationMode = 'references' | 'callers' | 'callees';
+export type CallKind = 'direct' | 'macro' | 'indirect' | 'unresolved';
 export type Access = 'read' | 'write' | 'readwrite' | 'address';
 export type AccessFilter = 'all' | Access;
 export interface Location {
@@ -12,7 +14,7 @@ export interface SymbolRecord {
 }
 export interface ReferenceRecord {
   id: string; name: string; kind: 'call' | 'reference' | 'declaration';
-  location: Location; ownerId?: string; functionId?: string; targetId?: string; access?: Access; conditions: string[];
+  location: Location; ownerId?: string; functionId?: string; targetId?: string; access?: Access; conditions: string[]; indirect?: boolean;
 }
 export interface FileAnalysis {
   uri: string; text: string; symbols: SymbolRecord[]; references: ReferenceRecord[];
@@ -20,11 +22,12 @@ export interface FileAnalysis {
 }
 export interface RelationSite extends ReferenceRecord { ambiguous: boolean; candidates: string[] }
 export interface RelationGroup {
-  key: string; symbol?: SymbolRecord; name: string; kind: Kind; sites: RelationSite[];
+  key: string; symbol?: SymbolRecord; name: string; kind: Kind; sites: RelationSite[]; callKind?: CallKind;
 }
 export interface GraphNode {
   key: string; symbolId?: string; name: string; kind: Kind; location: Location;
   definition?: boolean;
+  callKind?: CallKind;
   conditions: string[]; sites: RelationSite[]; children: GraphNode[];
   cycle: boolean; expanded: boolean; ambiguous: boolean;
 }

@@ -11,7 +11,11 @@ async function main() {
   index.update(analyzer.analyze('file:///demo/variable-access.c', await readFile('test/fixtures/variable-access.c', 'utf8')));
   const variable = index.symbols().find(s => s.name === 'state')!;
   const variableGraphs = Object.fromEntries((['all', 'read', 'write', 'readwrite', 'address'] as const).map(filter => [filter, index.graph(variable.id, 'callers', 2, {}, filter)]));
+  const graph = index.graph(target.id, 'references', 1), expandedGraph = index.graph(target.id, 'references', 2);
+  index.update(analyzer.analyze('file:///demo/outgoing.c', '#define CHECK() check_fault(0)\nvoid outgoing(void (*handler)(void), struct Ops *ops){\ncheck_fault(1);\ncheck_fault(2);\nCHECK();\nhandler();\nops->run();\nmissing();\n}'));
+  const outgoing = index.symbols().find(s => s.name === 'outgoing')!;
+  const calleeGraph = index.graph(outgoing.id, 'callees', 2);
   await mkdir('test-results', { recursive: true });
-  await writeFile('test-results/ui-fixture.json', JSON.stringify({ graph: index.graph(target.id, 'references', 1), expandedGraph: index.graph(target.id, 'references', 2), variableGraphs, files: [...index.files.values()].map(file => ({ ...file, tokens: highlightC(file.text) })) }));
+  await writeFile('test-results/ui-fixture.json', JSON.stringify({ graph, expandedGraph, calleeGraph, variableGraphs, files: [...index.files.values()].map(file => ({ ...file, tokens: highlightC(file.text) })) }));
 }
 void main();

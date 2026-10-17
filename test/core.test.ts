@@ -12,6 +12,75 @@ function index(files: Record<string, string>) {
   for (const [file, text] of Object.entries(files)) value.update(parse(text, `file:///demo/${file}`));
   return value;
 }
+test('Callees groups direct and unresolved calls with exact sites, not address references', () => {
+  const source = 'int read(void){return 1;} void task(void){int value=read(); read(); missing(); void *p=&read;} void entry(void){task();}';
+  const value = index({ 'a.c': source });
+  const task = value.symbols().find(s => s.name === 'task')!;
+  const groups = value.relations(task.id, 'callees');
+  assert.deepEqual(groups.map(g => [g.name, g.callKind, g.sites.length]), [['missing', 'unresolved', 1], ['read', 'direct', 2]]);
+  assert.equal(groups[1].sites[0].location.start, source.indexOf('read();'));
+  assert.equal(groups[1].sites[0].access, undefined, 'outgoing calls are not variable reads');
+  assert.deepEqual(value.relations(task.id, 'callers').map(g => g.name), ['entry']);
+});
+test('Callees resolves static scope and retains conditional candidates', () => {
+  const value = index({ 'a.c': 'static void helper(void){} void task(void){helper();}', 'b.c': 'static void helper(void){}',
+    'c.c': '#if BOARD\nvoid target(void){}\n#endif', 'd.c': 'void target(void){}', 'use.c': 'void use(void){target();}' });
+  const task = value.symbols().find(s => s.name === 'task')!;
+  assert.ok(value.relations(task.id, 'callees')[0].symbol!.location.uri.endsWith('a.c'));
+  const use = value.symbols().find(s => s.name === 'use')!;
+  const candidates = value.relations(use.id, 'callees');
+  assert.equal(candidates.length, 2);
+  assert.ok(candidates.every(g => g.sites[0].ambiguous));
+});
+test('Callees shows macro and indirect leaves without inventing function targets', () => {
+  const value = index({ 'a.c': '#define CHECK() target()\nvoid target(void){} void handler(void){} void task(void (*handler)(void), struct Ops *ops){CHECK();handler();(*handler)();ops->run();}' });
+  const task = value.symbols().find(s => s.name === 'task')!;
+  const graph = value.graph(task.id, 'callees', 4)!;
+  assert.deepEqual(graph.root.children.map(n => [n.name, n.callKind]).sort(),
+    [['CHECK', 'macro'], ['handler', 'indirect'], ['(*handler)', 'indirect'], ['ops->run', 'indirect']].sort());
+  assert.ok(graph.root.children.every(n => n.children.length === 0));
+  assert.equal(graph.root.children.find(n => n.name === 'handler')!.kind, 'variable');
+});
+test('Callees handles depth, repeated expansion and recursive paths', () => {
+  const value = index({ 'a.c': 'void c(void){} void b(void){c();} void a(void){b();a();}' });
+  const a = value.symbols().find(s => s.name === 'a')!;
+  const one = value.graph(a.id, 'callees', 1)!;
+  const b = one.root.children.find(n => n.name === 'b')!;
+  assert.equal(b.children.length, 0);
+  assert.ok(one.root.children.find(n => n.name === 'a')!.cycle);
+  assert.equal(value.graph(a.id, 'callees', 1, { [b.key]: 1 })!.root.children.find(n => n.name === 'b')!.children[0].name, 'c');
+});
+test('Callees excludes inactive and unevaluated calls and preserves unknown conditions', () => {
+  const value = index({ 'a.c': 'void task(void){\n#if 0\ndisabled();\n#endif\n#if BOARD\nmaybe();\n#endif\nsizeof(hidden()); sizeof((*ptr)()); outer(inner());}' });
+  const task = value.symbols().find(s => s.name === 'task')!;
+  const groups = value.relations(task.id, 'callees');
+  assert.deepEqual(groups.map(g => g.name), ['inner', 'maybe', 'outer']);
+  assert.ok(groups.find(g => g.name === 'maybe')!.sites[0].conditions.length);
+});
+test('Callees updates only changed file owners and resolves target changes on demand', () => {
+  const value = index({ 'a.c': 'void task(void){target();}', 'b.c': 'void target(void){}', 'untouched.c': 'void other(void){target();}' });
+  const task = value.symbols().find(s => s.name === 'task')!;
+  Object.defineProperty(value.files.get('file:///demo/untouched.c')!, 'references', { get() { throw new Error('unrelated file scanned'); } });
+  assert.equal(value.relations(task.id, 'callees')[0].callKind, 'direct');
+  value.remove('file:///demo/b.c');
+  assert.equal(value.relations(task.id, 'callees')[0].callKind, 'unresolved');
+  value.update(parse('void task(void){new_target();}'));
+  assert.deepEqual(value.relations(task.id, 'callees').map(g => g.name), ['new_target']);
+  value.remove('file:///demo/a.c');
+  assert.deepEqual(value.relations(task.id, 'callees'), []);
+});
+test('Callees preference preserves variable use and incoming caller traversal', () => {
+  const value = index({ 'a.c': 'int state; void writer(void){state=1;} void entry(void){writer();}' });
+  const variable = value.symbols().find(s => s.name === 'state')!;
+  const graph = value.graph(variable.id, 'callees', 2, {}, 'write')!;
+  assert.equal(graph.root.children[0].name, 'writer');
+  assert.equal(graph.root.children[0].children[0].name, 'entry');
+});
+test('Callees indirect records do not hide ordinary variable selection', () => {
+  const source = 'void task(struct Ops *ops){ops->run();}';
+  const value = index({ 'a.c': source });
+  assert.equal(value.resolveAt('file:///demo/a.c', source.indexOf('ops->'))[0]?.name, 'ops');
+});
 test('extracts repeated actual calls and exact Unicode locations, excluding comment/string/declaration', () => {
   const file = parse('void fault(int);\nvoid task(void) { /* 한글 😀 */ fault(1);\n fault(2); /* fault(3); */ const char *s="fault(4)"; }');
   assert.equal(file.symbols.find(s => s.name === 'task')?.kind, 'function');

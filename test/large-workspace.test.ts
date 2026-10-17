@@ -32,8 +32,14 @@ export async function run() {
     const queryMs = Date.now() - queryStart;
     assert.equal(groups.length, 2500);
     assert.equal(groups.reduce((n: number, g: any) => n + g.sites.length, 0), 50000);
+    const outgoingStart = Date.now();
+    const outgoing = api.workspace.index.relations(groups[0].symbol.id, 'callees');
+    const outgoingQueryMs = Date.now() - outgoingStart;
+    assert.equal(outgoing.length, 1);
+    assert.equal(outgoing[0].symbol.id, target.id);
+    assert.equal(outgoing[0].sites.length, 20);
     await new Promise(r => setTimeout(r, 30)); // Include query stalls in the heartbeat measurement.
-    const result = { passed: true, sourceFiles: 12551, indexedFiles: 2501, calls: 50000, elapsedMs: Date.now() - started, selectionMs, queryMs, filesAtSelection, ticks, maxTickGapMs };
+    const result = { passed: true, sourceFiles: 12551, indexedFiles: 2501, calls: 50000, elapsedMs: Date.now() - started, selectionMs, queryMs, outgoingQueryMs, filesAtSelection, ticks, maxTickGapMs };
     const settings = vscode.workspace.getConfiguration('cRelation');
     await settings.update('include', ['target.c', 'caller-*.c', 'caller-1*'], vscode.ConfigurationTarget.Workspace);
     await settings.update('exclude', [], vscode.ConfigurationTarget.Workspace);

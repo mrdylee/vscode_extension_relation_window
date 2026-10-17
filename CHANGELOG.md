@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.25 — development branch
+
+- Add Callees to the existing Relation selector, with outgoing depth expansion, recursion limits and exact repeated call sites.
+- Preserve macro invocations, unresolved names and indirect call expressions as explicitly described leaves without guessing their runtime targets.
+- Keep variable access filters and incoming traversal independent of the remembered function mode.
+- Maintain per-function outgoing buckets during incremental file updates; querying a function does not rescan the workspace.
+- This increment does not implement macro expansion, member type binding or pointer-target inference. Stable main remains at v0.1.24 while the feature branch is evaluated.
+
 ## 0.1.24 — 2026-10-17
 
 - Restore the compact rounded `ƒ` function icon: outline for declarations, fill for definitions, with independently visible dashed conditional/candidate/recursive borders.

@@ -25,6 +25,7 @@ try {
   }
   collect(fixture.expandedGraph.root);
   collect(fixture.variableGraphs.all.root);
+  collect(fixture.calleeGraph.root);
   function preview(id) {
     const location = items.get(id);
     const file = fixture.files.find(f => f.uri === location.uri);
@@ -36,7 +37,7 @@ try {
     if (message.type === 'selectNode') {
       const find = node => node.key === message.key ? node : node.children.map(find).find(Boolean);
       const node = find(state.graph.root);
-      preview(node.sites[0]?.access ? node.sites[0].id : node.symbolId ?? node.sites[0]?.id);
+      preview(node.callKind || node.sites[0]?.access ? node.sites[0].id : node.symbolId ?? node.sites[0]?.id);
       if (node.name === 'control_task') state.graph = fixture.expandedGraph;
     }
     if (message.type === 'expand') state.graph = fixture.expandedGraph;
@@ -44,6 +45,7 @@ try {
     if (message.type === 'lock') state.locked = !state.locked;
     if (message.type === 'depth') state.depth = message.value;
     if (message.type === 'access') { state.accessFilter = message.value; state.graph = fixture.variableGraphs[message.value]; }
+    if (message.type === 'mode') { state.mode = message.value; state.graph = message.value === 'callees' ? fixture.calleeGraph : fixture.graph; }
     await page.evaluate(state => window.dispatchEvent(new MessageEvent('message', { data: { type: 'state', state } })), state);
   });
   await page.addInitScript(() => {
@@ -251,6 +253,25 @@ try {
   state.graph = fixture.graph;
   await page.evaluate(state => window.dispatchEvent(new MessageEvent('message', { data: { type: 'state', state } })), state);
   assert.equal(await page.getByRole('combobox', { name: 'Relation type' }).inputValue(), 'callers', 'function mode is preserved');
+  const relationSelector = page.getByRole('combobox', { name: 'Relation type' });
+  assert.equal(await relationSelector.locator('option[value="callees"]').count(), 1, 'Callees available in existing selector');
+  await relationSelector.selectOption('callees');
+  await page.locator('[data-root-name="outgoing"]').waitFor();
+  const callee = page.locator('[data-node-name="check_fault"] .node-title');
+  await callee.click();
+  assert.ok((await page.locator('.code-line.highlight').textContent()).includes('check_fault(1);'));
+  await callee.press('Enter');
+  assert.equal(await page.evaluate(() => window.sent.filter(m => m.type === 'open').at(-1).id), fixture.calleeGraph.root.children.find(n => n.name === 'check_fault').sites[0].id);
+  for (const [name, warning] of [['CHECK', 'Macro invocation'], ['handler', 'Indirect call'], ['ops->run', 'Indirect call'], ['missing', 'Unresolved call']]) {
+    const title = page.locator(`[data-node-name="${name}"] .node-title`);
+    await title.focus(); await title.press('Space');
+    assert.ok((await popup.textContent()).includes(warning));
+    assert.equal(await popup.locator('.node-actions').count(), 0, 'unresolved targets have no misleading expansion controls');
+    assert.ok((await title.boundingBox()).height <= 26);
+    await page.keyboard.press('Escape');
+  }
+  await page.screenshot({ path: 'output/playwright/callees.png', fullPage: true });
+  await relationSelector.selectOption('callers');
   const prefix = '/* 한글 😀 */ ';
   const unicodePreview = { ...state.context, firstLine: 120, text: prefix + 'state++;\r', tokens: [[
     { text: prefix, kind: 'comment' }, { text: 'state', kind: 'variable' }, { text: '++;\r', kind: 'plain' }

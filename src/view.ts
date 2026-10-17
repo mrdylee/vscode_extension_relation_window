@@ -122,8 +122,8 @@ export class RelationView implements vscode.WebviewViewProvider, vscode.Disposab
       case 'selectNode': {
         const node = typeof m.key === 'string' ? this.nodes.get(m.key) : undefined;
         if (!node) return;
-        this.selection = node.sites[0]?.access ? node.sites[0].id : node.symbolId ?? node.sites[0]?.id;
-        if (node.symbolId && !node.cycle) {
+        this.selection = node.callKind || node.sites[0]?.access ? node.sites[0].id : node.symbolId ?? node.sites[0]?.id;
+        if (node.symbolId && !node.cycle && (!node.callKind || node.callKind === 'direct')) {
           // Preserve a deeper inherited expansion, including explicit ancestor overrides.
           let levels = this.state.depth, path = '';
           for (const part of node.key.split('/')) {
@@ -154,7 +154,7 @@ export class RelationView implements vscode.WebviewViewProvider, vscode.Disposab
         break;
       }
       case 'choose': if (typeof m.id === 'string') { const symbol = this.state.candidates.find(s => s.id === m.id); if (symbol) this.setRoot(symbol); } break;
-      case 'mode': if (m.value === 'references' || m.value === 'callers') { this.state.mode = m.value; this.expanded = {}; this.refresh(); } break;
+      case 'mode': if (m.value === 'references' || m.value === 'callers' || m.value === 'callees') { this.state.mode = m.value; this.expanded = {}; this.refresh(); } break;
       case 'access': if (m.value === 'all' || m.value === 'read' || m.value === 'write' || m.value === 'readwrite' || m.value === 'address') {
         this.state.accessFilter = m.value; this.expanded = {}; this.refresh();
       } break;

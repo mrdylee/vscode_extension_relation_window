@@ -119,6 +119,9 @@ function showDetails(node: GraphNode, anchor: HTMLButtonElement) {
   popup.append(meta);
   if (node.cycle) popup.append(el('div', 'condition detail-warning', 'Recursion: further expansion stopped on this path.'));
   if (node.ambiguous) popup.append(el('div', 'condition detail-warning', 'Candidate: conditions or multiple definitions prevent a unique match.'));
+  if (node.callKind === 'macro') popup.append(el('div', 'condition detail-warning', 'Macro invocation: replacement text is not expanded into function calls.'));
+  if (node.callKind === 'indirect') popup.append(el('div', 'condition detail-warning', 'Indirect call: the runtime function target has not been resolved.'));
+  if (node.callKind === 'unresolved') popup.append(el('div', 'condition detail-warning', 'Unresolved call: no matching function or macro was found in the analyzed scope.'));
   if (node.conditions.length) popup.append(condition(node.conditions.join(' · ')));
   if (node.sites.length) popup.append(el('strong', 'detail-label', `${node.sites.length} ${node.sites[0].access ? 'variable use' : 'call/reference'} locations`));
   if (node.sites.some(site => site.access === 'address')) popup.append(el('div', 'condition', 'This location uses the address. Writes inside the receiving function are not tracked.'));
@@ -134,7 +137,7 @@ function showDetails(node: GraphNode, anchor: HTMLButtonElement) {
     b.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); send('open', { id: site.id }); } };
     popup.append(b);
   }
-  if (node.symbolId && !node.cycle) {
+  if (node.symbolId && !node.cycle && (!node.callKind || node.callKind === 'direct')) {
     const actions = el('div', 'node-actions');
     actions.append(button(node.expanded ? '− Collapse' : '+ Expand', () => send(node.expanded ? 'collapse' : 'expand', { key: node.key })),
       button('Levels…', () => send('expandSpecial', { key: node.key }), 'Levels to expand from this node (Shift+→)'));
@@ -150,14 +153,14 @@ function showDetails(node: GraphNode, anchor: HTMLButtonElement) {
 function drawNode(node: GraphNode): HTMLElement {
   const branch = el('div', 'branch');
   const card = el('article', 'node'); card.dataset.nodeName = node.name;
-  const openId = node.sites[0]?.access ? node.sites[0].id : node.symbolId ?? node.sites[0]?.id;
+  const openId = node.callKind || node.sites[0]?.access ? node.sites[0].id : node.symbolId ?? node.sites[0]?.id;
   const title = button('', event => { if (event.detail <= 1) send('selectNode', { key: node.key }); }, '');
   title.className = 'node-title'; title.dataset.key = node.key;
   title.dataset.preview = openId;
   title.append(icon(node), el('span', 'symbol-name', node.symbolId ? node.name : node.sites[0]?.name ?? node.name));
   const accesses = [...new Set(node.sites.flatMap(site => site.access ? [site.access] : []))];
   for (const access of accesses) title.append(accessBadge(access, true));
-  const status = [node.cycle ? 'Recursive' : '', node.ambiguous ? 'Candidate' : '', node.conditions.length || node.sites.some(s => s.conditions.length) ? 'Conditional' : ''].filter(Boolean).join(', ');
+  const status = [node.cycle ? 'Recursive' : '', node.ambiguous ? 'Candidate' : '', node.callKind === 'indirect' ? 'Indirect call' : node.callKind === 'unresolved' ? 'Unresolved call' : '', node.conditions.length || node.sites.some(s => s.conditions.length) ? 'Conditional' : ''].filter(Boolean).join(', ');
   if (status) title.classList.add('uncertain');
   title.setAttribute('aria-label', [kindLabel(node) + ' ' + node.name, ...accesses.map(a => accessNames[a]), status].filter(Boolean).join(', '));
   title.setAttribute('aria-haspopup', 'dialog'); title.setAttribute('aria-controls', popup.id); title.setAttribute('aria-expanded', 'false');
@@ -203,7 +206,7 @@ function render(state: ViewState) {
     mode.setAttribute('aria-label', variable ? 'Variable access' : 'Relation type');
     mode.replaceChildren();
     const options = variable ? [['all', 'Variable · All uses'], ['read', 'R · Read (includes RW)'], ['write', 'W · Write (includes RW)'], ['readwrite', accessNames.readwrite], ['address', accessNames.address]]
-      : [['references', 'References · All references'], ['callers', 'Callers · Direct calls']];
+      : [['references', 'References · All references'], ['callers', 'Callers · Direct calls'], ['callees', 'Callees · Called functions']];
     for (const [value, label] of options) {
       const option = el('option', '', label); option.value = value; mode.append(option);
     }

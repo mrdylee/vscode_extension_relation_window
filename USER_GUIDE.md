@@ -54,6 +54,9 @@ Other examples: `App/**/*.{c,h}` matches C/H files under App; `**/vendor/**` mat
 ## Navigate Relation and Context
 
 - **References** shows direct calls, address references and declarations. **Callers** shows direct callers. The tree grows toward the code that calls or references the selected symbol.
+- **Callees · Called functions** grows in the opposite direction: from the selected function to the functions it calls. Repeated calls share one node; the popup lists each actual call site. Click a child to preview the call site in Context and expand its outgoing calls. Enter or double-click opens that call site in the editor.
+- In Callees, a **Macro invocation** is a leaf: its body is not expanded. **Indirect call** means a function-pointer or complex call expression whose runtime target is not resolved. **Unresolved call** means no matching definition/declaration was found in the analysis scope. These leaves are visible, but are not guessed direct function calls. Declared functions without an indexed body also have no outgoing calls to expand.
+- Variable selections keep their Read/Write filters and incoming caller tree, even when the remembered function mode is Callees. Returning to a function restores that mode.
 - **1 level – 8 levels** controls the initial tree depth. Click a Relation symbol to preview it in Context and expand from that node by the selected depth. The root stays in place; already deeper branches remain open. Repeated clicks do not grow the same node indefinitely.
 - **Double-click / Enter** opens the symbol or reference in the main editor.
 - **Context code click** moves the main editor to that location. When following selection, Relation also follows the clicked symbol. Drag to select and copy text without navigating.

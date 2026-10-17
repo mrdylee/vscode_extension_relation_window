@@ -155,6 +155,19 @@ export async function createAnalyzer(runtime: string, grammar: string) {
     }
 
     for (const node of nodes) {
+      if (node.type === 'call_expression') {
+        const expression = node.childForFieldName('function');
+        let callable = expression;
+        while (callable?.type === 'parenthesized_expression') callable = callable.namedChildren[0];
+        const fn = ancestor(node, 'function_definition');
+        const body = fn?.childForFieldName('body');
+        if (expression && callable?.type !== 'identifier' && body && node.startIndex >= body.startIndex && access(node)) {
+          const functionId = functionOwners.get(fn!.id);
+          file.references.push({ id: `${uri}@${expression.startIndex}:indirect`, name: expression.text, kind: 'call',
+            location: location(expression), ownerId: functionId, functionId, indirect: true,
+            access: 'read', conditions: conditions.get(node.id) ?? [] });
+        }
+      }
       if (node.type !== 'identifier' || declarationNames.has(node.id)) continue;
       const fn = ancestor(node, 'function_definition');
       const body = fn?.childForFieldName('body');

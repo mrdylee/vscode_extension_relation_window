@@ -53,4 +53,4 @@ pointer calls, updates/deletes, variable-mode preservation and bounded graphs.
 Integration: mode round trip, Context call-site selection and depth expansion in
 the real VS Code Extension Host. Browser: mode selector and leaf explanations.
 Run existing suite, FreeRTOS and large-workspace checks before packaging.
-Version experimental package as 0.2.0-dev.1 and keep stable main unchanged.
+Version the local development package as 0.1.25 and keep stable main unchanged.
