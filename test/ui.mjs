@@ -33,9 +33,16 @@ try {
   preview(fixture.graph.root.symbolId);
   await page.exposeFunction('bridge', async message => {
     if (message.type === 'preview') preview(message.id);
+    if (message.type === 'selectNode') {
+      const find = node => node.key === message.key ? node : node.children.map(find).find(Boolean);
+      const node = find(state.graph.root);
+      preview(node.sites[0]?.access ? node.sites[0].id : node.symbolId ?? node.sites[0]?.id);
+      if (node.name === 'control_task') state.graph = fixture.expandedGraph;
+    }
     if (message.type === 'expand') state.graph = fixture.expandedGraph;
     if (message.type === 'collapse') state.graph = fixture.graph;
     if (message.type === 'lock') state.locked = !state.locked;
+    if (message.type === 'depth') state.depth = message.value;
     if (message.type === 'access') { state.accessFilter = message.value; state.graph = fixture.variableGraphs[message.value]; }
     await page.evaluate(state => window.dispatchEvent(new MessageEvent('message', { data: { type: 'state', state } })), state);
   });
@@ -45,7 +52,37 @@ try {
   });
   await page.goto(`http://127.0.0.1:${server.address().port}`);
   await page.locator('[data-node-name="check_fault"]').waitFor({ timeout: 3000 });
+  const depthSelector = page.getByRole('combobox', { name: 'Depth', exact: true });
+  for (const level of [2, 3, 4, 5]) {
+    await depthSelector.click();
+    await page.evaluate(state => {
+      const selector = document.querySelector('[aria-label="Depth"]');
+      for (let count = 1; count <= 5; count++) {
+        window.dispatchEvent(new MessageEvent('message', { data: { type: 'state', state: { ...state, status: 'Indexing C sources…', fileCount: count } } }));
+      }
+      window.depthStillFocused = selector.isConnected && document.activeElement === selector;
+    }, state);
+    assert.equal(await page.evaluate(() => window.depthStillFocused), true, 'index progress must preserve the open depth selector and focus');
+    await page.keyboard.press('Escape');
+    await depthSelector.selectOption(String(level));
+    await page.waitForFunction(level => window.sent.some(m => m.type === 'depth' && m.value === level), level);
+    assert.equal(await depthSelector.inputValue(), String(level));
+  }
+  await depthSelector.selectOption('1');
+  await page.getByRole('combobox', { name: 'Relation type' }).click();
+  assert.equal(await page.evaluate(state => {
+    const selector = document.activeElement;
+    window.dispatchEvent(new MessageEvent('message', { data: { type: 'state', state: { ...state, graph: undefined } } }));
+    return selector.isConnected && document.activeElement === selector;
+  }, state), true, 'graph updates preserve the relation type selector');
+  await page.keyboard.press('Escape');
+  await page.evaluate(state => window.dispatchEvent(new MessageEvent('message', { data: { type: 'state', state } })), state);
   const caller = page.locator('[data-node-name="control_task"]');
+  await caller.locator('.node-title').dblclick();
+  await page.waitForFunction(() => window.sent.some(m => m.type === 'open'));
+  state.graph = fixture.graph;
+  preview(fixture.graph.root.symbolId);
+  await page.evaluate(state => window.dispatchEvent(new MessageEvent('message', { data: { type: 'state', state } })), state);
   assert.ok((await caller.boundingBox()).height <= 26, 'compact single-line node');
   assert.equal(await caller.locator('.site').count(), 0);
   const popup = page.getByRole('dialog', { name: 'Symbol details' });
@@ -102,6 +139,7 @@ try {
   await popup.waitFor({ state: 'hidden' });
   await caller.locator('.node-title').click();
   assert.ok((await page.locator('.code-line.highlight').textContent()).includes('control_task(void)'));
+  assert.ok(await page.evaluate(() => window.sent.some(m => m.type === 'selectNode')), 'node click requests preview and expansion together');
   await page.keyboard.press('Space');
   await popup.waitFor({ state: 'visible' });
   await page.keyboard.press('Tab');
@@ -203,6 +241,13 @@ try {
   assert.ok((await page.locator('.graph').boundingBox()).height > 500, 'candidate list preserves graph space');
   assert.ok((await chooser.locator('option').nth(2).textContent()).includes('port-1/portmacro.h'));
   assert.ok((await page.locator('.relation .pane-heading').textContent()).includes('PORT_READY'));
+  await chooser.click();
+  assert.equal(await page.evaluate(state => {
+    const selector = document.activeElement;
+    window.dispatchEvent(new MessageEvent('message', { data: { type: 'state', state } }));
+    return selector.isConnected && document.activeElement === selector;
+  }, { ...state, graph: undefined, context: undefined, candidates: manyCandidates, fileCount: 10 }), true, 'index updates preserve the definition chooser');
+  await page.keyboard.press('Escape');
   await chooser.selectOption('port-1');
   assert.ok(await page.evaluate(() => window.sent.some(m => m.type === 'choose' && m.id === 'port-1')));
   await page.setViewportSize({ width: 520, height: 700 });

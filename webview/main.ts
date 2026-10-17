@@ -133,7 +133,7 @@ function drawNode(node: GraphNode): HTMLElement {
   const branch = el('div', 'branch');
   const card = el('article', 'node'); card.dataset.nodeName = node.name;
   const openId = node.sites[0]?.access ? node.sites[0].id : node.symbolId ?? node.sites[0]?.id;
-  const title = button('', () => send('preview', { id: openId }), '');
+  const title = button('', () => send('selectNode', { key: node.key }), '');
   title.className = 'node-title'; title.dataset.key = node.key;
   title.dataset.preview = openId;
   title.append(icon(node.kind), el('span', 'symbol-name', node.symbolId ? node.name : node.sites[0]?.name ?? node.name));
@@ -164,38 +164,54 @@ function drawNode(node: GraphNode): HTMLElement {
   if (node.children.length) { const children = el('div', 'children'); node.children.forEach(n => children.append(drawNode(n))); branch.append(children); }
   return branch;
 }
+// Keep native selects mounted while background index/preview messages arrive.
+const brand = el('strong', 'brand', `C Relations v${__EXTENSION_VERSION__}`);
+const mode = el('select');
+const depth = el('select'); depth.setAttribute('aria-label', 'Depth');
+for (let n = 1; n <= 8; n++) { const option = el('option', '', `${n} ${n === 1 ? 'level' : 'levels'}`); option.value = String(n); depth.append(option); }
+depth.onchange = () => send('depth', { value: Number(depth.value) });
+const lock = button('', () => send('lock'));
+const skipLabel = el('label', 'skip'); const skip = el('input'); skip.type = 'checkbox';
+skipLabel.title = 'Skip branches disabled by literal #if/#elif 0 or 1. Macro conditions (#ifdef, #ifndef, defined) are kept; #define and #undef are not evaluated.';
+skip.onchange = () => send('skip', { value: skip.checked }); skipLabel.append(skip, document.createTextNode('Skip inactive branches'));
+toolbar.append(brand, mode, depth, lock, skipLabel, button('Rebuild index', () => send('refresh')));
+let variableMode: boolean | undefined;
+let candidateSignature: string | undefined;
 function render(state: ViewState) {
-  toolbar.replaceChildren();
-  const brand = el('strong', 'brand', `C Relations v${__EXTENSION_VERSION__}`);
   const variable = state.graph?.root.kind === 'variable';
-  const mode = el('select'); mode.setAttribute('aria-label', variable ? 'Variable access' : 'Relation type');
-  const options = variable ? [['all', 'Variable · All uses'], ['read', 'R · Read (includes RW)'], ['write', 'W · Write (includes RW)'], ['readwrite', accessNames.readwrite], ['address', accessNames.address]]
-    : [['references', 'References · All references'], ['callers', 'Callers · Direct calls']];
-  for (const [value, label] of options) {
-    const option = el('option', '', label); option.value = value; mode.append(option);
-  }
-  mode.value = variable ? state.accessFilter : state.mode; mode.onchange = () => send(variable ? 'access' : 'mode', { value: mode.value });
-  const depth = el('select'); depth.setAttribute('aria-label', 'Depth');
-  for (let n = 1; n <= 8; n++) { const option = el('option', '', `${n} ${n === 1 ? 'level' : 'levels'}`); option.value = String(n); depth.append(option); }
-  depth.value = String(state.depth); depth.onchange = () => send('depth', { value: Number(depth.value) });
-  const lock = button(state.locked ? 'Pinned · Follow paused' : 'Following selection', () => send('lock')); lock.setAttribute('aria-pressed', String(state.locked));
-  lock.title = state.locked ? 'Click to unpin and follow the selected symbol.' : 'Click to pin the current Relation and pause following selection.';
-  const skipLabel = el('label', 'skip'); const skip = el('input'); skip.type = 'checkbox'; skip.checked = state.skipInactive;
-  skipLabel.title = 'Skip branches disabled by literal #if/#elif 0 or 1. Macro conditions (#ifdef, #ifndef, defined) are kept; #define and #undef are not evaluated.';
-  skip.onchange = () => send('skip', { value: skip.checked }); skipLabel.append(skip, document.createTextNode('Skip inactive branches'));
-  toolbar.append(brand, mode, depth, lock, skipLabel, button('Rebuild index', () => send('refresh')));
-  candidates.replaceChildren();
-  if (state.candidates.length) {
-    const label = el('label', '', `${state.candidates.length} definitions`); label.htmlFor = 'definition-choice';
-    const choice = el('select'); choice.id = 'definition-choice'; choice.setAttribute('aria-label', 'Select definition');
-    const placeholder = el('option', '', 'Select a file'); placeholder.value = ''; placeholder.disabled = true; placeholder.selected = true;
-    choice.append(placeholder);
-    for (const candidate of state.candidates) {
-      const option = el('option', '', `${decodeURIComponent(candidate.location.uri).replace(/^file:\/\//, '')}:${candidate.location.line + 1}`);
-      option.value = candidate.id; choice.append(option);
+  if (variable !== variableMode) {
+    variableMode = variable;
+    mode.setAttribute('aria-label', variable ? 'Variable access' : 'Relation type');
+    mode.replaceChildren();
+    const options = variable ? [['all', 'Variable · All uses'], ['read', 'R · Read (includes RW)'], ['write', 'W · Write (includes RW)'], ['readwrite', accessNames.readwrite], ['address', accessNames.address]]
+      : [['references', 'References · All references'], ['callers', 'Callers · Direct calls']];
+    for (const [value, label] of options) {
+      const option = el('option', '', label); option.value = value; mode.append(option);
     }
-    choice.onchange = () => send('choose', { id: choice.value });
-    candidates.append(label, choice);
+  }
+  const modeValue = variable ? state.accessFilter : state.mode;
+  if (mode.value !== modeValue) mode.value = modeValue;
+  mode.onchange = () => send(variable ? 'access' : 'mode', { value: mode.value });
+  if (depth.value !== String(state.depth)) depth.value = String(state.depth);
+  lock.textContent = state.locked ? 'Pinned · Follow paused' : 'Following selection'; lock.setAttribute('aria-pressed', String(state.locked));
+  lock.title = state.locked ? 'Click to unpin and follow the selected symbol.' : 'Click to pin the current Relation and pause following selection.';
+  skip.checked = state.skipInactive;
+  const nextCandidates = JSON.stringify(state.candidates);
+  if (nextCandidates !== candidateSignature) {
+    candidateSignature = nextCandidates;
+    candidates.replaceChildren();
+    if (state.candidates.length) {
+      const label = el('label', '', `${state.candidates.length} definitions`); label.htmlFor = 'definition-choice';
+      const choice = el('select'); choice.id = 'definition-choice'; choice.setAttribute('aria-label', 'Select definition');
+      const placeholder = el('option', '', 'Select a file'); placeholder.value = ''; placeholder.disabled = true; placeholder.selected = true;
+      choice.append(placeholder);
+      for (const candidate of state.candidates) {
+        const option = el('option', '', `${decodeURIComponent(candidate.location.uri).replace(/^file:\/\//, '')}:${candidate.location.line + 1}`);
+        option.value = candidate.id; choice.append(option);
+      }
+      choice.onchange = () => send('choose', { id: choice.value });
+      candidates.append(label, choice);
+    }
   }
   graphHeader.replaceChildren(el('strong', '', 'Relation'), el('span', 'muted', state.graph?.root.name ?? state.candidates[0]?.name ?? 'Select a symbol'));
   if (state.graph) graphHeader.dataset.rootName = state.graph.root.name; else delete graphHeader.dataset.rootName;

@@ -117,6 +117,22 @@ export class RelationView implements vscode.WebviewViewProvider, vscode.Disposab
     switch (m.type) {
       case 'ready': this.refresh(); this.track(vscode.window.activeTextEditor); break;
       case 'preview': if (typeof m.id === 'string' && this.locations.has(m.id)) { this.preview(m.id); this.publish(); } break;
+      case 'selectNode': {
+        const node = typeof m.key === 'string' ? this.nodes.get(m.key) : undefined;
+        if (!node) return;
+        this.selection = node.sites[0]?.access ? node.sites[0].id : node.symbolId ?? node.sites[0]?.id;
+        if (node.symbolId && !node.cycle) {
+          // Preserve a deeper inherited expansion, including explicit ancestor overrides.
+          let levels = this.state.depth, path = '';
+          for (const part of node.key.split('/')) {
+            if (path) levels--;
+            path = path ? `${path}/${part}` : part;
+            levels = this.expanded[path] ?? levels;
+          }
+          this.expanded[node.key] = Math.max(levels, this.state.depth);
+        }
+        this.refresh(); break;
+      }
       case 'navigateContext': {
         const preview = this.state.context;
         if (!preview || m.uri !== preview.location.uri || !Number.isInteger(m.line) || !Number.isInteger(m.column)) return;

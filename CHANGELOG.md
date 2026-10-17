@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.17 — 2026-10-17
+
+- Keep depth and relation-mode selectors mounted during background updates so open menus remain usable. Preserve unchanged definition choices.
+- Clicking a Relation symbol previews it and expands callers/references from that node using the selected depth, preserving the root and existing deeper branches.
+- Add browser menu-interaction and Extension Host click-expansion regressions.
+
 ## 0.1.16 — 2026-10-17
 
 - Include the large-workspace improvements prepared in 0.1.15, which was not published because Windows integration validation failed.

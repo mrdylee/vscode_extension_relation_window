@@ -64,6 +64,28 @@ export async function run() {
   assert.equal(api.view.state.graph.root.children.find((g: any) => g.name === 'control_task').children.length, 0);
   await api.view.handleMessage({ type: 'expand', key: control.key });
   assert.ok(api.view.state.graph.root.children.find((g: any) => g.name === 'control_task').children.length);
+  const chainUri = vscode.Uri.joinPath(root, 'click-expansion.c');
+  await vscode.workspace.fs.writeFile(chainUri, Buffer.from('void launch(void){main();}'));
+  await new Promise(resolve => setTimeout(resolve, 500));
+  await api.workspace.whenIdle();
+  for (const depth of [1, 2]) {
+    await api.view.handleMessage({ type: 'depth', value: depth });
+    await api.view.handleMessage({ type: 'collapse', key: control.key });
+    await api.view.handleMessage({ type: 'selectNode', key: control.key });
+    const clicked = api.view.state.graph.root.children.find((g: any) => g.name === 'control_task');
+    const main = clicked.children.find((g: any) => g.name === 'main');
+    assert.ok(main, 'click expands callers from selected node');
+    assert.equal(main.children.some((g: any) => g.name === 'launch'), depth === 2, 'click uses toolbar depth from selected node');
+    assert.equal(api.view.state.context.location.start, control.location.start, 'click still previews symbol');
+    assert.equal(api.view.state.graph.root.name, 'check_fault', 'click preserves root');
+    assert.ok(editor.selection.active.isEqual(before), 'click preserves main editor');
+    const expandedGraph = JSON.stringify(api.view.state.graph);
+    await api.view.handleMessage({ type: 'selectNode', key: control.key });
+    assert.equal(JSON.stringify(api.view.state.graph), expandedGraph, 'repeated click does not collapse or grow indefinitely');
+  }
+  await vscode.workspace.fs.delete(chainUri);
+  await new Promise(resolve => setTimeout(resolve, 500));
+  await api.workspace.whenIdle();
   await api.view.handleMessage({ type: 'lock' });
   const other = document.getText().indexOf('background_task(void)');
   editor.selection = new vscode.Selection(document.positionAt(other), document.positionAt(other));
