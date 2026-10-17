@@ -48,7 +48,7 @@ try {
   const caller = page.locator('[data-node-name="control_task"]');
   assert.ok((await caller.boundingBox()).height <= 26, 'compact single-line node');
   assert.equal(await caller.locator('.site').count(), 0);
-  const popup = page.getByRole('dialog', { name: '심볼 상세 정보' });
+  const popup = page.getByRole('dialog', { name: 'Symbol details' });
   await caller.hover();
   await page.waitForTimeout(650);
   assert.equal(await popup.isVisible(), false, 'hover waits for one second');
@@ -119,11 +119,11 @@ try {
   await page.keyboard.press('Space');
   await popup.waitFor({ state: 'visible', timeout: 500 });
   await page.keyboard.press('Escape');
-  await page.getByRole('button', { name: '자동 추적 중', exact: true }).click();
-  const pinned = page.getByRole('button', { name: '고정됨 · 추적 중지', exact: true });
+  await page.getByRole('button', { name: 'Following selection', exact: true }).click();
+  const pinned = page.getByRole('button', { name: 'Pinned · Follow paused', exact: true });
   assert.equal(await pinned.getAttribute('aria-pressed'), 'true');
   await pinned.click();
-  assert.equal(await page.getByRole('button', { name: '자동 추적 중', exact: true }).getAttribute('aria-pressed'), 'false');
+  assert.equal(await page.getByRole('button', { name: 'Following selection', exact: true }).getAttribute('aria-pressed'), 'false');
   const divider = page.getByRole('separator');
   await divider.focus();
   await page.keyboard.press('ArrowLeft');
@@ -150,9 +150,9 @@ try {
   state.mode = 'callers';
   preview(state.graph.root.symbolId);
   await page.evaluate(state => window.dispatchEvent(new MessageEvent('message', { data: { type: 'state', state } })), state);
-  const accessSelector = page.getByRole('combobox', { name: '변수 접근 종류' });
+  const accessSelector = page.getByRole('combobox', { name: 'Variable access' });
   assert.equal(await accessSelector.inputValue(), 'all');
-  assert.equal(await page.getByRole('combobox', { name: '관계 종류' }).count(), 0);
+  assert.equal(await page.getByRole('combobox', { name: 'Relation type' }).count(), 0);
   assert.equal(await page.locator('[data-node-name="state"] .symbol-icon').getAttribute('data-kind'), 'variable');
   for (const theme of ['vscode-light', 'vscode-dark']) {
     await page.evaluate(theme => { document.body.className = theme; }, theme);
@@ -174,17 +174,17 @@ try {
   await page.keyboard.press('Escape');
   for (const [filter, names] of [['read', ['reader', 'updater']], ['write', ['updater', 'writer']], ['readwrite', ['updater']], ['address', ['escape']]]) {
     await accessSelector.selectOption(filter);
-    await page.waitForFunction(value => document.querySelector('[aria-label="변수 접근 종류"]').value === value, filter);
+    await page.waitForFunction(value => document.querySelector('[aria-label="Variable access"]').value === value, filter);
     const direct = await page.locator('.graph > .branch > .children > .branch > .node').evaluateAll(nodes => nodes.map(n => n.dataset.nodeName));
     assert.deepEqual(direct, names);
   }
   await page.locator('[data-node-name="escape"] .node-title').focus();
   await page.keyboard.press('Space');
-  assert.ok((await popup.textContent()).includes('값을 변경하는지는 추적하지 않습니다'));
+  assert.ok((await popup.textContent()).includes('Writes inside the receiving function are not tracked'));
   await page.keyboard.press('Escape');
   state.graph = fixture.graph;
   await page.evaluate(state => window.dispatchEvent(new MessageEvent('message', { data: { type: 'state', state } })), state);
-  assert.equal(await page.getByRole('combobox', { name: '관계 종류' }).inputValue(), 'callers', 'function mode is preserved');
+  assert.equal(await page.getByRole('combobox', { name: 'Relation type' }).inputValue(), 'callers', 'function mode is preserved');
   const prefix = '/* 한글 😀 */ ';
   const unicodePreview = { ...state.context, firstLine: 120, text: prefix + 'state++;\r', tokens: [[
     { text: prefix, kind: 'comment' }, { text: 'state', kind: 'variable' }, { text: '++;\r', kind: 'plain' }
@@ -197,7 +197,7 @@ try {
   assert.equal(unicodeNavigation.text, prefix + 'state++;', 'CRLF lines match VS Code line text');
   const manyCandidates = Array.from({ length: 80 }, (_, i) => ({ id: `port-${i}`, name: 'PORT_READY', location: { uri: `file:///workspace/portable/port-${i}/portmacro.h`, line: 10 } }));
   await page.evaluate(state => window.dispatchEvent(new MessageEvent('message', { data: { type: 'state', state } })), { ...state, graph: undefined, context: undefined, candidates: manyCandidates });
-  const chooser = page.getByRole('combobox', { name: '정의 선택' });
+  const chooser = page.getByRole('combobox', { name: 'Select definition' });
   assert.equal(await chooser.count(), 1, 'many definitions use a single compact chooser');
   assert.ok((await page.locator('.candidates').boundingBox()).height <= 36);
   assert.ok((await page.locator('.graph').boundingBox()).height > 500, 'candidate list preserves graph space');

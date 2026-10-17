@@ -76,7 +76,7 @@ test('release fetch distinguishes absence, HTTP failures and malformed responses
   assert.equal(await fetchLatestRelease(mock('',404)), undefined);
   await assert.rejects(fetchLatestRelease(mock('',403)), /403/);
   await assert.rejects(fetchLatestRelease(mock('not json')));
-  await assert.rejects(fetchLatestRelease(mock(' '.repeat(2 * 1024 * 1024 + 1))), /크기 제한/);
+  await assert.rejects(fetchLatestRelease(mock(' '.repeat(2 * 1024 * 1024 + 1))), /size limit/);
   assert.deepEqual(await fetchLatestRelease(mock(JSON.stringify(latest()))), latest());
 });
 
@@ -91,6 +91,6 @@ test('download verifies size and digest before returning installation bytes', as
     return new Response(bytes);
   }) as typeof fetch;
   assert.deepEqual(await downloadRelease(release,fetcher),bytes);
-  await assert.rejects(downloadRelease({...release,size:bytes.length+1},fetcher),/크기/);
-  await assert.rejects(downloadRelease({...release,digest:'sha256:'+'0'.repeat(64)},fetcher),/체크섬/);
+  await assert.rejects(downloadRelease({...release,size:bytes.length+1},fetcher),/size/);
+  await assert.rejects(downloadRelease({...release,digest:'sha256:'+'0'.repeat(64)},fetcher),/checksum/);
 });

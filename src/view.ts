@@ -35,7 +35,7 @@ export class RelationView implements vscode.WebviewViewProvider, vscode.Disposab
     const css = view.webview.asWebviewUri(vscode.Uri.joinPath(assets, 'webview.css'));
     const js = view.webview.asWebviewUri(vscode.Uri.joinPath(assets, 'webview.js'));
     const nonce = randomBytes(18).toString('hex');
-    view.webview.html = `<!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+    view.webview.html = `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
       <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${view.webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
       <link rel="stylesheet" href="${css}"><title>C Relations</title></head><body><div id="app"></div><script nonce="${nonce}" src="${js}"></script></body></html>`;
     view.webview.onDidReceiveMessage(message => { void this.handleMessage(message).catch(error => vscode.window.showErrorMessage(`C Relations: ${String(error)}`)); });
@@ -148,7 +148,7 @@ export class RelationView implements vscode.WebviewViewProvider, vscode.Disposab
         if (typeof m.key !== 'string' || !this.nodes.has(m.key)) return;
         let levels = m.type === 'collapse' ? 0 : 1;
         if (m.type === 'expandSpecial') {
-          const value = await vscode.window.showInputBox({ title: '선택한 노드에서 추가로 펼칠 단계', value: '2', validateInput: v => /^[1-8]$/.test(v) ? undefined : '1~8 사이의 숫자를 입력하세요.' });
+          const value = await vscode.window.showInputBox({ title: 'Additional levels to expand from the selected node', value: '2', validateInput: v => /^[1-8]$/.test(v) ? undefined : 'Enter a number from 1 to 8.' });
           if (!value || !this.nodes.has(m.key)) return;
           levels = Number(value);
         }

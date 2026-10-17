@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.14 — 2026-10-17
+
+- Translate interface labels, tooltips, accessibility labels, dialogs, and update messages into English.
+- Clarify the inactive-branch filter: literal #if/#elif 0 or 1 conditions are evaluated; macro conditions remain visible. Analyzer behavior is unchanged.
+
 ## 0.1.13 — 2026-10-17
 
 - 고정 버튼에 다음 동작 대신 현재 상태인 `자동 추적 중` / `고정됨 · 추적 중지`를 표시해 의미가 반대로 읽히던 혼동 해소.
