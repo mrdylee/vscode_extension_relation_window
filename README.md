@@ -13,6 +13,15 @@ VS Code 데스크톱 1.95 이상이 필요합니다. 분석은 로컬 WASM으로
 
 **WSL 설치:** Windows의 VS Code에서 Microsoft WSL 확장을 설치한 뒤 **WSL: Reopen Folder in WSL**로 C 소스 폴더를 엽니다. 그 창에서 VSIX를 설치하고 확장 목록의 **WSL: 배포판 이름**에 C Relation Explorer가 있는지 확인합니다. 필요하면 **Install in WSL**을 선택합니다. [VS Code WSL 안내](https://code.visualstudio.com/docs/remote/wsl#_managing-extensions)
 
+## 확장 안에서 설정과 사용법 열기 (v0.1.20 이상)
+
+GitHub를 방문하지 않아도 C Relations 상단의 두 버튼으로 사용할 수 있습니다.
+
+- **Settings**: 현재 프로젝트의 Include/Exclude 설정을 엽니다. 폴더를 열지 않은 경우 사용자 설정을 엽니다. 다중 폴더 워크스페이스에서는 설정 화면의 폴더 탭에서 개별 범위를 지정할 수 있습니다.
+- **Help**: VSIX에 포함된 [사용 안내](USER_GUIDE.md)를 VS Code 문서 미리보기로 엽니다. 인터넷 연결 없이도 탐색 방법, 설정 예제, 비활성 코드 처리와 문제 해결을 읽을 수 있습니다. 현재 Relation은 유지됩니다.
+
+명령 팔레트에서도 **C Relations: Configure Analysis Scope**, **C Relations: Open User Guide**를 실행할 수 있습니다. 버튼과 내장 안내는 영어로 표시합니다.
+
 ## 분석 범위 설정: Include / Exclude
 
 Include는 v0.1.18부터 구현되었으며, 여러 패턴을 함께 사용할 때의 누락 수정까지 포함한 **v0.1.19 이상**을 권장합니다. Exclude는 v0.1.16 이상에서 사용할 수 있습니다. 분석할 폴더가 적으면 **Include**로 포함할 범위를 지정하고, 불필요한 도구·생성 코드 폴더는 **Exclude**로 제외하세요. 예를 들어 Polyspace 설치 파일이나 분석 결과가 소스 폴더 안에 있다면 해당 경로를 제외할 수 있습니다. 기본 사용자 제외 목록은 비어 있으므로 Polyspace나 SDK 폴더가 자동으로 제외되지는 않습니다.

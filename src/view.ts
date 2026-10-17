@@ -116,6 +116,8 @@ export class RelationView implements vscode.WebviewViewProvider, vscode.Disposab
     const m = message as Record<string, unknown>;
     switch (m.type) {
       case 'ready': this.refresh(); this.track(vscode.window.activeTextEditor); break;
+      case 'settings': await vscode.commands.executeCommand('cRelation.openSettings'); break;
+      case 'help': await vscode.commands.executeCommand('cRelation.help'); break;
       case 'preview': if (typeof m.id === 'string' && this.locations.has(m.id)) { this.preview(m.id); this.publish(); } break;
       case 'selectNode': {
         const node = typeof m.key === 'string' ? this.nodes.get(m.key) : undefined;

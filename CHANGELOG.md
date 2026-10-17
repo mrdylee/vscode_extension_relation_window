@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.20 — 2026-10-17
+
+- Add Settings and Help buttons to the C Relations toolbar and matching Command Palette commands.
+- Settings opens Include/Exclude in workspace settings, falling back to user settings without an open folder.
+- Bundle an offline English user guide covering navigation, scope examples, inactive branches, troubleshooting and WSL updates; open it in VS Code Markdown preview without changing the Relation root.
+
 ## 0.1.19 — 2026-10-17
 
 - Search each Include pattern independently so brace alternatives and literal commas retain their meaning when multiple patterns are configured. Deduplicate files before applying the initial file cap.

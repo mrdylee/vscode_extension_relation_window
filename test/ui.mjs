@@ -52,6 +52,10 @@ try {
   });
   await page.goto(`http://127.0.0.1:${server.address().port}`);
   await page.locator('[data-node-name="check_fault"]').waitFor({ timeout: 3000 });
+  await page.getByRole('button', { name: 'Settings', exact: true }).click({ timeout: 3000 });
+  assert.ok(await page.evaluate(() => window.sent.some(m => m.type === 'settings')), 'Settings button requests scope configuration');
+  await page.getByRole('button', { name: 'Help', exact: true }).click();
+  assert.ok(await page.evaluate(() => window.sent.some(m => m.type === 'help')), 'Help button requests offline guide');
   const depthSelector = page.getByRole('combobox', { name: 'Depth', exact: true });
   for (const level of [2, 3, 4, 5]) {
     await depthSelector.click();

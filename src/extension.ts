@@ -16,6 +16,11 @@ export function activate(context: vscode.ExtensionContext) {
       view.track(vscode.window.activeTextEditor);
     }),
     vscode.commands.registerCommand('cRelation.reindex', () => workspace.reindex()),
+    vscode.commands.registerCommand('cRelation.openSettings', () => vscode.commands.executeCommand(
+      vscode.workspace.workspaceFolders?.length ? 'workbench.action.openWorkspaceSettings' : 'workbench.action.openSettings',
+      { query: '@id:cRelation.include @id:cRelation.exclude', jsonEditor: false })),
+    vscode.commands.registerCommand('cRelation.help', () => vscode.commands.executeCommand(
+      'markdown.showPreview', vscode.Uri.joinPath(context.extensionUri, 'USER_GUIDE.md'))),
     vscode.window.onDidChangeTextEditorSelection(event => {
       clearTimeout(timer); timer = setTimeout(() => view.track(event.textEditor), 80);
     }),

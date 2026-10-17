@@ -31,6 +31,8 @@ export async function run() {
   globalThis.fetch = originalFetch;
   assert.equal(automaticReleaseChecks, 0, 'test-mode activation never checks GitHub automatically');
   assert.ok((await vscode.commands.getCommands()).includes('cRelation.checkForUpdates'));
+  assert.ok((await vscode.commands.getCommands()).includes('cRelation.openSettings'), 'scope settings command registered');
+  assert.ok((await vscode.commands.getCommands()).includes('cRelation.help'), 'offline help command registered');
   assert.equal(api.workspace.index.files.size, 93, 'all files indexed beyond the document cache limit');
   let openedByReindex = 0;
   const opening = vscode.workspace.onDidOpenTextDocument(() => openedByReindex++);
@@ -298,6 +300,18 @@ export async function run() {
   assert.ok(api.workspace.index.files.has(outsideUri.toString()), 'empty include restores the full scope');
   assert.ok(api.workspace.index.files.get(faultDocument.uri.toString()).text.includes('outside include'), 'restored scope uses unsaved content');
   assert.equal(api.workspace.index.files.has(excludedUri.toString()), false, 'empty include still respects exclude');
+  const rootBeforeHelp = api.view.state.graph?.root.symbolId;
+  const guideUri = vscode.Uri.joinPath(ext.extensionUri, 'USER_GUIDE.md');
+  const guide = Buffer.from(await vscode.workspace.fs.readFile(guideUri)).toString('utf8');
+  assert.ok(guide.includes('Exclude always wins.') && guide.includes('cRelation.include'), 'bundled guide explains scope precedence');
+  await api.view.handleMessage({ type: 'help' });
+  await new Promise(resolve => setTimeout(resolve, 500));
+  assert.ok(vscode.window.tabGroups.all.flatMap(group => group.tabs).some(tab => tab.input instanceof vscode.TabInputWebview && /USER_GUIDE/.test(tab.label)), 'Help opens a rendered offline guide');
+  assert.equal(api.view.state.graph?.root.symbolId, rootBeforeHelp, 'Help preserves Relation root');
+  await api.view.handleMessage({ type: 'settings' });
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.ok(vscode.window.tabGroups.all.flatMap(group => group.tabs).some(tab => tab.label === 'Settings'), 'Settings opens the native settings editor');
+  assert.equal(api.view.state.graph?.root.symbolId, rootBeforeHelp, 'Settings preserves Relation root');
   const output = process.env.C_RELATION_TEST_OUTPUT!;
   await mkdir(path.dirname(output), { recursive: true });
   await writeFile(output, JSON.stringify({ passed: true, checks: ['Context source navigation and relation reroot', 'Context cross-file variable navigation', 'Context lock and stale-message checks', 'selected identifier tracking', 'selection retry after indexing', 'unlock follows latest editor', 'same-symbol graph reuse', 'variable selection and access filters', 'variable actual-site preview preserves editor', 'variable access filter validation', 'variable uses continue into caller tree', 'activation', '93-file index completion', 'indexing does not open documents', 'WASM worker', 'click tracking', 'variable icon data', 'call sites', 'Context preserves editor', 'mode/depth/expand/collapse', 'locked root', 'explicit source open', 'invalid message target', '#if0 setting reindex', 'unsaved buffer', 'file create/delete', 'ambiguous symbol clears stale graph and Context', 'candidate selection'] }, null, 2));

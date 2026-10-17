@@ -181,7 +181,9 @@ const lock = button('', () => send('lock'));
 const skipLabel = el('label', 'skip'); const skip = el('input'); skip.type = 'checkbox';
 skipLabel.title = 'Skip branches disabled by literal #if/#elif 0 or 1. Macro conditions (#ifdef, #ifndef, defined) are kept; #define and #undef are not evaluated.';
 skip.onchange = () => send('skip', { value: skip.checked }); skipLabel.append(skip, document.createTextNode('Skip inactive branches'));
-toolbar.append(brand, mode, depth, lock, skipLabel, button('Rebuild index', () => send('refresh')));
+toolbar.append(brand, mode, depth, lock, skipLabel, button('Rebuild index', () => send('refresh')),
+  button('Settings', () => send('settings'), 'Configure Include and Exclude for this workspace'),
+  button('Help', () => send('help'), 'Open the bundled offline user guide'));
 let variableMode: boolean | undefined;
 let candidateSignature: string | undefined;
 function render(state: ViewState) {
