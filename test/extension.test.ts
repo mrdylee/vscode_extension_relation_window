@@ -37,7 +37,7 @@ export async function run() {
   const offset = document.getText().indexOf('check_fault(1)');
   editor.selection = new vscode.Selection(document.positionAt(offset), document.positionAt(offset));
   await new Promise(resolve => setTimeout(resolve, 500));
-  const selected = api.view.state;
+  const selected = { ...api.view.state };
   assert.ok(selected.graph, JSON.stringify({ status: api.workspace.status, failures: [...api.workspace.failures], files: [...api.workspace.index.files.keys()], selected }));
   assert.equal(selected.graph.root.name, 'check_fault', 'selected symbol is graph root');
   const groups = selected.graph.root.children;

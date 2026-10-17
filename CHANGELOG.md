@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.10
+
+- Windows/macOS/WSL 다운로드와 GitHub Releases 자동 게시 추가.
+- Windows/macOS/Ubuntu의 Extension Host 검증 추가 및 재분석 중 공유 상태가 바뀌던 테스트 수정.
+
+
 ## 0.1.9 — 2026-10-17
 
 - 지정 GitHub 저장소의 정식 Releases를 하루에 한 번 자동 확인하고, 변경 내역과 버전을 보여준 뒤 설치 여부 확인.
