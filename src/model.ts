@@ -24,6 +24,7 @@ export interface RelationGroup {
 }
 export interface GraphNode {
   key: string; symbolId?: string; name: string; kind: Kind; location: Location;
+  definition?: boolean;
   conditions: string[]; sites: RelationSite[]; children: GraphNode[];
   cycle: boolean; expanded: boolean; ambiguous: boolean;
 }

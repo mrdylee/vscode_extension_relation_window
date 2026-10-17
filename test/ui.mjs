@@ -56,6 +56,19 @@ try {
   assert.ok(await page.evaluate(() => window.sent.some(m => m.type === 'settings')), 'Settings button requests scope configuration');
   await page.getByRole('button', { name: 'Help', exact: true }).click();
   assert.ok(await page.evaluate(() => window.sent.some(m => m.type === 'help')), 'Help button requests offline guide');
+  for (const form of ['declaration', 'definition']) {
+    const glyph = page.locator(`.symbol-icon[data-form="${form}"]`).first();
+    assert.equal(await glyph.locator('svg').count(), 1, `${form} uses a vector icon`);
+    const box = await glyph.boundingBox();
+    assert.equal(box.width, 16, 'function icon keeps the original width');
+    assert.equal(box.height, 16, 'function icon keeps the original height');
+    const node = glyph.locator('..');
+    assert.ok((await node.getAttribute('aria-label')).includes(`Function ${form}`));
+    await node.focus();
+    await page.keyboard.press('Space');
+    assert.equal(await page.locator('.detail-kind').textContent(), `Function ${form}`);
+    await page.keyboard.press('Escape');
+  }
   const depthSelector = page.getByRole('combobox', { name: 'Depth', exact: true });
   for (const level of [2, 3, 4, 5]) {
     await depthSelector.click();
@@ -177,7 +190,9 @@ try {
   assert.deepEqual(errors, []);
   await mkdir('output/playwright', { recursive: true });
   await page.screenshot({ path: 'output/playwright/relation-context.png', fullPage: true });
+  const functionIconColors = await page.locator('.symbol-icon[data-form]').evaluateAll(nodes => nodes.map(node => getComputedStyle(node).color));
   await page.evaluate(() => document.body.classList.add('vscode-light'));
+  assert.notDeepEqual(await page.locator('.symbol-icon[data-form]').evaluateAll(nodes => nodes.map(node => getComputedStyle(node).color)), functionIconColors, 'function icons use stronger colors on light backgrounds');
   const colors = await page.evaluate(() => ['function', 'type', 'keyword'].map(kind => getComputedStyle(document.querySelector('.syntax-' + kind)).color));
   assert.equal(new Set(colors).size, 3, 'distinct syntax colors in light theme');
   await page.screenshot({ path: 'output/playwright/relation-context-light.png', fullPage: true });

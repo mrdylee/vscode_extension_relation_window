@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.21 — 2026-10-17
+
+- Distinguish function declarations with an outlined document icon and definitions with a filled cube, preserving the 16×16 footprint.
+- Name the function form in details and accessible labels; keep conditional/candidate/recursive outlines separate.
+
 ## 0.1.20 — 2026-10-17
 
 - Add Settings and Help buttons to the C Relations toolbar and matching Command Palette commands.

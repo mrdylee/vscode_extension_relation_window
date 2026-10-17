@@ -28,7 +28,12 @@ footer { display: flex; gap: 14px; flex-wrap: wrap; padding: 7px 12px; border-to
 @media (max-width: 640px) { .panes { grid-template-columns: 1fr; grid-template-rows: 45% 55%; }.divider { display: none; }.context { border-right: 0; border-bottom: 1px solid var(--border); }.brand { display: none; }.skip { margin-left: 0; } }
 
 .node-title.selected { background: var(--vscode-editor-selectionBackground, #284668); }
-.node-title.uncertain .symbol-icon { border-style: dashed; }
+.symbol-icon[data-form] { border-color: transparent; }
+.node-title.uncertain .symbol-icon { border-style: dashed; border-color: currentColor; }
+.symbol-icon svg { width: 14px; height: 14px; display: block; }
+.symbol-icon[data-form=declaration] { color: #79c9ed; }
+body.vscode-light .symbol-icon[data-form=declaration], body.vscode-high-contrast-light .symbol-icon[data-form=declaration] { color: #0070a8; }
+body.vscode-light .symbol-icon[data-form=definition], body.vscode-high-contrast-light .symbol-icon[data-form=definition] { color: #7542b5; }
 .node-details { position: fixed; z-index: 20; width: 380px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow: auto; padding: 10px; border: 1px solid var(--vscode-editorHoverWidget-border, var(--border)); border-radius: 5px; background: var(--vscode-editorHoverWidget-background, #242a34); box-shadow: 0 4px 18px #0005; }
 .node-details[hidden] { display: none; }
 .detail-name { display: block; font: bold 12px var(--vscode-editor-font-family, monospace); overflow-wrap: anywhere; margin-bottom: 6px; }

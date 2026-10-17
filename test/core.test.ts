@@ -50,6 +50,22 @@ test('parameter and local pointer shadowing are not calls to a same-named global
   assert.ok(fault);
   assert.equal(value.relations(fault.id, 'callers').length, 0);
 });
+test('graph distinguishes function bodies, prototypes and unowned reference sites', () => {
+  const value = index({ 'a.c': 'void fault(void){}\nvoid task(void){fault();}', 'a.h': 'void fault(void);' });
+  // An incomplete analysis can retain a reference without its containing symbol.
+  const incomplete = parse('void unknown(void){(void)&fault;}', 'file:///demo/incomplete.c');
+  incomplete.symbols = [];
+  incomplete.references.forEach(ref => { ref.ownerId = undefined; ref.functionId = undefined; });
+  value.update(incomplete);
+  const definition = value.symbols().find(s => s.name === 'fault' && s.definition)!;
+  const declaration = value.symbols().find(s => s.name === 'fault' && !s.definition)!;
+  const graph = value.graph(definition.id, 'references', 1)!;
+  assert.equal(graph.root.definition, true);
+  assert.equal(graph.root.children.find(n => n.name === 'task')!.definition, true);
+  assert.equal(graph.root.children.find(n => n.sites[0]?.kind === 'declaration')!.definition, false);
+  assert.equal(graph.root.children.find(n => !n.symbolId && n.sites[0]?.kind === 'reference')!.definition, undefined);
+  assert.equal(value.graph(declaration.id, 'references', 0)!.root.definition, false);
+});
 test('ambiguous external definitions remain labelled candidates', () => {
   const value = index({ 'a.c': 'void fault(void){}', 'b.c': 'void fault(void){}', 'use.c': 'void task(void){fault();}' });
   assert.equal(value.resolveAt('file:///demo/use.c', 17).length, 2);

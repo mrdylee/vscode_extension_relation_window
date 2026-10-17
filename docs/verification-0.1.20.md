@@ -11,3 +11,5 @@ Verified locally on macOS on 2026-10-17.
 - The toolbar layout was inspected in the browser screenshot. `git diff --check` passed.
 
 The user's WSL machine was not directly tested. The tag-triggered release workflow runs the existing unit, performance, Extension Host and large-workspace checks on Windows, macOS and Linux before publishing downloads.
+
+Release run 39034060667 passed on all three platforms. The first macOS attempt failed in the pre-existing initial-selection assertion (before Settings/Help tests); its retry passed without code changes. All four public VSIX downloads were checked against SHA256SUMS and contained version 0.1.20 and the bundled guide.

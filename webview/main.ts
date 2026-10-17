@@ -49,7 +49,20 @@ function accessBadge(access: Access, compact = false) {
   badge.dataset.access = access;
   return badge;
 }
-function icon(kind: Kind) { const i = el('span', 'symbol-icon', icons[kind]); i.dataset.kind = kind; i.setAttribute('aria-hidden', 'true'); return i; }
+function kindLabel(node: GraphNode) {
+  return node.kind === 'function' && node.definition !== undefined
+    ? `Function ${node.definition ? 'definition' : 'declaration'}` : kindNames[node.kind];
+}
+function icon(node: GraphNode) {
+  const i = el('span', 'symbol-icon', icons[node.kind]); i.dataset.kind = node.kind; i.setAttribute('aria-hidden', 'true');
+  if (node.kind === 'function' && node.definition !== undefined) {
+    i.dataset.form = node.definition ? 'definition' : 'declaration';
+    i.innerHTML = node.definition
+      ? '<svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" opacity=".95" d="M8 1.5 14 5 8 8.5 2 5Z"/><path fill="currentColor" opacity=".65" d="M2 5.8 7.5 9v5.5L2 11.3Z"/><path fill="currentColor" opacity=".4" d="m8.5 9 5.5-3.2v5.5l-5.5 3.2Z"/></svg>'
+      : '<svg viewBox="0 0 16 16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" d="M3.5 1.5h5L12.5 5v9.5h-9ZM8.5 1.5V5h4M5.5 8h5M5.5 10.5h3.5"/></svg>';
+  }
+  return i;
+}
 function filename(uri: string) { return decodeURIComponent(uri.split('/').pop() ?? uri); }
 const popup = el('div', 'node-details'); popup.hidden = true;
 popup.setAttribute('role', 'dialog'); popup.setAttribute('aria-label', 'Symbol details'); popup.id = 'symbol-details';
@@ -104,7 +117,7 @@ function showDetails(node: GraphNode, anchor: HTMLButtonElement) {
   anchor.setAttribute('aria-expanded', 'true');
   popup.replaceChildren(el('strong', `detail-name syntax-${node.kind}`, node.symbolId ? node.name : node.sites[0]?.name ?? node.name));
   const meta = el('div', 'detail-meta');
-  meta.append(el('span', `detail-kind syntax-${node.kind}`, kindNames[node.kind]), document.createTextNode(' · '),
+  meta.append(el('span', `detail-kind syntax-${node.kind}`, kindLabel(node)), document.createTextNode(' · '),
     el('span', 'detail-path', decodeURIComponent(node.location.uri)), el('span', 'detail-location', `:${node.location.line + 1}`));
   popup.append(meta);
   if (node.cycle) popup.append(el('div', 'condition detail-warning', 'Recursion: further expansion stopped on this path.'));
@@ -144,12 +157,12 @@ function drawNode(node: GraphNode): HTMLElement {
   const title = button('', event => { if (event.detail <= 1) send('selectNode', { key: node.key }); }, '');
   title.className = 'node-title'; title.dataset.key = node.key;
   title.dataset.preview = openId;
-  title.append(icon(node.kind), el('span', 'symbol-name', node.symbolId ? node.name : node.sites[0]?.name ?? node.name));
+  title.append(icon(node), el('span', 'symbol-name', node.symbolId ? node.name : node.sites[0]?.name ?? node.name));
   const accesses = [...new Set(node.sites.flatMap(site => site.access ? [site.access] : []))];
   for (const access of accesses) title.append(accessBadge(access, true));
   const status = [node.cycle ? 'Recursive' : '', node.ambiguous ? 'Candidate' : '', node.conditions.length || node.sites.some(s => s.conditions.length) ? 'Conditional' : ''].filter(Boolean).join(', ');
   if (status) title.classList.add('uncertain');
-  title.setAttribute('aria-label', [kindNames[node.kind] + ' ' + node.name, ...accesses.map(a => accessNames[a]), status].filter(Boolean).join(', '));
+  title.setAttribute('aria-label', [kindLabel(node) + ' ' + node.name, ...accesses.map(a => accessNames[a]), status].filter(Boolean).join(', '));
   title.setAttribute('aria-haspopup', 'dialog'); title.setAttribute('aria-controls', popup.id); title.setAttribute('aria-expanded', 'false');
   title.onmouseenter = () => scheduleHover(node, title);
   title.onmousemove = () => scheduleHover(node, title);

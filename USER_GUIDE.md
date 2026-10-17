@@ -65,6 +65,8 @@ Other examples: `App/**/*.{c,h}` matches C/H files under App; `**/vendor/**` mat
 
 Functions, variables, types and macros have distinct icons. Context and detail popups use syntax colors; these are not full compiler-based semantic highlighting.
 
+Function declarations (prototypes without a body) use a small blue outlined document. Function definitions (implementations with a body) use a filled purple cube. Both keep the same compact size. A generic `ƒ` remains when a reference has no identified declaration or definition. The popup names the form as **Function declaration** or **Function definition**. A dashed outline separately marks conditional code, ambiguous candidates or recursion; inspect the popup for the reason.
+
 ## Variable reads and writes
 
 Selecting a variable switches the relation filter to **Variable · All uses**, **R · Read**, **W · Write**, **RW · Read/write**, or **& · Address passed**. Read and write filters both include RW operations. Clicking a use node previews the first matching use; its details list other locations.

@@ -154,6 +154,7 @@ export class RelationIndex {
       const cycle = !!symbol && path.has(symbol.id);
       const node: GraphNode = { key, symbolId: symbol?.id, name: symbol?.name ?? group!.name,
         kind: symbol?.kind ?? group!.kind, location: symbol?.location ?? group!.sites[0].location,
+        definition: symbol?.definition ?? (group?.sites.every(site => site.kind === 'declaration') ? false : undefined),
         conditions: symbol?.conditions ?? [], sites: group?.sites ?? [], children: [], cycle,
         expanded: false, ambiguous: group?.sites.some(s => s.ambiguous) ?? false };
       count++;

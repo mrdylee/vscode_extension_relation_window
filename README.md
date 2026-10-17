@@ -13,6 +13,10 @@ VS Code 데스크톱 1.95 이상이 필요합니다. 분석은 로컬 WASM으로
 
 **WSL 설치:** Windows의 VS Code에서 Microsoft WSL 확장을 설치한 뒤 **WSL: Reopen Folder in WSL**로 C 소스 폴더를 엽니다. 그 창에서 VSIX를 설치하고 확장 목록의 **WSL: 배포판 이름**에 C Relation Explorer가 있는지 확인합니다. 필요하면 **Install in WSL**을 선택합니다. [VS Code WSL 안내](https://code.visualstudio.com/docs/remote/wsl#_managing-extensions)
 
+## 함수 아이콘 (v0.1.21 이상)
+
+함수 선언부는 파란 문서, 구현부는 보라색 큐브 아이콘으로 구분합니다. 기존 16×16 크기를 유지하며, 팝업에 `Function declaration` / `Function definition`을 표시합니다. 선언·구현을 특정하지 못한 참조는 일반 `ƒ` 아이콘을 사용합니다. 점선 테두리는 별도로 조건부 코드·후보·재귀 상태를 뜻합니다.
+
 ## 확장 안에서 설정과 사용법 열기 (v0.1.20 이상)
 
 GitHub를 방문하지 않아도 C Relations 상단의 두 버튼으로 사용할 수 있습니다.
