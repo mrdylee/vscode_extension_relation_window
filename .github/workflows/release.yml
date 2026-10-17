@@ -42,7 +42,7 @@ jobs:
       - run: npm ci --ignore-scripts
       - name: Verify release tag
         run: node -e 'if (process.env.GITHUB_REF_NAME !== "v" + require("./package.json").version) process.exit(1)'
-      - run: npm run package
+      - run: mkdir -p artifacts && npm run package
       - name: Prepare downloads and checksums
         run: |
           version=$(node -p 'require("./package.json").version')
