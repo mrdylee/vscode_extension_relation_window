@@ -53,5 +53,12 @@ records, reusing existing variable relations and UI navigation.
 
 ## Publication
 
-- [ ] Commit changes on feature/c-analysis-navigation; preserve main and prior tags.
-- [ ] Push v0.1.26 and verify Windows/macOS/Linux CI plus published assets/checksums.
+- [x] Commit changes on feature/c-analysis-navigation; preserve main and prior tags.
+- [x] Push v0.1.26 and verify Windows/macOS/Linux CI plus published assets/checksums.
+
+Release verified: v0.1.26 at cafd6d3e1d79e243f43a12cccb69d2e9eec244d1.
+[Workflow 39040771427](https://github.com/mrdylee/vscode_extension_relation_window/actions/runs/39040771427)
+passed all three OS jobs and publication. The latest public release contains four
+VSIX downloads plus SHA256SUMS.txt; every download was fetched, its checksum
+matched, and its v0.1.26 manifest and offline member guide were inspected.
+Main remains 1c6de467d50d9d69e50cb64d4ccccb7755be7120; v0.1.25 is unchanged.
