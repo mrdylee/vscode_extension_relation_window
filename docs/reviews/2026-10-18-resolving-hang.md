@@ -78,3 +78,23 @@ and locally verified. Exact confirmation on the user's WSL source workspace is
 still required; this fix does not establish a whole-project wall-clock deadline
 or eliminate all possible analysis delays. Continue the already authorized
 publication workflow with hosted Windows/macOS/Linux verification before release.
+
+## Publication verification
+
+- GitHub Actions **39099286995** completed successfully: Windows, macOS, Ubuntu
+  and release jobs all passed. The public latest release is v0.1.33:
+  https://github.com/mrdylee/vscode_extension_relation_window/releases/tag/v0.1.33.
+- Release tag resolves to `deb32bcda3c47d99ae6714eb95f9fc946d9c7aea`; published
+  2026-10-18 at 05:07:13 UTC. Feature checkpoints and prior version tags remain.
+- Downloaded all four public VSIX copies and SHA256SUMS.txt. Each VSIX is 511,145
+  bytes, reports 0.1.33, and matches the published checksum. Platform-labelled
+  copies are identical universal packages.
+- Public VSIX SHA-256:
+  `5e27896d26303fba8df697ffc23c841f064130adda753744417ddeaf8774927f`.
+  All four production JS/CSS bundles match the locally verified implementation;
+  bundled Help includes the traversal-limit behavior.
+- The production update selector recognizes the actual latest-release metadata
+  from 0.1.32; download size/digest validation accepts the downloaded public VSIX.
+  Detailed evidence: `test-results/release-0.1.33/verification.json` (ignored).
+- This records publication results, not exact reproduction on the user's private
+  WSL project. That confirmation remains the stated verification concern.
