@@ -46,6 +46,26 @@ test('branch and loop joins retain possible targets without pretending a direct 
   const index=project({'main.c':prelude+'void run(int condition){CB fp=foo;if(condition){fp=bar;}while(condition){fp=foo;}fp();}'});
   assert.deepEqual(inferred(index).map(g=>g.name),['bar','foo']);
 });
+test('shared callback values keep separate assignments, numeric indices and evidence', () => {
+  const source = prelude + 'void svc(CB);void run(int condition){CB a=foo,b=a;CB table[]={foo,bar};int i=0,j=i;if(condition){a=bar;i=1;}a();b();table[i]();table[j]();svc(b);}';
+  const index = project({'main.c': source});
+  const at = (call: string) => inferred(index).filter(group => group.sites.some(site => site.location.start === source.indexOf(call))).map(group => group.name).sort();
+  assert.deepEqual(at('a();'), ['bar', 'foo']);
+  assert.deepEqual(at('b();'), ['foo']);
+  assert.deepEqual(at('table[i]();'), ['bar', 'foo']);
+  assert.deepEqual(at('table[j]();'), ['foo']);
+  const b = inferred(index).find(group => group.name === 'foo')!.sites.find(site => site.location.start === source.indexOf('b();'))!;
+  assert.equal(b.inference!.evidence.some(frame => frame.location.start === source.indexOf('a=bar')), false);
+  assert.deepEqual([...index.files.values()].flatMap(file => file.functionArguments ?? []).map(ref => ref.name), ['foo']);
+});
+test('sharing a single value preserves the 64-target candidate limit', () => {
+  const functions = Array.from({length: 70}, (_, n) => `void target${n}(void){}`).join('');
+  const source = 'typedef void(*CB)(void);' + functions + 'void run(int n){CB cb=target0;' +
+    Array.from({length: 69}, (_, n) => `if(n==${n})cb=target${n+1};`).join('') + 'cb();}';
+  const index = project({'main.c': source});
+  assert.equal(inferred(index).length, 64);
+  assert.ok(calls(index).some(group => group.callKind === 'indirect' && group.sites.some(site => site.inference?.incomplete)));
+});
 test('callback arguments propagate through direct and indirect forwarding functions', () => {
   const source=prelude+'static void invoke(CB cb){cb();} static void forward(CB cb){invoke(cb);} void run(void){void (*dispatch)(CB)=forward;dispatch(foo);}';
   const index=project({'main.c':source});

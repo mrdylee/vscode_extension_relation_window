@@ -1,9 +1,9 @@
 import { Parser, Language, Node } from 'web-tree-sitter';
 import { Access, FileAnalysis, FlowExpression, Location, ReferenceRecord, SymbolRecord } from './model';
 import { aggregateId, declaredType, declarator, initializerMember, typedExpression } from './type-info';
-import { deriveMacroCalls } from './project-analysis';
+import { clearMacroCache, deriveMacroCalls } from './project-analysis';
 import { flowFacts } from './flow-parser';
-import { inferPointerCalls } from './pointer-targets';
+import { clearPointerCache, inferPointerCalls } from './pointer-targets';
 
 function ancestor(node: Node, type: string): Node | null {
   for (let current = node.parent; current; current = current.parent) if (current.type === type) return current;
@@ -292,11 +292,13 @@ export async function createAnalyzer(runtime: string, grammar: string) {
     const value: FlowExpression = facts.initializers[0]?.value ?? { kind: 'unknown', location: original(0, text.length) };
     const issues = tree.rootNode.hasError ? ['Expanded initializer has incomplete or unsupported syntax'] : [];
     tree.delete(); return { value, issues };
+  }, reset() {
+    clearMacroCache(analyzer.analyze); clearPointerCache(analyzer.analyze);
   }, derive(files: FileAnalysis[], memoryPressure?: () => boolean, phase?: (value: 'macros' | 'callbacks') => void): FileAnalysis[] {
     phase?.('macros');
     const expanded = deriveMacroCalls(files, analyzer.analyze, analyzer.calls, analyzer.initializer, memoryPressure);
     phase?.('callbacks');
-    return inferPointerCalls(expanded, memoryPressure);
+    return inferPointerCalls(expanded, memoryPressure, analyzer.analyze);
   } };
   return analyzer;
 }

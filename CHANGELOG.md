@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.39 — 2026-10-18
+
+- Release macro and callback caches when rebuilding the index. Keep only the
+  current project's callback cache per analyzer, and discard obsolete macro
+  entries when a source no longer contains function bodies or initializers.
+- Reduce callback-analysis allocation by sharing immutable empty/unchanged
+  values and avoiding repeated local-variable array copies. Preserve call sites,
+  inference evidence, candidate limits and the existing 60% memory guard.
+
 ## 0.1.38 — 2026-10-18
 
 - Add photographable Diagnostics in the Relation footer: measured Worker heap

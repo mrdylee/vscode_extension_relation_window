@@ -4,8 +4,8 @@ import { FunctionArguments } from './function-arguments';
 
 type Evidence = { location: Location; reason: string };
 interface Value {
-  targets: Map<string, Evidence[]>; objects: Set<string>; params: Set<string>; numbers: Set<number>;
-  unknown: boolean; nil: boolean; evidence: Evidence[]; reasons: string[];
+  readonly targets: ReadonlyMap<string, Evidence[]>; readonly objects: ReadonlySet<string>; readonly params: ReadonlySet<string>; readonly numbers: ReadonlySet<number>;
+  readonly unknown: boolean; readonly nil: boolean; readonly evidence: Evidence[]; readonly reasons: string[];
 }
 interface Effect { value: Value; definite: boolean }
 interface Summary { params: Value[]; returns: Value; effects: Map<string, Effect>; version: number; incomplete?: boolean }
@@ -13,9 +13,10 @@ interface State { memory: Map<string, Value>; effects: Map<string, Effect>; aliv
 interface Context { program: FlowProgram; locals: Map<string, FlowLocal>; exits: State[]; returned: Value }
 interface Observation { value: Value; expression: string; kind: 'variable' | 'unknown' }
 interface ArgumentObservation { call: Extract<Expr, { kind: 'call' }>; values: Map<number, Value> }
-const projectCache = new WeakMap<FileAnalysis, { inputs: FileAnalysis[]; results: FileAnalysis[]; memoryLimited?: boolean }>();
+const projectCache = new WeakMap<object, { inputs: FileAnalysis[]; results: FileAnalysis[]; memoryLimited?: boolean }>();
 const callbackMemoryLimit = 'Callback analysis memory budget reached; targets may be incomplete. Narrow Include/Exclude scope.';
-const fileCache = new WeakMap<FileAnalysis, { fingerprint: string; result: FileAnalysis }>();
+const fileCaches = new WeakMap<object, WeakMap<FileAnalysis, { fingerprint: string; result: FileAnalysis }>>();
+export function clearPointerCache(owner: object) { projectCache.delete(owner); fileCaches.delete(owner); }
 const arrayIndices = new WeakMap<Map<string, Value>, Map<string, Set<string>>>();
 const objectSlots = new WeakMap<Map<string, Value>, Map<string, Set<string>>>();
 function registerObject(index: Map<string, Set<string>>, key: string) {
@@ -47,32 +48,45 @@ function knownIndices(memory: Map<string, Value>, root: string): Set<string> {
   if (!index) { index = new Map(); for (const key of memory.keys()) registerIndices(index, key); arrayIndices.set(memory, index); }
   return index.get(root) ?? new Set();
 }
-const blank = (): Value => ({ targets: new Map(), objects: new Set(), params: new Set(), numbers: new Set(), unknown: false, nil: false, evidence: [], reasons: [] });
+// Values are immutable: empty containers and unchanged facts can be shared.
+const empty: Value = { targets: new Map(), objects: new Set(), params: new Set(), numbers: new Set(), unknown: false, nil: false, evidence: [], reasons: [] };
+const blank = (): Value => empty;
 const unknown = (reason: string): Value => ({ ...blank(), unknown: true, reasons: [reason] });
 const frames = (items: Evidence[]) => items.filter((item, i) => items.findIndex(other => other.location.uri === item.location.uri && other.location.start === item.location.start && other.reason === item.reason) === i).slice(-8);
 function union(...values: Value[]): Value {
-  const out = blank();
+  if (!values.length) return empty;
+  const first = values[0];
+  // Evidence/reasons are already normalized. Preserve the candidate cap for
+  // freshly constructed object sets before reusing an immutable value.
+  if (values.every(value => value === first) && first.targets.size <= 64 && first.objects.size <= 64 && first.params.size <= 64 && first.numbers.size <= 64) return first;
+  let targets: Map<string, Evidence[]> | undefined, objects: Set<string> | undefined, params: Set<string> | undefined, numbers: Set<number> | undefined;
+  let unknown = false, nil = false;
+  const evidence: Evidence[] = [], reasons: string[] = [];
   for (const value of values) {
+    if (value.targets.size) targets ??= new Map();
     for (const [id, chain] of value.targets) {
-      if (out.targets.has(id) || out.targets.size < 64) out.targets.set(id, frames([...(out.targets.get(id) ?? []), ...chain]));
-      else { out.unknown = true; out.reasons.push('Target limit: 64 candidates'); }
+      if (targets!.has(id) || targets!.size < 64) targets!.set(id, frames([...(targets!.get(id) ?? []), ...chain]));
+      else { unknown = true; reasons.push('Target limit: 64 candidates'); }
     }
-    for (const [target, source] of [[out.objects, value.objects], [out.params, value.params], [out.numbers, value.numbers]] as const) {
+    if (value.objects.size) objects ??= new Set();
+    if (value.params.size) params ??= new Set();
+    if (value.numbers.size) numbers ??= new Set();
+    for (const [target, source] of [[objects, value.objects], [params, value.params], [numbers, value.numbers]] as const) {
       for (const key of source) {
-        if (target.size < 64 || (target as Set<string | number>).has(key)) (target as Set<string | number>).add(key);
-        else { out.unknown = true; out.reasons.push('Alias/value limit: 64 candidates'); }
+        if (target!.size < 64 || (target as Set<string | number>).has(key)) (target as Set<string | number>).add(key);
+        else { unknown = true; reasons.push('Alias/value limit: 64 candidates'); }
       }
     }
-    out.unknown ||= value.unknown; out.nil ||= value.nil;
-    out.evidence.push(...value.evidence); out.reasons.push(...value.reasons);
+    unknown ||= value.unknown; nil ||= value.nil;
+    evidence.push(...value.evidence); reasons.push(...value.reasons);
   }
-  out.evidence = frames(out.evidence); out.reasons = [...new Set(out.reasons)].slice(0, 8);
-  return out;
+  return { targets: targets ?? empty.targets, objects: objects ?? empty.objects, params: params ?? empty.params, numbers: numbers ?? empty.numbers,
+    unknown, nil, evidence: frames(evidence), reasons: [...new Set(reasons)].slice(0, 8) };
 }
 function evidence(value: Value, frame: Evidence): Value {
-  const out = union(value); out.evidence = frames([...out.evidence, frame]);
-  for (const [id, chain] of out.targets) out.targets.set(id, frames([...chain, frame]));
-  return out;
+  const out = union(value);
+  const targets = out.targets.size ? new Map([...out.targets].map(([id, chain]) => [id, frames([...chain, frame])])) : empty.targets;
+  return { ...out, targets, evidence: frames([...out.evidence, frame]) };
 }
 const signatures = new WeakMap<Value, string>();
 function signature(v: Value) {
@@ -115,11 +129,13 @@ function uniqueCalls(refs: ReferenceRecord[]): ReferenceRecord[] {
 }
 
 // Static may-target propagation. Every produced edge is labelled as inferred.
-export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => boolean): FileAnalysis[] {
-  if (!files.length) return files;
-  const cached = projectCache.get(files[0]);
+export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => boolean, owner: object = files[0]): FileAnalysis[] {
+  if (!files.length) { if (owner) clearPointerCache(owner); return files; }
+  const cached = projectCache.get(owner);
   if (cached && cached.inputs.length === files.length && files.every((file, n) => file === cached.inputs[n]) &&
     (!cached.memoryLimited || memoryPressure?.())) return cached.results;
+  let fileCache = fileCaches.get(owner);
+  if (!fileCache) fileCaches.set(owner, fileCache = new WeakMap());
   const index = new RelationIndex(); files.forEach(file => index.update(file));
   const functionArguments = new FunctionArguments(files, index);
   const programs = files.flatMap(file => file.programs ?? []), byFunction = new Map<string, FlowProgram[]>();
@@ -133,12 +149,12 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
       const warnings = memoryLimited && file === files[0] ? [callbackMemoryLimit] : [];
       if (references === file.references && !argumentsFound.length && !warnings.length) return file;
       const fingerprint = JSON.stringify(['direct-sites', argumentsFound, warnings]);
-      const previous = fileCache.get(file); if (previous?.fingerprint === fingerprint) return previous.result;
+      const previous = fileCache!.get(file); if (previous?.fingerprint === fingerprint) return previous.result;
       const result = { ...file, references, issues: warnings.length ? [...file.issues, ...warnings] : file.issues,
         functionArguments: argumentsFound.length ? argumentsFound : undefined };
-      fileCache.set(file, { fingerprint, result }); return result;
+      fileCache!.set(file, { fingerprint, result }); return result;
     });
-    projectCache.set(files[0], { inputs: files, results, memoryLimited }); return results;
+    projectCache.set(owner, { inputs: files, results, memoryLimited }); return results;
   }
   const heap = new Map<string, Value>(), summaries = new Map<string, Summary>();
   const deadline = performance.now() + 10_000;
@@ -190,7 +206,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     if (!value.params.size) return value;
     const previous = materialized.get(value);
     if (previous?.revision === parameterRevision) { previous.functions.forEach(depend); return previous.value; }
-    let result = union(value); result.params.clear();
+    let result = { ...union(value), params: empty.params };
     const pending = [...value.params].map(token => ({ token, depth: 0 })), seen = new Set<string>(), functions = new Set<string>();
     for (let n = 0; n < pending.length; n++) {
       const { token, depth } = pending[n];
@@ -199,7 +215,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
       const info = parameterInfo.get(token), arg = info && summaries.get(info.fn)?.params[info.index];
       if (info) { functions.add(info.fn); depend(info.fn); }
       if (arg) {
-        const part = union(arg); part.params.clear(); result = union(result, part);
+        const part = { ...union(arg), params: empty.params }; result = union(result, part);
         for (const next of arg.params) if (!seen.has(next)) pending.push({ token: next, depth: depth + 1 });
       } else result = union(result, unknown('No indexed caller supplies this callback'));
       if (info && index.symbol(info.fn)?.storage !== 'static') result = union(result, unknown('Other callers may supply a different argument'));
@@ -213,7 +229,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     return match && info ? { ...info, token: match[1], suffix: match[2] } : undefined;
   }
   function instantiate(value: Value, fn: string, args: Value[]): Value {
-    let result = union(value); result.params = new Set([...value.params].filter(token => parameterInfo.get(token)?.fn !== fn));
+    let result: Value = { ...union(value), params: new Set([...value.params].filter(token => parameterInfo.get(token)?.fn !== fn)) };
     for (const token of value.params) { const info = parameterInfo.get(token); if (info?.fn === fn) result = union(result, args[info.index] ?? unknown('Missing call argument')); }
     const objects = new Set<string>();
     for (const object of result.objects) {
@@ -221,7 +237,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
       if (part?.fn === fn) for (const actual of args[part.index]?.objects ?? []) objects.add(actual + part.suffix);
       else objects.add(object);
     }
-    result.objects = objects; return result;
+    return { ...result, objects };
   }
   function objects(value: Value, seen = new Set<string>()): Set<string> {
     const output = new Set<string>();
@@ -261,7 +277,8 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     if (expired()) { state.incomplete = true; return; }
     const weak = slot.includes('[*]') || !definite;
     memorySet(state.memory, slot, weak ? union(read(slot, state), value) : value);
-    const local = [...ctx.locals].some(([root, declaration]) => !declaration.persistent && (slot === root || slot.startsWith(root + '.') || slot.startsWith(root + '[')));
+    let local = false;
+    for (const [root, declaration] of ctx.locals) if (!declaration.persistent && (slot === root || slot.startsWith(root + '.') || slot.startsWith(root + '['))) { local = true; break; }
     if (!local) {
       if (state.effects.has(slot) || state.effects.size < 256) state.effects.set(slot, { value: state.memory.get(slot)!, definite: !weak });
       else { state.incomplete = true; notices.add('Callback mutation limit: 256 slots per function; targets may be incomplete'); }
@@ -304,7 +321,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
       return { ...value, objects: new Set(slots(expr, state, ctx)) };
     return value;
   }
-  function copyStorage(destination: string, sources: Set<string>, layout: ReturnType<RelationIndex['layout']>[number], state: State, ctx: Context, depth = 0) {
+  function copyStorage(destination: string, sources: ReadonlySet<string>, layout: ReturnType<RelationIndex['layout']>[number], state: State, ctx: Context, depth = 0) {
     if (depth >= 16) { write(destination, unknown('Aggregate copy depth limit'), state, ctx); return; }
     if (layout.layers[0] === 'array') {
       heapShape();
@@ -321,12 +338,12 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
   function publish(value: Value, state: State) {
     for (const root of value.objects) for (const key of descendants(state.memory, root)) put(heap, key, state.memory.get(key)!);
   }
-  function opaqueRoots(expr: Expr, value: Value, state: State, ctx: Context): Set<string> {
+  function opaqueRoots(expr: Expr, value: Value, state: State, ctx: Context): ReadonlySet<string> {
     const record = valueType(expr, ctx), layouts = record ? index.layout(record) : [];
     const layout = layouts[0];
     if (layout && !layout.layers.length && layout.fields.length) {
       const roots = new Set<string>();
-      const visit = (base: Set<string>, fields: SymbolRecord[], depth: number) => {
+      const visit = (base: ReadonlySet<string>, fields: SymbolRecord[], depth: number) => {
         if (depth > 8) return;
         for (const field of fields) {
           const type = index.layout(field)[0], slots = [...base].map(root => root + '.' + field.name);
@@ -340,7 +357,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     if (layout?.layers[0] === 'function' || (layout?.layers[0] === 'pointer' && layout.layers[1] === 'function')) return new Set();
     return value.objects;
   }
-  function indexSlots(base: Set<string>, indices: Value, state: State, writing: boolean): string[] {
+  function indexSlots(base: ReadonlySet<string>, indices: Value, state: State, writing: boolean): string[] {
     const result = new Set<string>(), concrete = [...indices.numbers];
     for (const root of base) {
       if (concrete.length && !indices.unknown) for (const n of concrete) result.add(root + '[' + n + ']');
@@ -416,7 +433,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
       const values: Value[] = expr.localId ? [expr.localId, ...(expr.alternatives ?? [])].map(id => read(id, state)) : [];
       for (const symbol of !expr.localId || expr.globalFallback ? globalSymbols(expr) : []) {
         if (symbol.kind === 'function') {
-          const value = blank(); value.targets.set(symbol.id, [{ location: expr.location, reason: 'Function address: ' + symbol.name }]); values.push(value);
+          values.push({ ...blank(), targets: new Map([[symbol.id, [{ location: expr.location, reason: 'Function address: ' + symbol.name }]]]) });
         } else if (symbol.kind === 'variable') values.push(read(symbol.id, state));
       }
       return storedValue(expr, values.length ? union(...values) : unknown('Unknown value: ' + expr.name), state, ctx);
@@ -642,10 +659,10 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     const argumentsFound = functionArguments.forFile(file.uri);
     if (!modified && !warnings.length && !argumentsFound.length) return file;
     const fingerprint = JSON.stringify([unique.filter(ref => ref.inference).map(ref => [ref.id, ref.name, ref.targetId, ref.callKind, ref.inference]), warnings, argumentsFound]);
-    const previous = fileCache.get(file);
+    const previous = fileCache!.get(file);
     if (previous?.fingerprint === fingerprint) return previous.result;
     const result = { ...file, references: unique, issues: [...file.issues, ...warnings], functionArguments: argumentsFound.length ? argumentsFound : undefined };
-    fileCache.set(file, { fingerprint, result }); return result;
+    fileCache!.set(file, { fingerprint, result }); return result;
   });
-  projectCache.set(files[0], { inputs: files, results, memoryLimited: notices.has(callbackMemoryLimit) }); return results;
+  projectCache.set(owner, { inputs: files, results, memoryLimited: notices.has(callbackMemoryLimit) }); return results;
 }

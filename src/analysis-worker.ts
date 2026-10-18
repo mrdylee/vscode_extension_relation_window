@@ -61,11 +61,11 @@ const memoryPressure = () => {
 };
 parentPort!.on('message', (request: Request) => {
   queue = queue.then(async () => {
-    if (request.type === 'reset') { raw.clear(); diagnostics = freshDiagnostics(); report(true); return; }
     if (request.type === 'remove') { remove(request.uri); report(); return; }
     if (request.type === 'diagnostics') { report(true); return; }
     try {
       const parser = await analyzer;
+      if (request.type === 'reset') { raw.clear(); parser.reset(); diagnostics = freshDiagnostics(); report(true); return; }
       if (request.type === 'derive') {
         if (request.versions.some(([uri, id]) => raw.get(uri)?.id !== id)) {
           parentPort!.postMessage({ id: request.id, result: { stale: true, files: [] } }); return;
@@ -94,7 +94,7 @@ parentPort!.on('message', (request: Request) => {
       }
     } catch (error) {
       report(true);
-      parentPort!.postMessage({ id: request.id, error: String(error) });
+      if (request.type !== 'reset') parentPort!.postMessage({ id: request.id, error: String(error) });
     }
   });
 });

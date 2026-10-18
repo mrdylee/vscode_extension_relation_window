@@ -6,6 +6,7 @@ type Analyze = (uri: string, text: string, skip?: boolean) => FileAnalysis;
 interface Event { offset: number; value: PreprocessorEvent }
 interface Cached { raw: FileAnalysis; paths: string; dependencies: Set<FileAnalysis>; result: FileAnalysis }
 const caches = new WeakMap<Analyze, Map<string, Cached>>();
+export function clearMacroCache(analyze: Analyze) { caches.delete(analyze); }
 const includeLimit = 'Macro include traversal limit reached; call relationships may be incomplete';
 function timeline(file: FileAnalysis, files: Map<string, FileAnalysis>, issues: Set<string>, dependencies: Set<FileAnalysis>, memoryPressure?: () => boolean): Event[] {
   const result: Event[] = [];
@@ -86,7 +87,7 @@ export function deriveMacroCalls(raw: FileAnalysis[], analyze: Analyze, parseCal
   const paths = raw.map(file => file.uri).join('\n');
   return raw.map(file => {
     if (file.expandMacros === false) { cache!.delete(file.uri); return file; }
-    if (!file.functions?.length && !file.initializers?.length) return file;
+    if (!file.functions?.length && !file.initializers?.length) { cache!.delete(file.uri); return file; }
     const previous = cache!.get(file.uri);
     if (previous?.raw === file && previous.paths === paths && [...previous.dependencies].every(dep => files.get(dep.uri) === dep) &&
       (!previous.result.issues.includes(macroMemoryLimit) || memoryPressure?.())) return previous.result;
