@@ -4,7 +4,7 @@ import { getHeapStatistics } from 'node:v8';
 import { createAnalyzer } from './analyzer';
 import { FileAnalysis } from './model';
 const analyzer = createAnalyzer(path.join(workerData.assets, 'web-tree-sitter.wasm'), path.join(workerData.assets, 'tree-sitter-c.wasm'));
-type Request = { id: number; uri: string; text: string; skip: boolean; type?: 'analyze' }
+type Request = { id: number; uri: string; text: string; skip: boolean; expandMacros?: boolean; type?: 'analyze' }
   | { type: 'derive'; id: number; versions: [string, number, number][] }
   | { type: 'remove'; uri: string } | { type: 'reset' };
 const raw = new Map<string, { id: number; file: FileAnalysis }>();
@@ -38,7 +38,7 @@ parentPort!.on('message', (request: Request) => {
         parentPort!.postMessage({ id: request.id, result: { stale: false, files: changed, versions } });
       } else {
         if (memoryPressure()) throw new Error('Source analysis memory budget reached. Narrow Include/Exclude, then Rebuild index.');
-        const result = parser.analyze(request.uri, request.text, request.skip);
+        const result = { ...parser.analyze(request.uri, request.text, request.skip), expandMacros: request.expandMacros };
         raw.set(request.uri, { id: request.id, file: result });
         parentPort!.postMessage({ id: request.id, result: forIndex(result) });
       }

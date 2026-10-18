@@ -85,6 +85,7 @@ export function deriveMacroCalls(raw: FileAnalysis[], analyze: Analyze, parseCal
   for (const uri of cache.keys()) if (!files.has(uri)) cache.delete(uri);
   const paths = raw.map(file => file.uri).join('\n');
   return raw.map(file => {
+    if (file.expandMacros === false) { cache!.delete(file.uri); return file; }
     if (!file.functions?.length && !file.initializers?.length) return file;
     const previous = cache!.get(file.uri);
     if (previous?.raw === file && previous.paths === paths && [...previous.dependencies].every(dep => files.get(dep.uri) === dep) &&

@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { WorkspaceIndex } from './workspace';
 import { RelationView } from './view';
 import { registerUpdates } from './update-service';
+import { selectMacroExpansionFolders } from './macro-folders';
 
 export function activate(context: vscode.ExtensionContext) {
   registerUpdates(context);
@@ -17,6 +18,8 @@ export function activate(context: vscode.ExtensionContext) {
       view.track(vscode.window.activeTextEditor);
     }),
     vscode.commands.registerCommand('cRelation.reindex', () => workspace.reindex()),
+    vscode.commands.registerCommand('cRelation.selectMacroExpansionFolders', () => selectMacroExpansionFolders().catch(error =>
+      vscode.window.showErrorMessage(`Could not save macro expansion folders: ${String(error)}`))),
     vscode.commands.registerCommand('cRelation.openSettings', () => vscode.commands.executeCommand(
       vscode.workspace.workspaceFolders?.length ? 'workbench.action.openWorkspaceSettings' : 'workbench.action.openSettings',
       { query: '@ext:local-james-black.c-relation-explorer', jsonEditor: false })),

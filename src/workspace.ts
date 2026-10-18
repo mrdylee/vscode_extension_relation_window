@@ -29,7 +29,7 @@ export class WorkspaceIndex implements vscode.Disposable {
   private epoch = 0;
   private disposed = false;
   private workerError?: Error;
-  private scopes = new Map<string, { include: string[]; exclude: string[]; included: Minimatch[]; excluded: Minimatch[] }>();
+  private scopes = new Map<string, { include: string[]; exclude: string[]; included: Minimatch[]; excluded: Minimatch[]; macros: Minimatch[] }>();
   get skipInactive() { return vscode.workspace.getConfiguration('cRelation').get<boolean>('skipInactive', true); }
   private startWorker() {
     const assets = path.join(this.extensionPath, 'dist');
@@ -63,7 +63,8 @@ export class WorkspaceIndex implements vscode.Disposable {
       vscode.workspace.onDidChangeTextDocument(event => { if (event.contentChanges.length) this.schedule(event.document.uri); }),
       vscode.workspace.onDidCloseTextDocument(document => this.schedule(document.uri)),
       vscode.workspace.onDidChangeConfiguration(event => {
-        if (event.affectsConfiguration('cRelation.skipInactive') || event.affectsConfiguration('cRelation.include') || event.affectsConfiguration('cRelation.exclude')) void this.reindex();
+        if (event.affectsConfiguration('cRelation.skipInactive') || event.affectsConfiguration('cRelation.include') || event.affectsConfiguration('cRelation.exclude') ||
+          event.affectsConfiguration('cRelation.macroExpansionFolders')) void this.reindex();
       }),
       vscode.workspace.onDidChangeWorkspaceFolders(() => void this.reindex()));
     this.ready = this.reindex();
@@ -75,7 +76,7 @@ export class WorkspaceIndex implements vscode.Disposable {
       const config = vscode.workspace.getConfiguration('cRelation', folder.uri);
       const include = config.get<string[]>('include', []), exclude = [...builtInExcludes, ...config.get<string[]>('exclude', [])];
       const match = (pattern: string) => new Minimatch(pattern, { dot: true, nonegate: true, nocomment: true, noext: true, nocase: process.platform === 'win32' });
-      value = { include, exclude, included: include.map(match), excluded: exclude.map(match) };
+      value = { include, exclude, included: include.map(match), excluded: exclude.map(match), macros: config.get<string[]>('macroExpansionFolders', ['**']).map(match) };
       this.scopes.set(key, value);
     }
     return value;
@@ -121,7 +122,9 @@ export class WorkspaceIndex implements vscode.Disposable {
       const doc = vscode.workspace.textDocuments.find(document => !document.isClosed && document.uri.toString() === key);
       const text = doc ? doc.getText() : Buffer.from(await vscode.workspace.fs.readFile(uri)).toString('utf8');
       if (text.length > 2_000_000) throw new Error('File exceeds the 2,000,000 character analysis limit');
-      const request = this.request<FileAnalysis>({ uri: key, text, skip: this.skipInactive });
+      const folder = vscode.workspace.getWorkspaceFolder(uri)!;
+      const expandMacros = this.scope(folder).macros.some(matcher => matcher.match(vscode.workspace.asRelativePath(uri, false).replace(/\\/g, '/')));
+      const request = this.request<FileAnalysis>({ uri: key, text, skip: this.skipInactive, expandMacros });
       const result = await request.promise;
       if (this.disposed || epoch !== this.epoch || version !== this.versions.get(key)) return;
       this.rawVersions.set(key, request.id); this.appliedDerived.delete(key); this.revision++;

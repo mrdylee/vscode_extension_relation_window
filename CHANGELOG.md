@@ -5,6 +5,11 @@
 - Add a compact ↩ Pin button beside Pinned · Follow paused. Reveal the pinned
   root in Relation and return the editor and Context to its source without
   changing the pin, expanded branches or traversal settings.
+- Add Macro Expansion Folders with a native checkbox picker in Settings and the
+  Command Palette. Expand selected source folders while retaining basic analysis
+  of unchecked sources and their header macro definitions for checked sources.
+  Default to all; support all-off, custom globs and per-folder workspace settings.
+  Automatically rebuild on changes without widening Include/Exclude scope.
 
 ## 0.1.35 — 2026-10-18
 

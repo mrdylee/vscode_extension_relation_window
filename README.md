@@ -78,6 +78,25 @@ Settings 화면에서는 `@id:cRelation.include` 또는 `@id:cRelation.exclude`�
 - `files.exclude`, `search.exclude`, `C_Cpp.files.exclude`는 이 확장의 분석 범위에 적용되지 않습니다. `cRelation.include`와 `cRelation.exclude`를 사용하세요.
 - `node_modules`, `.git`, `.vscode-test`는 기본으로 제외합니다. 사용자 제외 후에도 초기 분석 대상이 10,000개를 넘으면 **Partial index**가 표시됩니다. 불필요한 경로를 더 제외하거나 필요한 소스 폴더를 별도로 여세요.
 
+## 매크로를 확장할 폴더 선택 (v0.1.36)
+
+Include/Exclude는 기본 분석에 포함할 파일을 정하고, **Macro Expansion Folders**는 그중 매크로 확장까지 수행할 소스를 정합니다. SDK 전체의 심볼은 필요하지만 상세한 매크로 분석은 App에만 필요한 경우에 사용할 수 있습니다.
+
+1. Relation의 **Settings → Macro Expansion Folders → Select folders…**를 누릅니다. 명령 팔레트의 **C Relations: Select Macro Expansion Folders**로도 열 수 있습니다.
+2. 매크로를 확장할 항목만 체크하고 **OK**를 누릅니다. Include를 지정했다면 해당 패턴을, Include가 비어 있다면 최상위 폴더를 보여줍니다. 다중 폴더 워크스페이스에서는 먼저 대상 워크스페이스 폴더를 선택합니다.
+3. 자동 재분석 후 **Index ready**를 확인합니다. 전체 선택은 전체 확장, 전체 해제는 매크로 확장 끄기입니다. 취소하면 설정을 유지합니다.
+
+```json
+{
+  "cRelation.include": ["App/**", "SDK/**"],
+  "cRelation.macroExpansionFolders": ["App/**"]
+}
+```
+
+위 설정은 App과 SDK를 기본 분석하고 App 소스의 매크로만 확장합니다. 체크하지 않은 SDK 헤더의 매크로 정의도 App에서 참조할 수 있습니다. SDK 소스의 일반 함수 호출·직접 전달한 함수 인자·지원되는 포인터 분석은 유지되지만, 매크로 확장에 의존하는 호출과 콜백 대상은 누락될 수 있습니다. 필요한 헤더는 Include/Exclude 범위 안에 있어야 하며 Exclude는 계속 우선합니다.
+
+기본값 `["**"]`는 전체 확장이고 `[]`는 확장 끄기입니다. 더 세부적인 경로는 Settings의 배열에 `App/control/**`처럼 직접 입력하세요. 이 설정은 매크로 처리 비용을 줄이며 기본 인덱스와 포인터 분석의 메모리 비용까지 없애지는 않습니다.
+
 ## 업데이트
 
 확장이 실행되면 GitHub의 정식 릴리스를 자동 확인합니다. 마지막 성공한 확인 후 24시간 이내에는 반복 요청하지 않습니다. 확장이 실행 중이면 한 시간마다 확인 시각을 점검하므로, 다음 자동 확인은 마지막 성공 후 약 24~25시간 뒤에 실행됩니다. v0.1.22부터 네트워크 오류나 잘못된 릴리스 정보는 성공 시각을 갱신하지 않고 다음 시간에 재시도합니다. 개발·테스트 모드에서는 자동 확인하지 않습니다.

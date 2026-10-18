@@ -51,6 +51,39 @@ Other examples: `App/**/*.{c,h}` matches C/H files under App; `**/vendor/**` mat
 - Definitions and references outside the scope are absent from Relation. Include shared headers and libraries if you need their relationships.
 - To restore full scope, empty Include and remove unwanted Exclude entries.
 
+## Choose where to expand macros (v0.1.36)
+
+Include/Exclude choose the files to index. **Macro Expansion Folders** chooses
+which indexed source bodies and initializers receive macro expansion.
+
+1. Click **Settings → Macro Expansion Folders → Select folders…**, or run
+   **C Relations: Select Macro Expansion Folders** from the Command Palette.
+2. Check the entries that need expansion, then click **OK**. The list uses your
+   Include patterns, or top-level folders when Include is empty. Saved custom
+   patterns remain available. In multi-folder workspaces, choose a workspace
+   folder first; the setting is saved for that folder.
+3. Wait for the automatic rebuild to reach **Index ready**. Check all for all
+   sources; uncheck all to disable expansion. Cancel leaves settings unchanged.
+
+```json
+{
+  "cRelation.include": ["App/**", "SDK/**"],
+  "cRelation.macroExpansionFolders": ["App/**"]
+}
+```
+
+This indexes App and SDK but expands only App sources. Unchecked SDK headers
+still provide macro definitions to checked App sources. Unchecked bodies keep
+basic symbols, direct calls, literal function arguments and supported pointer
+analysis. Calls or callback targets that depend on macro expansion may be absent.
+Headers must still be inside Include/Exclude scope; Exclude always wins.
+
+The default `["**"]` expands all indexed sources. An explicit `[]` disables
+expansion. Edit the Settings array directly for narrower glob patterns such as
+`App/control/**`. Patterns follow the same path and case rules as Include/Exclude.
+This reduces macro work; basic indexing and pointer analysis still consume memory.
+It does not guarantee that every project fits the Worker memory budget.
+
 ## Navigate Relation and Context
 
 - **References** shows calls, address references and declarations. **Callers** includes direct, macro-expanded and inferred callback calls. The tree grows toward the code that calls or references the selected symbol.

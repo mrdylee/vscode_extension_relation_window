@@ -74,6 +74,7 @@ export interface FileAnalysis {
   directives?: { start: number; end: number }[];
   guard?: { name: string; condition: string };
   projectScoped?: boolean;
+  expandMacros?: boolean;
   programs?: FlowProgram[]; initializers?: GlobalInitializer[];
   argumentPrograms?: FlowProgram[];
   functionArguments?: ReferenceRecord[];

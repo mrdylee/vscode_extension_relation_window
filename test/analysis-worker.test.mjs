@@ -3,6 +3,58 @@ import assert from 'node:assert/strict';
 import { Worker } from 'node:worker_threads';
 import path from 'node:path';
 
+test('Worker applies macro folder policy without removing raw calls or unchecked header definitions', async () => {
+  const worker = new Worker(path.resolve('dist/analysis-worker.cjs'), { workerData: { assets: path.resolve('dist') } });
+  let serial = 0; const pending = new Map();
+  worker.on('message', message => {
+    const request = pending.get(message.id); pending.delete(message.id);
+    if (message.error) request?.reject(new Error(message.error)); else request?.resolve(message.result);
+  });
+  worker.on('error', error => { for (const request of pending.values()) request.reject(error); pending.clear(); });
+  const request = data => {
+    const id = ++serial;
+    return { id, promise: new Promise((resolve, reject) => { pending.set(id, { resolve, reject }); worker.postMessage({ ...data, id }); }) };
+  };
+  try {
+    const versions = [];
+    const sources = [
+      ['file:///SDK/api.h', '#define CALL() target()\nvoid target(void);', false],
+      ['file:///App/main.c', '#include "../SDK/api.h"\nvoid app(void){CALL();}', true],
+      ['file:///SDK/vendor.c', '#include "api.h"\nvoid cb(void){}void svc(void (*)(void));void vendor(void){CALL();target();svc(cb);void(*p)(void)=cb;p();}', false]
+    ];
+    const actual = new Map();
+    const parse = async (uri, text, expandMacros) => {
+      const job = request({ uri, text, skip: true, expandMacros }); actual.set(uri, await job.promise);
+      const previous = versions.findIndex(entry => entry[0] === uri);
+      if (previous < 0) versions.push([uri, job.id, -job.id]); else versions[previous] = [uri, job.id, -job.id];
+    };
+    const derive = async () => {
+      const result = await request({ type: 'derive', versions }).promise;
+      for (const file of result.files) actual.set(file.uri, file);
+      for (const [uri, stamp] of result.versions) versions.find(entry => entry[0] === uri)[2] = stamp;
+      return result;
+    };
+    for (const source of sources) await parse(...source);
+    await derive();
+    assert.ok(actual.get(sources[1][0]).references.some(ref => ref.name === 'target' && ref.expansion));
+    const vendor = actual.get(sources[2][0]);
+    assert.equal(vendor.expandMacros, false);
+    assert.equal(vendor.references.some(ref => ref.expansion), false);
+    assert.ok(vendor.references.some(ref => ref.name === 'target' && ref.kind === 'call'));
+    assert.ok(vendor.references.some(ref => ref.name === 'cb' && ref.callKind === 'inferred'));
+    assert.deepEqual(vendor.functionArguments.map(ref => ref.name), ['cb']);
+    assert.equal((await derive()).files.length, 0, 'acknowledged policy results remain cached');
+    await parse(sources[2][0], sources[2][1], true); await derive();
+    assert.ok(actual.get(sources[2][0]).references.some(ref => ref.expansion));
+    await parse(...sources[2]); await derive();
+    assert.equal(actual.get(sources[2][0]).references.some(ref => ref.expansion), false, 'turning expansion off clears old derived calls');
+    await parse(sources[0][0], '#define CALL() changed()\nvoid changed(void);', false); await derive();
+    const app = actual.get(sources[1][0]);
+    assert.ok(app.references.some(ref => ref.name === 'changed' && ref.expansion));
+    assert.equal(app.references.some(ref => ref.name === 'target' && ref.expansion), false);
+  } finally { await worker.terminate(); }
+});
+
 test('macro growth yields partial function arguments without exhausting a small Worker heap', async () => {
   const worker = new Worker(path.resolve('dist/analysis-worker.cjs'), { workerData: { assets: path.resolve('dist') }, resourceLimits: { maxOldGenerationSizeMb: 128 } });
   let serial = 0; const pending = new Map();

@@ -14,6 +14,43 @@ function project(sources: Record<string, string>) {
 }
 const calls = (index: RelationIndex, name = 'run') => index.relations(index.symbols().find(s => s.name === name && s.kind === 'function' && s.definition)!.id, 'callees');
 
+test('selected sources expand unchecked header macros while unchecked bodies retain source relations', () => {
+  const sources = {
+    'SDK/api.h': '#define API() target()\nvoid plain(void);void svc(void (*cb)(void));',
+    'SDK/vendor.c': '#include "api.h"\nvoid target(void){}void changed(void){}void callback(void){}void vendor(void){API();plain();svc(callback);void(*p)(void)=callback;p();}',
+    'App/main.c': '#include "../SDK/api.h"\nvoid app(void){API();vendor();}'
+  };
+  const raw = Object.entries(sources).map(([name,text]) => ({...analyzer.analyze('file:///demo/'+name,text),expandMacros:name.startsWith('App/')}));
+  const derived = analyzer.derive(raw), index = new RelationIndex();
+  derived.forEach(file => index.update(file));
+  const vendor = derived.find(file => file.uri.endsWith('/vendor.c'))!;
+  assert.equal(vendor.references.some(ref => ref.expansion),false,'unchecked bodies must not expand');
+  assert.ok(calls(index,'app').some(group => group.name==='target' && group.callKind==='expanded'));
+  assert.ok(calls(index,'vendor').some(group => group.name==='plain' && group.callKind==='direct'));
+  assert.ok(vendor.functionArguments?.some(ref => ref.name==='callback'),'literal arguments remain');
+  assert.ok(calls(index,'vendor').some(group => group.name==='callback' && group.callKind==='inferred'),'ordinary pointer inference remains');
+  const updated = raw.map(file => file.uri.endsWith('/api.h') ? {...analyzer.analyze(file.uri,sources['SDK/api.h'].replace('target()','changed()')),expandMacros:false} : file);
+  const changed = new RelationIndex(); analyzer.derive(updated).forEach(file => changed.update(file));
+  assert.ok(calls(changed,'app').some(group => group.name==='changed' && group.callKind==='expanded'));
+  assert.equal(calls(changed,'app').some(group => group.name==='target'),false);
+  const enabled = new RelationIndex(); analyzer.derive(raw.map(file=>({...file,expandMacros:true}))).forEach(file=>enabled.update(file));
+  assert.ok(calls(enabled,'vendor').some(group=>group.name==='target' && group.callKind==='expanded'));
+  const disabled = analyzer.derive(raw);
+  assert.equal(disabled.find(file=>file.uri.endsWith('/vendor.c'))!.references.some(ref=>ref.expansion),false);
+});
+
+test('disabled macro expansion skips expensive include traversal and keeps basic calls', () => {
+  const sources: Record<string,string> = {'main.c':'#define CALL() target()\n#include "h18.h"\nvoid target(void){}void run(void){CALL();target();}','h0.h':''};
+  for(let n=1;n<=18;n++) sources[`h${n}.h`]=`#include "h${n-1}.h"\n#include "h${n-1}.h"\n`;
+  const raw=Object.entries(sources).map(([name,text])=>({...analyzer.analyze('file:///demo/'+name,text),expandMacros:false}));
+  const disabled=analyzer.derive(raw), index=new RelationIndex();disabled.forEach(file=>index.update(file));
+  assert.equal(disabled[0].issues.some(issue=>/Macro include/.test(issue)),false);
+  assert.ok(calls(index).some(group=>group.name==='target' && group.callKind==='direct'));
+  assert.equal(disabled[0].references.some(ref=>ref.expansion),false);
+  const enabled=analyzer.derive(raw.map(file=>({...file,expandMacros:true})));
+  assert.ok(enabled[0].issues.some(issue=>/Macro include.*limit/.test(issue)));
+});
+
 test('memory-limited preprocessing retains source arguments and retries when pressure clears', () => {
   const raw = [analyzer.analyze('file:///demo/memory.c', '#define SUBMIT(cb) svc(cb)\nvoid target(void){}void svc(void (*)(void));void run(void){SUBMIT(target);}')];
   const partial = analyzer.derive(raw, () => true);

@@ -38,6 +38,10 @@
         "title": "C Relations: Open Settings"
       },
       {
+        "command": "cRelation.selectMacroExpansionFolders",
+        "title": "C Relations: Select Macro Expansion Folders"
+      },
+      {
         "command": "cRelation.help",
         "title": "C Relations: Open User Guide"
       }
@@ -115,6 +119,13 @@
           "default": [],
           "scope": "resource",
           "description": "Workspace-relative glob patterns excluded from indexing and file watching, for example **/Tools/Polyspace/**. Exclude takes priority over Include. Uses forward slashes. Changes automatically rebuild the index. Independent of files.exclude, search.exclude and C_Cpp.files.exclude."
+        },
+        "cRelation.macroExpansionFolders": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "default": ["**"],
+          "scope": "resource",
+          "markdownDescription": "[Select folders…](command:cRelation.selectMacroExpansionFolders) with checkboxes, or enter workspace-relative glob patterns such as `App/**`. Default `['**']` expands all indexed sources; an empty list disables macro expansion. Unchecked sources keep basic analysis and header definitions remain available to checked sources. Include/Exclude still control which files are indexed. Changes automatically rebuild the index."
         },
         "cRelation.skipInactive": {
           "type": "boolean",
