@@ -49,6 +49,6 @@ and Worker behavior remain unchanged.
 - [x] Run typecheck, unit, native extension and UI checks; inspect full diff for
   raw-string leakage, stale capture, accidental sends and changes outside scope.
   Record review evidence and fix any findings before tagging.
-- [ ] Package VSIX, verify manifest and included report code/docs, commit/tag and
+- [x] Package VSIX, verify manifest and included report code/docs, commit/tag and
   push using the existing feature branch. Wait for three-OS release CI, verify
   downloads/checksums/updater, record publication evidence and report links.
