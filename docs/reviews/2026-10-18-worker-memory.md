@@ -90,3 +90,24 @@ remains unavailable with a visible notice; narrow scope and rebuild to retry.
 Status: **DONE_WITH_CONCERNS** for local implementation. Hosted
 Windows/macOS/Linux release verification is recorded below when complete.
 Do not treat this document or a pushed tag alone as publication confirmation.
+
+## Publication verification
+
+- GitHub Actions **39101600586**: Windows, macOS, Ubuntu and release jobs all
+  completed successfully. The public latest release is
+  https://github.com/mrdylee/vscode_extension_relation_window/releases/tag/v0.1.34,
+  published **2026-10-18 05:47:30 UTC**.
+- Release tag source: `b97242b0ac5e09f554a01770c77b2f0a4ef819a2`.
+  Preserve `checkpoint/before-worker-memory-20261018` and
+  `checkpoint/worker-memory-reviewed-20261018` as rollback/review references.
+- Downloaded all four public platform/universal VSIX assets and SHA256SUMS.txt.
+  All packages are identical, **513,160 bytes**, report 0.1.34 and match the
+  published checksum:
+  `0fc899fbec53ce1aea398429a628130db1f0ad45af55ed64d0514bb55395ce24`.
+- Public production JS/CSS bundles match the locally tested package. Bundled
+  Help explains memory stops and partial function arguments. The production
+  updater selects this release from 0.1.33 and validates downloaded bytes.
+- Detailed ignored evidence:
+  `test-results/release-0.1.34/verification.json` and downloaded release assets.
+  Publication is verified; the private WSL workspace still needs the user's
+  post-update check. No production VS Code installation was changed on this Mac.
