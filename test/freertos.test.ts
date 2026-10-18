@@ -23,6 +23,8 @@ export async function run() {
   assert.deepEqual(opened, [], 'indexing does not create C editor documents');
   const expandedCallSites = [...api.workspace.index.files.values()].reduce((count: number, file: any) => count + file.references.filter((ref: any) => ref.kind === 'call' && ref.expansion).length, 0);
   const inferredCallSites = [...api.workspace.index.files.values()].reduce((count: number, file: any) => count + file.references.filter((ref: any) => ref.callKind === 'inferred').length, 0);
+  const functionArgumentSites = [...api.workspace.index.files.values()].reduce((count: number, file: any) => count + (file.functionArguments?.length ?? 0), 0);
+  assert.ok(functionArgumentSites > 0, 'FreeRTOS has function argument relationships');
   const callbackNotices = [...api.workspace.index.files.values()].flatMap((file: any) => file.issues.filter((issue:string)=>issue.startsWith('Callback')));
   assert.ok(expandedCallSites > 0, 'real FreeRTOS macro invocations produce expanded call sites');
   const document = await vscode.workspace.openTextDocument(vscode.Uri.joinPath(vscode.workspace.workspaceFolders![0].uri, 'queue.c'));
@@ -34,7 +36,7 @@ export async function run() {
   assert.equal(api.view.state.graph?.root.name, 'prvUnlockQueue');
   assert.ok(api.view.state.graph.root.children.length, 'queue function has incoming references');
   assert.ok(api.view.state.context.tokens.flat().some((token: any) => token.kind === 'function' && token.text === 'prvUnlockQueue'));
-  const result = { passed: true, files: expected.length, elapsedMs, openedDuringIndex: opened.length, expandedCallSites, inferredCallSites, callbackNotices, root: api.view.state.graph.root.name, relations: api.view.state.graph.root.children.length };
+  const result = { passed: true, files: expected.length, elapsedMs, openedDuringIndex: opened.length, expandedCallSites, inferredCallSites, functionArgumentSites, callbackNotices, root: api.view.state.graph.root.name, relations: api.view.state.graph.root.children.length };
   await api.view.handleMessage({ type: 'mode', value: 'callees' });
   const callees = api.view.state.graph.root.children;
   assert.ok(callees.length > 0, 'FreeRTOS queue function has outgoing calls');
@@ -102,17 +104,17 @@ export async function run() {
   for (const name of ['prvUnlockQueue', 'vTaskSuspendAll', 'xTaskResumeAll']) {
     const symbol = api.workspace.index.symbols().find((s: any) => s.name === name && s.definition && s.kind === 'function');
     assert.ok(symbol);
-    for (const depth of [1, 3]) for (const mode of ['callers', 'callees', 'both']) {
+    for (const depth of [1, 3]) for (const mode of ['callers', 'callees', 'both']) for (const includeFunctionArguments of [false, true]) {
       const samples = [];
       let graph: any;
       for (let sample = 0; sample < 5; sample++) {
-        const started = performance.now(); graph = api.workspace.index.graph(symbol.id, mode, depth);
+        const started = performance.now(); graph = api.workspace.index.graph(symbol.id, mode, depth, {}, 'all', 'name', includeFunctionArguments);
         samples.push(performance.now() - started);
       }
       const count = (node: any): number => 1 + node.children.reduce((sum: number, child: any) => sum + count(child), 0);
       const nodes = count(graph.root) + (graph.callers ?? []).reduce((sum: number, node: any) => sum + count(node), 0);
       assert.ok(nodes <= 300);
-      graphProjection.push({ name, depth, mode, medianMs: samples.sort((a, b) => a - b)[2], nodes });
+      graphProjection.push({ name, depth, mode, includeFunctionArguments, medianMs: samples.sort((a, b) => a - b)[2], nodes });
     }
   }
   const variableResult = { ...result, variable: variableName, accessKinds: [...accessKinds], variableFilters: true, trackingMs, member: member.name, memberWriteFunctions: memberWrites.length, memberQueryMs, graphProjection };

@@ -127,6 +127,36 @@ Settings 화면에서는 `@id:cRelation.include` 또는 `@id:cRelation.exclude`�
 - Context에서 함수명, 기본 타입과 `_t` 타입 이름, 키워드, 변수, 숫자, 대문자 매크로/상수, 문자열, 주석, 전처리 지시자를 색으로 구별합니다. 밝은/어두운 VS Code 테마에 맞는 색을 사용합니다. 임의의 사용자 정의 타입과 매크로를 완전히 판별하는 의미 분석은 아닙니다.
 - 미저장 편집과 파일 추가·변경·삭제를 자동 반영합니다. **Rebuild index**로 전체 색인을 갱신할 수 있습니다.
 
+## 함수 인자 전달 관계 (v0.1.31)
+
+**Settings → Include Function Arguments**를 켜면 기존 **Callers / Callees /
+Callers & Callees**에 함수를 인자로 넘긴 관계도 함께 표시합니다. 기본값은
+꺼짐이며, 변경 시 기존 인덱스를 사용해 그래프만 갱신합니다.
+
+```c
+int priv_task_data(void *ctx) {
+    return svc_call_nonblock(ctx, a_func);
+}
+```
+
+이때 `a_func`의 Callers에 `priv_task_data`가 표시되고, `priv_task_data`의
+Callees에는 직접 호출한 `svc_call_nonblock`과 인자로 넘긴 `a_func`가 표시됩니다.
+인자 전달만 있는 가지는 **하늘색 점선 연결선**, 실제 호출과 섞인 가지는 실선으로
+표시합니다. 팝업에서 **Function argument #2 · via svc_call_nonblock**으로
+구분합니다. 한 번 클릭하면 원래 인자 위치를 Context에서 보고, Enter/더블클릭하면
+그 위치를 메인 편집기에서 엽니다. 기존 16×16 아이콘과 조건부·후보·재귀의 점선
+아이콘 테두리는 유지합니다.
+
+함수를 넘겼다는 사실만으로 실행·등록·비동기 동작을 확정하지 않습니다.
+`svc(a_func())`는 반환값을 넘기는 것이므로 `a_func`의 인자 전달 관계가 아닙니다.
+직접 함수명과 함수 주소는 가볍게 수집하며, 별칭·멤버·테이블·함수 반환값은 기존
+포인터 분석이 이미 실행되는 경우의 알려진 후보만 재사용합니다. 이 기능 때문에
+무거운 전체 포인터 분석을 새로 강제하지 않으므로 일부 별칭은 표시되지 않을 수
+있습니다. References와 변수 R/W 필터에는 영향을 주지 않습니다.
+
+JSON 설정은 `"cRelation.includeFunctionArguments": true`입니다. VSIX에 포함된
+**Help → Function arguments**에서도 같은 사용법을 확인할 수 있습니다.
+
 ## 변수 읽기·쓰기 탐색
 
 메인 편집기에서 변수를 선택하면 같은 Relation 창의 선택 메뉴가 **Variable · All uses / R · Read / W · Write / RW · Read/write / & · Address passed**로 바뀝니다. 사용한 함수별로 묶고, 한 줄 노드의 작은 색상 표시로 접근 종류를 구분합니다.

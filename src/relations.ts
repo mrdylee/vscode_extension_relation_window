@@ -42,6 +42,8 @@ export class RelationIndex {
   private byId = new Map<string, SymbolRecord>();
   private references = new FileBuckets<ReferenceRecord>();
   private outgoing = new Map<string, ReferenceRecord[]>();
+  private functionArguments = new FileBuckets<ReferenceRecord>();
+  private outgoingArguments = new Map<string, ReferenceRecord[]>();
   private members = new Map<string, Map<string, SymbolRecord[]>>();
   private filesByName = new Map<string, Set<string>>();
   private visibility = new Map<string, Set<string>>();
@@ -59,6 +61,7 @@ export class RelationIndex {
   clear() {
     this.files.clear(); this.byName.clear(); this.byId.clear(); this.references.clear();
     this.fileOrder.clear(); this.nextOrder = 0; this.targets.clear(); this.outgoing.clear();
+    this.functionArguments.clear(); this.outgoingArguments.clear();
     this.members.clear(); this.filesByName.clear(); this.visibility.clear();
     this.layouts.clear();
   }
@@ -84,6 +87,13 @@ export class RelationIndex {
     }
     this.byName.add(file.uri, file.symbols);
     this.references.add(file.uri, file.references);
+    this.functionArguments.add(file.uri, file.functionArguments ?? []);
+    for (const ref of file.functionArguments ?? []) {
+      if (!ref.functionId) continue;
+      let argumentsFound = this.outgoingArguments.get(ref.functionId);
+      if (!argumentsFound) this.outgoingArguments.set(ref.functionId, argumentsFound = []);
+      argumentsFound.push(ref);
+    }
     for (const ref of file.references) {
       // The analyzer leaves access unset inside unevaluated sizeof/alignof expressions.
       if (ref.kind !== 'call' || !ref.functionId || !ref.access) continue;
@@ -104,9 +114,10 @@ export class RelationIndex {
     const paths = this.filesByName.get(basename);
     paths?.delete(file.uri);
     if (!paths?.size) this.filesByName.delete(basename);
-    for (const symbol of file.symbols) { this.byId.delete(symbol.id); this.targets.delete(symbol.name); this.outgoing.delete(symbol.id); this.members.delete(symbol.id); }
+    for (const symbol of file.symbols) { this.byId.delete(symbol.id); this.targets.delete(symbol.name); this.outgoing.delete(symbol.id); this.outgoingArguments.delete(symbol.id); this.members.delete(symbol.id); }
     this.byName.remove(file.uri, file.symbols);
     this.references.remove(file.uri, file.references);
+    this.functionArguments.remove(file.uri, file.functionArguments ?? []);
   }
   symbols(): SymbolRecord[] { return [...this.byId.values()]; }
   symbol(id: string) { return this.byId.get(id); }
@@ -194,38 +205,43 @@ export class RelationIndex {
     const ref = file.references.find(ref => !ref.indirect && ref.callKind !== 'inferred' && contains(ref));
     return ref ? this.resolve(ref) : symbol ? [symbol] : [];
   }
-  private callees(target: SymbolRecord, sort: CalleeSort): RelationGroup[] {
+  private callees(target: SymbolRecord, sort: CalleeSort, includeFunctionArguments: boolean): RelationGroup[] {
     if (target.kind !== 'function') return [];
     const groups = new Map<string, RelationGroup>();
-    const calls = [...(this.outgoing.get(target.id) ?? [])].sort((a, b) => a.location.start - b.location.start);
+    const calls = [...(this.outgoing.get(target.id) ?? []), ...(includeFunctionArguments ? this.outgoingArguments.get(target.id) ?? [] : [])]
+      .sort((a, b) => a.location.start - b.location.start);
     for (const ref of calls) {
       const candidates = this.resolve(ref);
       for (const symbol of candidates.length ? candidates : [undefined]) {
-        const callKind = ref.indirect || symbol?.kind === 'variable' ? 'indirect'
+        const callKind = ref.argument ? undefined : ref.indirect || symbol?.kind === 'variable' ? 'indirect'
           : symbol?.kind === 'function' ? ref.callKind ?? 'direct' : symbol?.kind === 'macro' ? 'macro' : 'unresolved';
         const key = symbol?.id ?? `${callKind}:${ref.name}`;
         const group: RelationGroup = groups.get(key) ?? { key, symbol, name: symbol?.name ?? ref.name,
           kind: symbol?.kind ?? ref.unresolvedKind ?? 'unknown', sites: [], callKind };
+        group.callKind ??= callKind;
         group.sites.push({ ...ref, access: undefined, candidates: candidates.map(s => s.id),
-          ambiguous: ref.callKind === 'inferred' || candidates.length > 1 || candidates.some(s => s.conditions.length > 0) || ref.conditions.length > 0 });
+          ambiguous: ref.callKind === 'inferred' || !!ref.argument?.inferred || !!ref.inference?.incomplete || candidates.length > 1 || candidates.some(s => s.conditions.length > 0) || ref.conditions.length > 0 });
         groups.set(key, group);
       }
     }
     const result = [...groups.values()];
     return sort === 'source' ? result : result.sort((a, b) => a.name.localeCompare(b.name));
   }
-  relations(id: string, mode: RelationMode, filter: AccessFilter = 'all', sort: CalleeSort = 'name'): RelationGroup[] {
+  relations(id: string, mode: RelationMode, filter: AccessFilter = 'all', sort: CalleeSort = 'name', includeFunctionArguments = false): RelationGroup[] {
     const target = this.byId.get(id);
     if (!target) return [];
-    if (mode === 'callees' && target.kind !== 'variable') return this.callees(target, sort);
+    if (mode === 'callees' && target.kind !== 'variable') return this.callees(target, sort, includeFunctionArguments);
     const groups = new Map<string, RelationGroup>();
-    for (const ref of this.references.get(target.name, this.fileOrder)) {
+    const argumentsFound = includeFunctionArguments && target.kind === 'function' && (mode === 'callers' || mode === 'both')
+      ? this.functionArguments.get(target.name, this.fileOrder) : [];
+    const references = this.references.get(target.name, this.fileOrder);
+    for (const ref of argumentsFound.length ? [...references, ...argumentsFound] : references) {
       const variable = target.kind === 'variable';
       if (variable) {
         if (!ref.access || (filter !== 'all' && ref.access !== filter &&
           !(ref.access === 'readwrite' && (filter === 'read' || filter === 'write')))) continue;
       } else {
-        if ((mode === 'callers' || mode === 'both') && (ref.kind !== 'call' || target.kind !== 'function')) continue;
+        if ((mode === 'callers' || mode === 'both') && ((ref.kind !== 'call' && !ref.argument) || target.kind !== 'function')) continue;
         if (ref.location.start === target.location.start && ref.location.uri === target.location.uri) continue;
       }
       const candidates = this.resolve(ref);
@@ -237,12 +253,12 @@ export class RelationIndex {
       const conditional = candidates.some(s => s.conditions.length > 0);
       const headerStatic = candidates.some(s => s.storage === 'static' && s.location.uri !== ref.location.uri);
       group.sites.push({ ...ref, access: variable ? ref.access : undefined,
-        ambiguous: ref.callKind === 'inferred' || candidates.length > 1 || conditional || headerStatic, candidates: candidates.map(s => s.id) });
+          ambiguous: ref.callKind === 'inferred' || !!ref.argument?.inferred || !!ref.inference?.incomplete || (!!ref.argument && ref.conditions.length > 0) || candidates.length > 1 || conditional || headerStatic, candidates: candidates.map(s => s.id) });
       groups.set(key, group);
     }
     return [...groups.values()].sort((a, b) => a.name.localeCompare(b.name));
   }
-  graph(id: string, mode: RelationMode, depth: number, expanded: Record<string, number> = {}, filter: AccessFilter = 'all', sort: CalleeSort = 'name'): GraphData | undefined {
+  graph(id: string, mode: RelationMode, depth: number, expanded: Record<string, number> = {}, filter: AccessFilter = 'all', sort: CalleeSort = 'name', includeFunctionArguments = false): GraphData | undefined {
     const rootSymbol = this.byId.get(id);
     if (!rootSymbol) return undefined;
     if (rootSymbol.kind === 'variable' && (mode === 'callees' || mode === 'both')) mode = 'callers';
@@ -263,7 +279,7 @@ export class RelationIndex {
       if (symbol && levels > 0 && !cycle && (direction !== 'callees' || symbol.kind === 'function')) {
         node.expanded = true;
         const nextPath = new Set(path).add(symbol.id);
-        for (const child of this.relations(symbol.id, direction, key === 'root' ? filter : 'all', sort)) {
+        for (const child of this.relations(symbol.id, direction, key === 'root' ? filter : 'all', sort, includeFunctionArguments)) {
           if (count >= limit) { truncated = true; break; }
           const childKey = both && key === 'root' ? `${direction}:${child.key}` : child.key;
           node.children.push(make(child.symbol, child, `${key}/${encodeURIComponent(childKey)}`, levels - 1, nextPath, direction, limit));
@@ -275,7 +291,7 @@ export class RelationIndex {
     const root = make(rootSymbol, undefined, 'root', levels, new Set(), mode === 'both' ? 'callees' : mode, both ? 151 : 300);
     const callers: GraphNode[] | undefined = both ? [] : undefined;
     if (callers && (expanded.root ?? levels) > 0) {
-      for (const child of this.relations(id, 'callers')) {
+      for (const child of this.relations(id, 'callers', 'all', 'name', includeFunctionArguments)) {
         if (count >= 300) { truncated = true; break; }
         callers.push(make(child.symbol, child, `root/${encodeURIComponent('callers:' + child.key)}`,
           (expanded.root ?? levels) - 1, new Set([id]), 'callers', 300));

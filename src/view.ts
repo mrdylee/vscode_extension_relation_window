@@ -8,7 +8,7 @@ import { highlightC, SyntaxToken } from './syntax';
 export class RelationView implements vscode.Disposable {
   state: ViewState = { candidates: [], status: 'Open a C file and click a symbol name.', fileCount: 0,
     issues: [], mode: 'references', accessFilter: 'all', depth: 1, locked: false, skipInactive: true,
-    calleeSort: 'name', contextLayout: 'combined', callGraphDirection: 'callers-left' };
+    calleeSort: 'name', contextLayout: 'combined', callGraphDirection: 'callers-left', includeFunctionArguments: false };
   private webview?: vscode.WebviewView;
   private contextView?: vscode.WebviewView;
   private root?: { id: string; name: string; uri: string };
@@ -26,7 +26,7 @@ export class RelationView implements vscode.Disposable {
   constructor(private workspace: WorkspaceIndex, private extensionUri: vscode.Uri) {
     this.readPreferences();
     this.preferences = vscode.workspace.onDidChangeConfiguration(event => {
-      if (event.affectsConfiguration('cRelation.calleeSort') || event.affectsConfiguration('cRelation.contextLayout')) {
+      if (event.affectsConfiguration('cRelation.calleeSort') || event.affectsConfiguration('cRelation.contextLayout') || event.affectsConfiguration('cRelation.includeFunctionArguments')) {
         const previousLayout = this.state.contextLayout;
         this.readPreferences(); this.refresh();
         if (previousLayout !== 'separate' && this.state.contextLayout === 'separate') {
@@ -48,6 +48,7 @@ export class RelationView implements vscode.Disposable {
     this.state.calleeSort = config.get('calleeSort') === 'source' ? 'source' : 'name';
     this.state.contextLayout = config.get('contextLayout') === 'separate' ? 'separate' : 'combined';
     this.state.callGraphDirection = config.get('callGraphDirection') === 'callees-left' ? 'callees-left' : 'callers-left';
+    this.state.includeFunctionArguments = config.get('includeFunctionArguments') === true;
   }
   resolveWebviewView(view: vscode.WebviewView, contextOnly = false) {
     if (contextOnly) this.contextView = view; else this.webview = view;
@@ -106,7 +107,7 @@ export class RelationView implements vscode.Disposable {
         symbol = matches.length === 1 ? matches[0] : undefined;
         if (symbol) { this.root.id = symbol.id; this.expanded = {}; this.selection = symbol.id; }
       }
-      this.state.graph = symbol ? this.workspace.index.graph(symbol.id, this.state.mode, this.state.depth, this.expanded, this.state.accessFilter, this.state.calleeSort) : undefined;
+      this.state.graph = symbol ? this.workspace.index.graph(symbol.id, this.state.mode, this.state.depth, this.expanded, this.state.accessFilter, this.state.calleeSort, this.state.includeFunctionArguments) : undefined;
       if (!symbol) this.state.context = undefined;
     }
     this.locations.clear(); this.nodes.clear();
@@ -114,7 +115,7 @@ export class RelationView implements vscode.Disposable {
       this.nodes.set(node.key, node);
       if (node.symbolId) this.locations.set(node.symbolId, { location: node.location, label: node.name });
       for (const site of node.sites) {
-        this.locations.set(site.id, { location: site.location, label: `${site.name} · ${site.kind}` });
+        this.locations.set(site.id, { location: site.location, label: `${site.name} · ${site.argument ? `Function argument #${site.argument.position} via ${site.argument.callee}` : site.kind}` });
         site.inference?.evidence.forEach((frame, i) => this.locations.set(site.id + ':evidence:' + i, { location: frame.location, label: frame.reason }));
       }
       node.children.forEach(visit);
@@ -154,7 +155,7 @@ export class RelationView implements vscode.Disposable {
       case 'selectNode': {
         const node = typeof m.key === 'string' ? this.nodes.get(m.key) : undefined;
         if (!node) return;
-        this.selection = node.callKind || node.direction || node.sites[0]?.access ? node.sites[0].id : node.symbolId ?? node.sites[0]?.id;
+        this.selection = node.callKind || node.direction || node.sites.some(site => site.argument) || node.sites[0]?.access ? node.sites[0].id : node.symbolId ?? node.sites[0]?.id;
         if (node.symbolId && !node.cycle && (!node.callKind || ['direct', 'expanded', 'inferred'].includes(node.callKind))) {
           // Preserve a deeper inherited expansion, including explicit ancestor overrides.
           let levels = this.state.depth, path = '';

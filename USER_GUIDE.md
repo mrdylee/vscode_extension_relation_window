@@ -91,6 +91,47 @@ Sorting, Context layout and call graph direction are saved in workspace settings
 
 Both views share one analysis index. Separate Context receives preview updates; it does not start a second analysis pass. Actual responsiveness depends on project size and displayed relationships.
 
+## Function arguments (v0.1.31)
+
+Open **Settings → Include Function Arguments** to include functions passed as
+arguments in **Callers**, **Callees** and **Callers & Callees**. This option is
+off by default. Changing it reuses the existing index; it does not rebuild it.
+
+```c
+int priv_task_data(void *ctx) {
+    return svc_call_nonblock(ctx, a_func);
+}
+```
+
+With the option on, `a_func`'s Callers includes `priv_task_data`. The latter's
+Callees includes both the call to `svc_call_nonblock` and the function argument
+`a_func`. The popup identifies **Function argument #2 · via svc_call_nonblock**.
+Click the argument relationship to preview the original argument in Context;
+Enter/double-click opens that location in the editor. Expansion follows the
+selected function normally. The API body need not be available for a literal
+function argument to be found.
+
+- **Cyan dotted connector:** all locations on that branch pass a function as an
+  argument. Existing function icons remain 16×16.
+- **Solid connector:** normal call, or a group containing both calls and function
+  arguments. The popup distinguishes every location.
+- **Dashed icon border:** retains its existing candidate, conditional or recursive
+  meaning. It is independent of the argument connector.
+
+Passing a function does not prove that the receiver invokes it, registers it,
+queues it or runs it asynchronously. An executor found by pointer analysis keeps
+its own inferred-call relationship. `svc(a_func())` passes the returned value;
+it does not pass `a_func` itself. Passing an object that contains callbacks does
+not automatically count as passing each callback.
+
+Literal names and function addresses use a light collection path. Alias, member,
+table and returned function values use existing pointer inference only when that
+analysis already runs. No additional full pointer analysis is forced solely for
+arguments, so unresolved aliases can remain absent. Candidate and partial-result
+notices apply. References and variable R/W filters retain their original meaning.
+
+JSON setting: `"cRelation.includeFunctionArguments": true`.
+
 Functions, variables, types and macros have distinct icons. Context and detail popups use syntax colors; these are not full compiler-based semantic highlighting.
 
 ## Symbol icons and badges

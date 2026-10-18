@@ -32,6 +32,8 @@ try {
   collect(fixture.memberGraph.root);
   collect(fixture.macroGraph.root);
   collect(fixture.pointerGraph.root);
+  collect(fixture.argumentGraph.root);
+  collect(fixture.argumentBothGraph.root); fixture.argumentBothGraph.callers.forEach(collect);
   collect(fixture.navigation.both.root);
   fixture.navigation.both.callers.forEach(collect);
   collect(fixture.navigation.bothExpanded.root);
@@ -47,7 +49,7 @@ try {
     if (message.type === 'selectNode') {
       const find = node => node.key === message.key ? node : node.children.map(find).find(Boolean);
       const node = find(state.graph.root) ?? state.graph.callers?.map(find).find(Boolean);
-      preview(node.callKind || node.direction || node.sites[0]?.access ? node.sites[0].id : node.symbolId ?? node.sites[0]?.id);
+      preview(node.callKind || node.direction || node.sites.some(s => s.argument) || node.sites[0]?.access ? node.sites[0].id : node.symbolId ?? node.sites[0]?.id);
       if (node.name === 'control_task') state.graph = fixture.expandedGraph;
       if (node.name === 'entry') state.graph = fixture.navigation.bothExpanded;
     }
@@ -324,6 +326,38 @@ try {
   assert.ok((await page.locator('.code-line.highlight').textContent()).includes('callback_target'));
   await page.screenshot({ path: 'output/playwright/inferred-calls.png', fullPage: true });
   await page.keyboard.press('Escape');
+  state.graph = fixture.argumentGraph; state.mode = 'callees';
+  preview(state.graph.root.symbolId);
+  await page.evaluate(state => window.dispatchEvent(new MessageEvent('message', { data: { type: 'state', state } })), state);
+  const argumentTarget = page.locator('[data-node-name="arg_target"] .node-title');
+  assert.ok((await argumentTarget.getAttribute('aria-label')).includes('Function argument'));
+  assert.equal(await page.locator('[data-node-name="arg_target"]').locator('..').evaluate(node => getComputedStyle(node, '::after').borderTopStyle), 'dotted');
+  assert.equal(await argumentTarget.locator('.symbol-icon').evaluate(node => getComputedStyle(node).borderStyle), 'solid', 'argument status does not repurpose the candidate icon');
+  assert.ok((await argumentTarget.boundingBox()).height <= 26);
+  await argumentTarget.click();
+  assert.ok((await page.locator('.code-line.highlight').textContent()).includes('arg_svc(arg_target)'));
+  await argumentTarget.focus(); await argumentTarget.press('Space');
+  assert.ok((await popup.textContent()).includes('Function argument #1 · via arg_svc'));
+  assert.ok((await popup.textContent()).includes('does not prove'));
+  assert.equal(await popup.locator('.site-kind[data-kind="argument"]').count(), 1);
+  await page.screenshot({ path: 'output/playwright/function-arguments.png', fullPage: true });
+  await page.keyboard.press('Escape');
+  await argumentTarget.press('Enter');
+  assert.ok(await page.evaluate(() => window.sent.some(m => m.type === 'open' && m.id.includes(':argument:'))));
+  state.graph = fixture.argumentBothGraph; state.mode = 'both';
+  await configure({ callGraphDirection: 'callers-left' });
+  const argumentOrigin = page.locator('[data-node-name="arg_origin"]');
+  assert.equal(await argumentOrigin.locator('..').evaluate(node => getComputedStyle(node, '::after').borderTopStyle), 'dotted');
+  assert.equal(await page.locator('[data-node-name="arg_mixed"]').locator('..').evaluate(node => node.classList.contains('function-argument')), false, 'mixed sites keep a solid connector');
+  await argumentOrigin.locator('.node-title').click();
+  assert.ok((await page.locator('.code-line.highlight').textContent()).includes('arg_svc(arg_target)'));
+  await page.locator('body').evaluate(node => node.classList.add('vscode-light'));
+  assert.equal(await argumentOrigin.locator('..').evaluate(node => getComputedStyle(node, '::after').borderTopColor), 'rgb(38, 127, 153)');
+  await configure({ callGraphDirection: 'callees-left' });
+  assert.equal(await argumentOrigin.locator('..').evaluate(node => getComputedStyle(node, '::after').borderTopStyle), 'dotted');
+  await page.screenshot({ path: 'output/playwright/function-arguments-light-reversed.png', fullPage: true });
+  await page.locator('body').evaluate(node => node.classList.remove('vscode-light'));
+  await configure({ callGraphDirection: 'callers-left' });
   await relationSelector.selectOption('callers');
   state.graph = fixture.memberGraph; state.accessFilter = 'all';
   preview(state.graph.root.symbolId);
@@ -470,7 +504,7 @@ try {
   assert.ok(await page.locator('.context').isVisible());
   assert.ok(await page.locator('.relation').isVisible());
   assert.equal(await divider.isVisible(), false);
-  await writeFile('test-results/ui.json', JSON.stringify({ passed: true, checks: ['Settings entry point for sorting and layout', 'background panning without extension messages', 'reversible dual graph geometry and whole-graph left alignment', 'separate Context syntax/navigation and combined restoration', 'Context click coordinates and drag selection', 'Context UTF-16 and CRLF coordinates', 'variable filters R/W/RW/address', 'variable badges preserve one-line height', 'variable click and popup preview exact use sites', 'variable access colors in dark/light themes', 'function mode preserved', '500-ms stationary hover with movement reset and leave cancellation', 'mouse click does not bypass delay', 'popup tint and condition syntax in dark/light themes', 'single-line graph nodes', 'hover popup without layout shift', 'Context selected call and symbol', 'syntax colors in dark/light themes', 'keyboard popup access and Escape', 'root preserved', 'variable icon', 'keyboard expansion/collapse/special', 'explicit source open', 'lock toggle', 'split resize', 'narrow layout', '80 candidates keep graph space and distinguish paths'], errors }, null, 2));
+  await writeFile('test-results/ui.json', JSON.stringify({ passed: true, functionArguments: true, checks: ['Settings entry point for sorting and layout', 'background panning without extension messages', 'reversible dual graph geometry and whole-graph left alignment', 'separate Context syntax/navigation and combined restoration', 'Context click coordinates and drag selection', 'Context UTF-16 and CRLF coordinates', 'variable filters R/W/RW/address', 'variable badges preserve one-line height', 'variable click and popup preview exact use sites', 'variable access colors in dark/light themes', 'function mode preserved', '500-ms stationary hover with movement reset and leave cancellation', 'mouse click does not bypass delay', 'popup tint and condition syntax in dark/light themes', 'single-line graph nodes', 'hover popup without layout shift', 'Context selected call and symbol', 'syntax colors in dark/light themes', 'keyboard popup access and Escape', 'root preserved', 'variable icon', 'keyboard expansion/collapse/special', 'explicit source open', 'lock toggle', 'split resize', 'narrow layout', '80 candidates keep graph space and distinguish paths'], errors }, null, 2));
   assert.deepEqual(errors, []);
   console.log('Browser UI checks passed, including Settings-based preferences, reversible branches and left-aligned graphs');
 } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.31 — 2026-10-18
+
+- Add default-off Include Function Arguments in Settings. Show explicitly passed
+  functions in existing Callers, Callees and bidirectional graphs with a dotted
+  connector and receiver/argument-position details.
+- Preserve existing compact icons, ordinary References and variable filters.
+  Mixed call/argument groups retain solid connectors and separate source sites.
+- Preview and open original argument locations, with normal function expansion.
+  Keep argument passing separate from proof of callback execution.
+- Reuse parsed direct arguments and existing pointer values, cache identities
+  and Worker updates; toggling the option does not rebuild the index.
+- Document the option, connector legend and limits in bundled offline Help.
+
 ## 0.1.30 — 2026-10-18
 
 - Add Call Graph Direction in Settings: Callers left / Callees right (default)

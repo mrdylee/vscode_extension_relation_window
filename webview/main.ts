@@ -198,8 +198,12 @@ function showDetails(node: GraphNode, anchor: HTMLButtonElement) {
   if (node.sites.length) popup.append(el('strong', 'detail-label', `${node.sites.length} ${node.sites[0].access ? 'variable use' : 'call/reference'} locations`));
   if (node.sites.some(site => site.access === 'address')) popup.append(el('div', 'condition', 'This location uses the address. Writes inside the receiving function are not tracked.'));
   for (const site of node.sites) {
+    if (site.argument) {
+      popup.append(el('strong', 'detail-label argument-label', `Function argument #${site.argument.position} · via ${site.argument.callee}`));
+      popup.append(el('div', 'condition', 'Passing a function does not prove that the receiving code invokes it.'));
+    }
     if (site.inference) {
-      popup.append(el('strong', 'detail-label', `Inferred call · ${site.inference.expression}`));
+      popup.append(el('strong', 'detail-label', `${site.argument ? 'Argument value' : 'Inferred call'} · ${site.inference.expression}`));
       popup.append(condition(site.inference.expression));
       if (site.inference.incomplete) popup.append(el('div', 'condition detail-warning', 'Other targets may exist. ' + site.inference.reasons.join(' · ')));
       for (const [i, frame] of site.inference.evidence.entries()) {
@@ -213,12 +217,12 @@ function showDetails(node: GraphNode, anchor: HTMLButtonElement) {
       }
     }
     if (site.expansion) {
-      popup.append(el('strong', 'detail-label', `Macro-expanded call · ${site.expansion.chain.map(frame => frame.name).join(' → ')}`));
+      popup.append(el('strong', 'detail-label', `Macro-expanded ${site.argument ? 'argument' : 'call'} · ${site.expansion.chain.map(frame => frame.name).join(' → ')}`));
       for (const frame of site.expansion.chain) popup.append(el('div', 'detail-meta', `${frame.name} · ${filename(frame.location.uri)}:${frame.location.line + 1}`));
       popup.append(condition(site.expansion.text));
     }
     const b = button('', () => send('preview', { id: site.id }));
-    const kind = el('span', 'site-kind', site.kind === 'call' ? 'Call' : site.kind === 'declaration' ? 'Declaration' : 'Reference'); kind.dataset.kind = site.kind;
+    const kind = el('span', 'site-kind', site.argument ? 'Function argument' : site.kind === 'call' ? 'Call' : site.kind === 'declaration' ? 'Declaration' : 'Reference'); kind.dataset.kind = site.argument ? 'argument' : site.kind;
     b.append(site.access ? accessBadge(site.access) : kind, el('span', 'detail-path', filename(site.location.uri)),
       el('span', 'detail-location', `:${site.location.line + 1}:${site.location.column + 1}`));
     b.className = 'site'; b.dataset.site = site.id;
@@ -243,8 +247,9 @@ function showDetails(node: GraphNode, anchor: HTMLButtonElement) {
 }
 function drawNode(node: GraphNode): HTMLElement {
   const branch = el('div', 'branch');
+  if (node.sites.length && node.sites.every(site => site.argument)) branch.classList.add('function-argument');
   const card = el('article', 'node'); card.dataset.nodeName = node.name;
-  const openId = node.callKind || node.direction || node.sites[0]?.access ? node.sites[0].id : node.symbolId ?? node.sites[0]?.id;
+  const openId = node.callKind || node.direction || node.sites.some(site => site.argument) || node.sites[0]?.access ? node.sites[0].id : node.symbolId ?? node.sites[0]?.id;
   const title = button('', event => { if (event.detail <= 1) send('selectNode', { key: node.key }); }, '');
   title.className = 'node-title'; title.dataset.key = node.key;
   title.dataset.preview = openId;
@@ -253,7 +258,7 @@ function drawNode(node: GraphNode): HTMLElement {
   for (const access of accesses) title.append(accessBadge(access, true));
   const status = [node.cycle ? 'Recursive' : '', node.ambiguous ? 'Candidate' : '', node.callKind === 'indirect' ? 'Indirect call' : node.callKind === 'unresolved' ? 'Unresolved call' : '', node.conditions.length || node.sites.some(s => s.conditions.length) ? 'Conditional' : ''].filter(Boolean).join(', ');
   if (status) title.classList.add('uncertain');
-  title.setAttribute('aria-label', [kindLabel(node) + ' ' + node.name, ...accesses.map(a => accessNames[a]), status].filter(Boolean).join(', '));
+  title.setAttribute('aria-label', [kindLabel(node) + ' ' + node.name, node.sites.some(site => site.argument) ? 'Function argument' : '', ...accesses.map(a => accessNames[a]), status].filter(Boolean).join(', '));
   title.setAttribute('aria-haspopup', 'dialog'); title.setAttribute('aria-controls', popup.id); title.setAttribute('aria-expanded', 'false');
   title.onmouseenter = () => scheduleHover(node, title);
   title.onmousemove = () => scheduleHover(node, title);

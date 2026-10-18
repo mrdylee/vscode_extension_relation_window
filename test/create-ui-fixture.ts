@@ -30,7 +30,10 @@ async function main() {
   const pivot = index.symbols().find(s => s.name === 'pivot')!;
   const navigation = { both: index.graph(pivot.id, 'both', 1), bothExpanded: index.graph(pivot.id, 'both', 2),
     name: index.graph(pivot.id, 'callees', 1), source: index.graph(pivot.id, 'callees', 1, {}, 'all', 'source') };
+  analyzer.derive([analyzer.analyze('file:///demo/arguments.c', 'typedef void (*CB)(void);\nvoid arg_leaf(void){}\nvoid arg_target(void){arg_leaf();}\nvoid arg_svc(CB cb);\nvoid arg_origin(void){arg_svc(arg_target);}\nvoid arg_mixed(void){arg_svc(arg_target);arg_target();}\n')]).forEach(file => index.update(file));
+  const argumentGraph = index.graph(index.symbols().find(s => s.name === 'arg_origin')!.id, 'callees', 2, {}, 'all', 'source', true);
+  const argumentBothGraph = index.graph(index.symbols().find(s => s.name === 'arg_target')!.id, 'both', 1, {}, 'all', 'name', true);
   await mkdir('test-results', { recursive: true });
-  await writeFile('test-results/ui-fixture.json', JSON.stringify({ graph, expandedGraph, calleeGraph, macroGraph, pointerGraph, memberGraph, variableGraphs, navigation, files: [...index.files.values()].map(file => ({ ...file, tokens: highlightC(file.text) })) }));
+  await writeFile('test-results/ui-fixture.json', JSON.stringify({ graph, expandedGraph, calleeGraph, macroGraph, pointerGraph, memberGraph, variableGraphs, navigation, argumentGraph, argumentBothGraph, files: [...index.files.values()].map(file => ({ ...file, tokens: highlightC(file.text) })) }));
 }
 void main();

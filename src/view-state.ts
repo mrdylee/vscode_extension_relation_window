@@ -7,4 +7,5 @@ export interface ViewState {
   mode: RelationMode; accessFilter: AccessFilter; depth: number; locked: boolean; skipInactive: boolean;
   calleeSort: CalleeSort; contextLayout: 'combined' | 'separate';
   callGraphDirection: 'callers-left' | 'callees-left';
+  includeFunctionArguments: boolean;
 }

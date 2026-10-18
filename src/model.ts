@@ -31,6 +31,7 @@ export interface ReferenceRecord {
   macroIds?: string[];
   flowKey?: string;
   inference?: { expression: string; evidence: { location: Location; reason: string }[]; incomplete: boolean; reasons: string[] };
+  argument?: { callee: string; position: number; location: Location; inferred?: boolean };
   unresolvedKind?: Kind;
 }
 export type FlowExpression = { location: Location } & (
@@ -69,6 +70,7 @@ export interface FileAnalysis {
   guard?: { name: string; condition: string };
   projectScoped?: boolean;
   programs?: FlowProgram[]; initializers?: GlobalInitializer[];
+  functionArguments?: ReferenceRecord[];
   statementConditions?: { start: number; conditions: string[] }[];
 }
 export interface RelationSite extends ReferenceRecord { ambiguous: boolean; candidates: string[] }

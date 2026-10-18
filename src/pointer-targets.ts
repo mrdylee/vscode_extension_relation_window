@@ -1,5 +1,6 @@
 import { FileAnalysis, FlowExpression as Expr, FlowLocal, FlowProgram, FlowStatement, Location, ReferenceRecord, SymbolRecord } from './model';
 import { RelationIndex } from './relations';
+import { FunctionArguments } from './function-arguments';
 
 type Evidence = { location: Location; reason: string };
 interface Value {
@@ -11,6 +12,7 @@ interface Summary { params: Value[]; returns: Value; effects: Map<string, Effect
 interface State { memory: Map<string, Value>; effects: Map<string, Effect>; alive: boolean; incomplete?: boolean }
 interface Context { program: FlowProgram; locals: Map<string, FlowLocal>; exits: State[]; returned: Value }
 interface Observation { value: Value; expression: string; kind: 'variable' | 'unknown' }
+interface ArgumentObservation { call: Extract<Expr, { kind: 'call' }>; values: Map<number, Value> }
 const projectCache = new WeakMap<FileAnalysis, { inputs: FileAnalysis[]; results: FileAnalysis[] }>();
 const fileCache = new WeakMap<FileAnalysis, { fingerprint: string; result: FileAnalysis }>();
 const arrayIndices = new WeakMap<Map<string, Value>, Map<string, Set<string>>>();
@@ -117,15 +119,19 @@ export function inferPointerCalls(files: FileAnalysis[]): FileAnalysis[] {
   const cached = projectCache.get(files[0]);
   if (cached && cached.inputs.length === files.length && files.every((file, n) => file === cached.inputs[n])) return cached.results;
   const index = new RelationIndex(); files.forEach(file => index.update(file));
+  const functionArguments = new FunctionArguments(files, index);
   const programs = files.flatMap(file => file.programs ?? []), byFunction = new Map<string, FlowProgram[]>();
   for (const program of programs) { const list = byFunction.get(program.id) ?? []; list.push(program); byFunction.set(program.id, list); }
   const references = files.flatMap(file => file.references.filter(ref => ref.kind === 'call' && ref.flowKey));
   const localNames = new Set(programs.flatMap(program => program.locals.map(local => local.name)));
   if (!references.some(ref => ref.indirect || localNames.has(ref.name) || index.resolveReference(ref).some(s => s.kind === 'variable'))) {
     const results = files.map(file => {
-      const references = uniqueCalls(file.references); if (references === file.references) return file;
-      const previous = fileCache.get(file); if (previous?.fingerprint === 'direct-sites') return previous.result;
-      const result = { ...file, references }; fileCache.set(file, { fingerprint: 'direct-sites', result }); return result;
+      const references = uniqueCalls(file.references), argumentsFound = functionArguments.forFile(file.uri);
+      if (references === file.references && !argumentsFound.length) return file;
+      const fingerprint = JSON.stringify(['direct-sites', argumentsFound]);
+      const previous = fileCache.get(file); if (previous?.fingerprint === fingerprint) return previous.result;
+      const result = { ...file, references, functionArguments: argumentsFound.length ? argumentsFound : undefined };
+      fileCache.set(file, { fingerprint, result }); return result;
     });
     projectCache.set(files[0], { inputs: files, results }); return results;
   }
@@ -143,6 +149,7 @@ export function inferPointerCalls(files: FileAnalysis[]): FileAnalysis[] {
   }
   const parameterInfo = new Map<string, { fn: string; index: number }>();
   const observations = new Map<string, Observation>(), notices = new Set<string>();
+  const argumentObservations = new Map<string, ArgumentObservation>();
   let changed = false, steps = 0;
   let timedOut = false, checks = 0;
   function expired() {
@@ -151,8 +158,8 @@ export function inferPointerCalls(files: FileAnalysis[]): FileAnalysis[] {
     }
     return timedOut;
   }
-  interface Dependencies { heap: Map<string, Value | undefined>; functions: Map<string, number>; shape?: number; observations: Set<string> }
-  const completed = new Map<string, { dependencies: Dependencies; params: Value[]; observations: Map<string, Observation> }>();
+  interface Dependencies { heap: Map<string, Value | undefined>; functions: Map<string, number>; shape?: number; observations: Set<string>; arguments: Set<string> }
+  const completed = new Map<string, { dependencies: Dependencies; params: Value[]; observations: Map<string, Observation>; arguments: Map<string, ArgumentObservation> }>();
   let dependencies: Dependencies | undefined;
   const depend = (fn: string) => { if (dependencies && !dependencies.functions.has(fn)) dependencies.functions.set(fn, summaries.get(fn)?.version ?? -1); };
   const heapValue = (key: string) => { const value = heap.get(key); if (dependencies && !dependencies.heap.has(key)) dependencies.heap.set(key, value); return value; };
@@ -453,6 +460,14 @@ export function inferPointerCalls(files: FileAnalysis[]): FileAnalysis[] {
     }
     if (expr.kind === 'call') {
       const callee = evaluate(expr.callee, state, ctx), resolved = materialize(callee), args = expr.args.map(arg => evaluate(arg, state, ctx));
+      for (const [n, value] of args.entries()) {
+        if (!value.targets.size && (!value.params.size || value.objects.size)) continue;
+        dependencies?.arguments.add(expr.key);
+        let observation = argumentObservations.get(expr.key);
+        if (!observation) argumentObservations.set(expr.key, observation = { call: expr, values: new Map() });
+        const old = observation.values.get(n);
+        observation.values.set(n, old ? union(old, value) : value);
+      }
       for (const arg of args) publish(arg, state);
       const direct = expr.callee.kind === 'name' && !expr.callee.localId && globalSymbols(expr.callee).every(s => s.kind === 'function');
       if (!direct) {
@@ -533,7 +548,7 @@ export function inferPointerCalls(files: FileAnalysis[]): FileAnalysis[] {
   }
   let converged = false;
   for (let round = 0; round < 12; round++) {
-    changed = false; observations.clear(); steps = 0;
+    changed = false; observations.clear(); argumentObservations.clear(); steps = 0;
     for (const [id, list] of byFunction) {
       if (expired()) break;
       const exits: State[] = [], target = summaries.get(id)!; let returned = blank();
@@ -542,10 +557,11 @@ export function inferPointerCalls(files: FileAnalysis[]): FileAnalysis[] {
         [...previous.dependencies.heap].every(([key, value]) => heap.get(key) === value) &&
         [...previous.dependencies.functions].every(([fn, version]) => summaries.get(fn)?.version === version) &&
         (previous.dependencies.shape === undefined || previous.dependencies.shape === heap.size)) {
-        previous.observations.forEach((value, key) => observations.set(key, value)); continue;
+        previous.observations.forEach((value, key) => observations.set(key, value));
+        previous.arguments.forEach((value, key) => argumentObservations.set(key, value)); continue;
       }
       const beforeParams = [...target.params];
-      dependencies = { heap: new Map(), functions: new Map(), observations: new Set() };
+      dependencies = { heap: new Map(), functions: new Map(), observations: new Set(), arguments: new Set() };
       for (const program of list) {
         if (expired()) break;
         const ctx: Context = { program, locals: new Map(program.locals.map(local => [local.id, local])), exits: [], returned: blank() };
@@ -583,13 +599,19 @@ export function inferPointerCalls(files: FileAnalysis[]): FileAnalysis[] {
         if (!old || signature(old.value) !== signature(value) || old.definite !== effect.definite) { changed = true; target.version++; }
         target.effects.set(key, { value, definite: effect.definite });
       }
-      completed.set(id, { dependencies, params: beforeParams, observations: new Map([...dependencies.observations].map(key => [key, observations.get(key)!])) });
+      completed.set(id, { dependencies, params: beforeParams, observations: new Map([...dependencies.observations].map(key => [key, observations.get(key)!])),
+        arguments: new Map([...dependencies.arguments].map(key => [key, argumentObservations.get(key)!])) });
       dependencies = undefined;
     }
     if (timedOut) break;
     if (!changed) { converged = true; break; }
   }
   if (!converged && !timedOut) notices.add('Callback propagation limit: 12 project passes; targets may be incomplete');
+  for (const observation of argumentObservations.values()) for (const [n, observed] of observation.values) {
+    const value = materialize(observed);
+    functionArguments.add(observation.call, n, new Map([...value.targets].map(([id, chain]) => [id, frames([...chain, ...value.evidence])])),
+      true, value.unknown || value.nil || !converged || notices.size > 0, [...new Set([...value.reasons, ...notices])]);
+  }
   const warningFile = files.find(file => file.references.some(ref => ref.kind === 'call'))?.uri;
   const results = files.map(file => {
     let modified = false; const refs: ReferenceRecord[] = [];
@@ -609,11 +631,12 @@ export function inferPointerCalls(files: FileAnalysis[]): FileAnalysis[] {
     const unique = uniqueCalls(refs);
     const warnings = file.uri === warningFile ? [...notices] : [];
     modified ||= unique.length !== refs.length;
-    if (!modified && !warnings.length) return file;
-    const fingerprint = JSON.stringify([unique.filter(ref => ref.inference).map(ref => [ref.id, ref.name, ref.targetId, ref.callKind, ref.inference]), warnings]);
+    const argumentsFound = functionArguments.forFile(file.uri);
+    if (!modified && !warnings.length && !argumentsFound.length) return file;
+    const fingerprint = JSON.stringify([unique.filter(ref => ref.inference).map(ref => [ref.id, ref.name, ref.targetId, ref.callKind, ref.inference]), warnings, argumentsFound]);
     const previous = fileCache.get(file);
     if (previous?.fingerprint === fingerprint) return previous.result;
-    const result = { ...file, references: unique, issues: [...file.issues, ...warnings] };
+    const result = { ...file, references: unique, issues: [...file.issues, ...warnings], functionArguments: argumentsFound.length ? argumentsFound : undefined };
     fileCache.set(file, { fingerprint, result }); return result;
   });
   projectCache.set(files[0], { inputs: files, results }); return results;

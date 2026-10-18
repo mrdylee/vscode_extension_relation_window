@@ -78,3 +78,8 @@ body.vscode-light .node-details .detail-warning, body.vscode-light .node-details
 .left-branches::before, .left-branches .children::before { left: auto; right: 0; }
 .left-branches > .branch::before, .left-branches .children > .branch::before { left: auto; right: -18px; border-left: 0; border-right: 1px solid var(--border); }
 .left-branches > .branch::after, .left-branches .children > .branch::after { left: auto; right: -18px; }
+
+body { --argument-color: var(--vscode-charts-blue, #79c9ed); }
+body.vscode-light, body.vscode-high-contrast-light { --argument-color: var(--vscode-charts-blue, #267f99); }
+.children > .branch.function-argument::after, .children:has(> .branch.function-argument:only-child)::before { background: none; border-top: 1px dotted var(--argument-color); }
+.node-details .argument-label, .site-kind[data-kind=argument] { color: var(--argument-color); }
