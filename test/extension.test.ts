@@ -384,6 +384,26 @@ export async function run() {
   await api.view.handleMessage({ type: 'choose', id: motorCandidate.id });
   assert.equal(api.view.state.graph.root.name, 'ReviewMotor.state');
   assert.equal(api.view.state.graph.root.children[0].name, 'conditional_run');
+  const syntaxUri = vscode.Uri.joinPath(root, 'member-syntax.c');
+  const syntaxSource = 'typedef struct SyntaxMotor {union {int state;};} SyntaxMotor;\nSyntaxMotor *syntax_get(void);\nSyntaxMotor syntax_global={.state=1};\nvoid syntax_task(void *p){((SyntaxMotor*)p)->state=2;syntax_get()->state++;}\n';
+  await vscode.workspace.fs.writeFile(syntaxUri, Buffer.from(syntaxSource));
+  await new Promise(resolve => setTimeout(resolve, 500)); await api.workspace.whenIdle();
+  const syntaxDocument = await vscode.workspace.openTextDocument(syntaxUri);
+  const syntaxEditor = await vscode.window.showTextDocument(syntaxDocument);
+  for (const token of ['state=1', 'state=2', 'state++']) {
+    const position = syntaxDocument.positionAt(syntaxSource.indexOf(token));
+    syntaxEditor.selection = new vscode.Selection(position, position);
+    await new Promise(resolve => setTimeout(resolve, 300));
+    assert.equal(api.view.state.graph.root.name, 'SyntaxMotor.state', token);
+    assert.deepEqual(api.view.state.graph.root.children.map((node: any) => node.name), ['syntax_global', 'syntax_task']);
+  }
+  const syntaxTask = api.view.state.graph.root.children.find((node: any) => node.name === 'syntax_task');
+  assert.deepEqual(syntaxTask.sites.map((site: any) => site.access), ['write', 'readwrite']);
+  await api.view.handleMessage({ type: 'selectNode', key: syntaxTask.key });
+  assert.equal(api.view.state.context.location.start, syntaxSource.indexOf('state=2'));
+  await api.view.handleMessage({ type: 'open', id: syntaxTask.sites[0].id });
+  assert.equal(vscode.window.activeTextEditor!.document.uri.toString(), syntaxUri.toString());
+  assert.equal(syntaxDocument.offsetAt(vscode.window.activeTextEditor!.selection.start), syntaxSource.indexOf('state=2'));
   const macroHeader = vscode.Uri.joinPath(root, 'macro-review.h'), macroUri = vscode.Uri.joinPath(root, 'macro-review.c');
   await vscode.workspace.fs.writeFile(macroHeader, Buffer.from('#define CALL(x) macro_target(x)\n#define WRAP(x) CALL(x)\n'));
   const macroSource = '#include "macro-review.h"\nvoid leaf(void){} void macro_target(int x){leaf();} void changed_target(int x){}\nvoid macro_run(void){WRAP(7);}\n';
@@ -518,6 +538,6 @@ export async function run() {
   assert.equal(api.workspace.index.files.has(argumentsUri.toString()), false);
   const output = process.env.C_RELATION_TEST_OUTPUT!;
   await mkdir(path.dirname(output), { recursive: true });
-  await writeFile(output, JSON.stringify({ passed: true, functionArguments: true, checks: ['workspace-persistent sorting, layout and direction preferences', 'native Settings entry point, separate Context registration and shared navigation', 'dual-direction call-site preview and index reuse', 'Context source navigation and relation reroot', 'Context cross-file variable navigation', 'Context lock and stale-message checks', 'selected identifier tracking', 'selection retry after indexing', 'unlock follows latest editor', 'same-symbol graph reuse', 'variable selection and access filters', 'variable actual-site preview preserves editor', 'variable access filter validation', 'variable uses continue into caller tree', 'activation', '93-file index completion', 'indexing does not open documents', 'WASM worker', 'click tracking', 'variable icon data', 'call sites', 'Context preserves editor', 'mode/depth/expand/collapse', 'locked root', 'explicit source open', 'invalid message target', '#if0 setting reindex', 'unsaved buffer', 'file create/delete', 'ambiguous symbol clears stale graph and Context', 'candidate selection'] }, null, 2));
+  await writeFile(output, JSON.stringify({ passed: true, functionArguments: true, memberSyntax: true, checks: ['cast, returned, anonymous and initialized member navigation', 'workspace-persistent sorting, layout and direction preferences', 'native Settings entry point, separate Context registration and shared navigation', 'dual-direction call-site preview and index reuse', 'Context source navigation and relation reroot', 'Context cross-file variable navigation', 'Context lock and stale-message checks', 'selected identifier tracking', 'selection retry after indexing', 'unlock follows latest editor', 'same-symbol graph reuse', 'variable selection and access filters', 'variable actual-site preview preserves editor', 'variable access filter validation', 'variable uses continue into caller tree', 'activation', '93-file index completion', 'indexing does not open documents', 'WASM worker', 'click tracking', 'variable icon data', 'call sites', 'Context preserves editor', 'mode/depth/expand/collapse', 'locked root', 'explicit source open', 'invalid message target', '#if0 setting reindex', 'unsaved buffer', 'file create/delete', 'ambiguous symbol clears stale graph and Context', 'candidate selection'] }, null, 2));
   console.log('C Relation extension integration checks passed');
 }

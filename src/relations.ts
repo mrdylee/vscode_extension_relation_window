@@ -45,6 +45,7 @@ export class RelationIndex {
   private functionArguments = new FileBuckets<ReferenceRecord>();
   private outgoingArguments = new Map<string, ReferenceRecord[]>();
   private members = new Map<string, Map<string, SymbolRecord[]>>();
+  private anonymousMembers = new Map<string, SymbolRecord[]>();
   private filesByName = new Map<string, Set<string>>();
   private visibility = new Map<string, Set<string>>();
   private layouts = new Map<string, { type: SymbolRecord['type']; value: ReturnType<MemberResolver['layout']> }>();
@@ -52,6 +53,7 @@ export class RelationIndex {
     symbols: name => this.byName.get(name, this.fileOrder),
     symbol: id => this.byId.get(id),
     fields: (id, name) => name === undefined ? [...(this.members.get(id)?.values() ?? [])].flat() : this.members.get(id)?.get(name) ?? [],
+    anonymous: id => this.anonymousMembers.get(id) ?? [],
     visibleFiles: uri => this.visibleFiles(uri),
     identifier: (name, location) => this.resolve({ id: '', name, location, kind: 'reference', conditions: [] })
   });
@@ -62,7 +64,7 @@ export class RelationIndex {
     this.files.clear(); this.byName.clear(); this.byId.clear(); this.references.clear();
     this.fileOrder.clear(); this.nextOrder = 0; this.targets.clear(); this.outgoing.clear();
     this.functionArguments.clear(); this.outgoingArguments.clear();
-    this.members.clear(); this.filesByName.clear(); this.visibility.clear();
+    this.members.clear(); this.anonymousMembers.clear(); this.filesByName.clear(); this.visibility.clear();
     this.layouts.clear();
   }
   update(file: FileAnalysis) {
@@ -78,6 +80,10 @@ export class RelationIndex {
     paths.add(file.uri);
     for (const symbol of file.symbols) {
       this.byId.set(symbol.id, symbol); this.targets.delete(symbol.name);
+      if (symbol.anonymousMemberOf) {
+        const members = this.anonymousMembers.get(symbol.anonymousMemberOf) ?? [];
+        members.push(symbol); this.anonymousMembers.set(symbol.anonymousMemberOf, members);
+      }
       if (symbol.memberOf) {
         let fields = this.members.get(symbol.memberOf);
         if (!fields) this.members.set(symbol.memberOf, fields = new Map());
@@ -114,7 +120,7 @@ export class RelationIndex {
     const paths = this.filesByName.get(basename);
     paths?.delete(file.uri);
     if (!paths?.size) this.filesByName.delete(basename);
-    for (const symbol of file.symbols) { this.byId.delete(symbol.id); this.targets.delete(symbol.name); this.outgoing.delete(symbol.id); this.outgoingArguments.delete(symbol.id); this.members.delete(symbol.id); }
+    for (const symbol of file.symbols) { this.byId.delete(symbol.id); this.targets.delete(symbol.name); this.outgoing.delete(symbol.id); this.outgoingArguments.delete(symbol.id); this.members.delete(symbol.id); this.anonymousMembers.delete(symbol.id); }
     this.byName.remove(file.uri, file.symbols);
     this.references.remove(file.uri, file.references);
     this.functionArguments.remove(file.uri, file.functionArguments ?? []);

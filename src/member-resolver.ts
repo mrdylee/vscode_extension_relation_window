@@ -1,10 +1,12 @@
 import { CType, Location, SymbolRecord, TypedExpression } from './model';
 
 interface ResolvedType { id: string; layers: CType['layers']; conditions: string[]; scalar?: boolean }
+type TypeContext = Pick<SymbolRecord, 'location' | 'scope'>;
 interface Lookup {
   symbols(name: string): SymbolRecord[];
   symbol(id: string): SymbolRecord | undefined;
   fields(id: string, name?: string): SymbolRecord[];
+  anonymous(id: string): SymbolRecord[];
   visibleFiles(uri: string): Set<string>;
   identifier(name: string, location: Location): SymbolRecord[];
 }
@@ -13,7 +15,7 @@ interface Lookup {
 export class MemberResolver {
   constructor(private lookup: Lookup) {}
 
-  private namedTypes(type: CType, declaration: SymbolRecord, unitUri: string): SymbolRecord[] {
+  private namedTypes(type: CType, declaration: TypeContext, unitUri: string): SymbolRecord[] {
     const at = declaration.location;
     const all = this.lookup.symbols(type.name).filter(s => s.kind === 'type' && s.aggregate === type.tag && !s.memberOf);
     const scoped = all.filter(s => s.location.uri === at.uri && s.scope && s.scope.start <= at.start && s.scope.end > at.start);
@@ -45,7 +47,7 @@ export class MemberResolver {
     return [...selected, ...outer];
   }
 
-  private normalize(type: CType | undefined, declaration: SymbolRecord, unitUri: string, seen = new Set<string>(), depth = 0): ResolvedType[] {
+  private normalize(type: CType | undefined, declaration: TypeContext, unitUri: string, seen = new Set<string>(), depth = 0): ResolvedType[] {
     if (!type || depth >= 32) return [];
     const targets = type.id ? [this.lookup.symbol(type.id)].filter((s): s is SymbolRecord => !!s) : this.namedTypes(type, declaration, unitUri);
     if (!targets.length) return [{ id: '', layers: type.layers, conditions: [], scalar: /^(?:(?:signed|unsigned|short|long)\s+)*(?:void|char|int|float|double|_Bool|bool|signed|unsigned|short|long)$/.test(type.name) }];
@@ -66,6 +68,7 @@ export class MemberResolver {
 
   private expressionTypes(expression: TypedExpression, depth: number, unitUri: string): ResolvedType[] {
     if (depth >= 32) return [];
+    if (expression.kind === 'type') return this.normalize(expression.type, expression, unitUri);
     if (expression.kind === 'identifier') {
       return this.lookup.identifier(expression.name, expression.location).flatMap(s =>
         this.normalize(s.type, s, unitUri).map(t => ({ ...t, conditions: [...s.conditions, ...t.conditions] }))).slice(0, 64);
@@ -75,14 +78,40 @@ export class MemberResolver {
         this.normalize(s.type, s, unitUri).map(t => ({ ...t, conditions: [...s.conditions, ...t.conditions] }))).slice(0, 64);
     }
     const types = this.expressionTypes(expression.object, depth + 1, unitUri);
+    if (expression.kind === 'call') return types.flatMap(type => {
+      const count = type.layers[0] === 'function' ? 1 : type.layers[0] === 'pointer' && type.layers[1] === 'function' ? 2 : 0;
+      return count ? [{ ...type, layers: type.layers.slice(count) }] : [];
+    });
+    if (expression.kind === 'position') return types.flatMap(type => {
+      if (type.layers[0] === 'array') return [{ ...type, layers: type.layers.slice(1) }];
+      if (type.layers.length) return [];
+      if (this.lookup.symbol(type.id)?.aggregate === 'union' && expression.index !== 0) return [];
+      const fields = [...this.lookup.fields(type.id), ...this.lookup.anonymous(type.id)].sort((a, b) => a.location.start - b.location.start);
+      if (fields.some(field => field.conditions.some(condition => !type.conditions.includes(condition)))) return [];
+      const field = fields[expression.index];
+      const declared = field?.anonymousMemberOf ? { name: field.name, id: field.id, layers: [] } : field?.type;
+      return field ? this.normalize(declared, field, unitUri).map(value => ({ ...value, conditions: [...type.conditions, ...field.conditions, ...value.conditions] })) : [];
+    }).slice(0, 64);
     if (expression.kind === 'address') return types.map(t => ({ ...t, layers: ['pointer', ...t.layers] }));
-    return types.filter(t => t.layers[0] === 'pointer' || t.layers[0] === 'array').map(t => ({ ...t, layers: t.layers.slice(1) }));
+    return types.filter(t => t.layers[0] === 'array' || (t.layers[0] === 'pointer' && !(expression.kind === 'index' && expression.initializer)))
+      .map(t => ({ ...t, layers: t.layers.slice(1) }));
+  }
+
+  private promotedFields(id: string, name: string, depth: number): SymbolRecord[] {
+    if (depth >= 32) return [];
+    const fields = [...this.lookup.fields(id, name)];
+    for (const member of this.lookup.anonymous(id)) {
+      fields.push(...this.promotedFields(member.id, name, depth + 1).map(field =>
+        ({ ...field, conditions: [...member.conditions, ...field.conditions] })));
+      if (fields.length >= 64) break;
+    }
+    return fields.slice(0, 64);
   }
 
   members(expression: Extract<TypedExpression, { kind: 'member' }>, depth = 0, unitUri?: string): SymbolRecord[] {
     if (depth >= 32) return [];
     let base: TypedExpression = expression;
-    while (base.kind !== 'identifier') base = base.object;
+    while (base.kind !== 'identifier' && base.kind !== 'type') base = base.object;
     unitUri ??= base.location.uri;
     const result = new Map<string, SymbolRecord>();
     for (const type of this.expressionTypes(expression.object, depth + 1, unitUri)) {
@@ -90,7 +119,7 @@ export class MemberResolver {
         ? type.layers.length === 1 && (type.layers[0] === 'pointer' || type.layers[0] === 'array')
         : type.layers.length === 0;
       if (!valid) continue;
-      for (const field of this.lookup.fields(type.id, expression.name)) {
+      for (const field of this.promotedFields(type.id, expression.name, depth + 1)) {
         result.set(field.id, { ...field, conditions: [...new Set([...field.conditions, ...type.conditions])] });
       }
     }

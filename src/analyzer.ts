@@ -1,6 +1,6 @@
 import { Parser, Language, Node } from 'web-tree-sitter';
 import { Access, FileAnalysis, FlowExpression, Location, ReferenceRecord, SymbolRecord } from './model';
-import { aggregateId, declaredType, declarator, typedExpression } from './type-info';
+import { aggregateId, declaredType, declarator, initializerMember, typedExpression } from './type-info';
 import { deriveMacroCalls } from './project-analysis';
 import { flowFacts } from './flow-parser';
 import { inferPointerCalls } from './pointer-targets';
@@ -159,6 +159,10 @@ export async function createAnalyzer(runtime: string, grammar: string) {
           const parentName = node.parent?.childrenForFieldName('declarator')[0];
           const alias = parentName && declarator(parentName).name?.text;
           const owner = aggregateOwner(node);
+          if (owner && !alias && node.parent?.type === 'field_declaration' && symbol.aggregate !== 'enum') {
+            symbol.anonymousMemberOf = owner.id;
+            symbol.containerName = owner.anonymousMemberOf ? owner.containerName : owner.name;
+          }
           symbol.name = alias ? (owner ? `${owner.name}.${alias}` : alias) : `anonymous@${node.startPosition.row + 1}:${node.startPosition.column + 1}`;
           symbol.location = { ...symbol.location, end: node.startIndex + symbol.aggregate!.length, endLine: node.startPosition.row, endColumn: node.startPosition.column + symbol.aggregate!.length };
         }
@@ -180,7 +184,7 @@ export async function createAnalyzer(runtime: string, grammar: string) {
           if (node.type === 'field_declaration') {
             const owner = aggregateOwner(node);
             symbol.memberOf = owner?.id;
-            symbol.containerName = owner?.name;
+            symbol.containerName = owner?.anonymousMemberOf ? owner.containerName : owner?.name;
           }
           if (child.type === 'init_declarator') initializerOwners.set(child.id, symbol.id);
           if (kind === 'variable' && child.type === 'init_declarator') {
@@ -219,12 +223,17 @@ export async function createAnalyzer(runtime: string, grammar: string) {
       const inInitializer = value && node.startIndex >= value.startIndex;
       if (!inBody && !inInitializer) continue;
       if (node.type === 'field_identifier') {
-        const expression = node.parent?.type === 'field_expression' ? typedExpression(node.parent, location) : undefined;
+        const designator = node.parent?.type === 'field_designator';
+        const expression = designator ? initializerMember(node, location) : node.parent?.type === 'field_expression' ? typedExpression(node.parent, location) : undefined;
         if (expression?.kind === 'member') {
           const functionId = fn ? functionOwners.get(fn.id) : undefined;
+          const terminal = !designator || node.parent!.parent!.childrenForFieldName('designator').at(-1)?.id === node.parent!.id;
           file.references.push({ id: `${uri}@${node.startIndex}`, name: node.text, kind: 'reference',
-            location: location(node), ownerId: functionId, functionId, access: access(node.parent!),
+            location: location(node), ownerId: functionId ?? (initializer ? initializerOwners.get(initializer.id) : undefined), functionId,
+            access: designator ? terminal && access(node) ? 'write' : undefined : access(node.parent!),
             conditions: conditions.get(node.id) ?? [], member: expression });
+        } else if (designator || node.parent?.type === 'field_expression') {
+          file.issues.push(`Line ${node.startPosition.row + 1}: unsupported member receiver or initializer path; relationships may be incomplete`);
         }
         continue;
       }

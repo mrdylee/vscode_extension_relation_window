@@ -10,8 +10,12 @@ export interface CType {
 }
 export type TypedExpression =
   | { kind: 'identifier'; name: string; location: Location }
+  | { kind: 'type'; type: CType; location: Location; scope?: { start: number; end: number } }
   | { kind: 'member'; object: TypedExpression; name: string; arrow: boolean }
-  | { kind: 'index' | 'dereference' | 'address'; object: TypedExpression };
+  | { kind: 'position'; object: TypedExpression; index: number }
+  | { kind: 'call'; object: TypedExpression }
+  | { kind: 'index'; object: TypedExpression; initializer?: boolean }
+  | { kind: 'dereference' | 'address'; object: TypedExpression };
 export interface Location {
   uri: string; start: number; end: number; line: number; column: number;
   endLine: number; endColumn: number;
@@ -21,6 +25,7 @@ export interface SymbolRecord {
   definition: boolean; storage: 'static' | 'global' | 'local';
   scope?: { start: number; end: number }; conditions: string[]; pointer: boolean;
   type?: CType; aggregate?: CType['tag']; memberOf?: string; containerName?: string;
+  anonymousMemberOf?: string;
 }
 export interface ReferenceRecord {
   id: string; name: string; kind: 'call' | 'reference' | 'declaration';

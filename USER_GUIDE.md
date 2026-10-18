@@ -177,7 +177,30 @@ Use the existing R/W/RW/& filters to inspect actual field uses. Clicking a use p
 
 Supported paths include declared variables and parameters, typedefs and pointer typedefs, array indexing, parentheses, dereference/address expressions, named nested fields, unions and bit fields. Type definitions in headers must be inside the analysis scope. Transitive includes are followed; quoted includes prefer an existing relative path. Without compiler include paths or known conditional values, ambiguous definitions remain candidates.
 
-Casts, function-return receivers, macro-generated types, anonymous-member promotion and designated-initializer member references are not supported for selecting member R/W relationships. Unknown types are not guessed from field names. Writes through a pointer field or to an array element do not imply a write to the whole field. Callback target inference is a separate analysis described below. Type/expression traversal is bounded to 32 steps and intermediate candidates to 64, so more complex cases may have missing relationships.
+From **v0.1.32**, explicit casts such as `((Motor *)p)->state`, declared return
+types such as `get_motor()->state`, and fields promoted through anonymous
+struct/union members also resolve. A cast uses its written type; it does not
+prove the runtime object has that type. A function's declared return type is
+enough; its implementation need not be indexed. Callback-return type binding is
+separate from inferring which function a callback executes.
+
+Field designators in initializers such as `Motor m = { .state = 1 }` resolve to
+the field declaration. Nested designated paths, arrays, compound literals and
+unambiguous braced positional nesting are supported. Terminal field designators
+appear as **W** at their original field tokens. Intermediate path fields remain
+selectable without claiming a write to the whole parent field. Function-local
+initializers belong to their containing function; global ones belong to the
+initialized variable. Anonymous fields use the outer containing type's name.
+
+Macro-generated types, scalar brace elision and positional continuation after
+designators are not fully supported. Conditional positional layouts may remain
+unresolved. Unsupported receiver/initializer syntax produces **Analysis notices**;
+unavailable types or out-of-scope headers can also leave relationships unresolved.
+Unknown types are not guessed from field names. Writes through a pointer field
+or to an array element do not imply a write to the whole field. Callback target
+inference is a separate analysis described below. Type/expression traversal is
+bounded to 32 steps and intermediate candidates to 64, so more complex cases
+may have missing relationships.
 
 ## Macro-expanded calls and callback targets (v0.1.28)
 

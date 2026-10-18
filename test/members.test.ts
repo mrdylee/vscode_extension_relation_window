@@ -70,10 +70,10 @@ test('members keep conditional duplicate types as candidates and skip if zero', 
   const members = at(value, source, 'm->state'); assert.equal(members.length, 2);
   assert.ok(members.every(member => value.relations(member.id, 'references')[0].sites[0].ambiguous));
 });
-test('members do not guess unknown receivers, casts, return types or mismatched operators', () => {
-  const source = 'struct Motor { int state; }; int state; void run(struct Motor **pp, struct Motor *p, struct Motor m){unknown->state=1;((struct Motor*)unknown)->state=2;get()->state=3;pp->state=4;p.state=5;m->state=6;}';
+test('members do not guess unknown receivers, unknown return types or mismatched operators', () => {
+  const source = 'struct Motor { int state; }; int state; void run(struct Motor **pp, struct Motor *p, struct Motor m){unknown->state=1;((Unknown*)unknown)->state=2;get()->state=3;pp->state=4;p.state=5;m->state=6;}';
   const value = index({ 'main.c': source });
-  for (const expression of ['unknown->state', '((struct Motor*)unknown)->state', 'get()->state', 'pp->state', 'p.state', 'm->state']) assert.deepEqual(at(value, source, expression), [], expression);
+  for (const expression of ['unknown->state', '((Unknown*)unknown)->state', 'get()->state', 'pp->state', 'p.state', 'm->state']) assert.deepEqual(at(value, source, expression), [], expression);
   const global = value.symbols().find(s => s.name === 'state' && !s.memberOf)!;
   assert.deepEqual(value.relations(global.id, 'references'), []);
 });
@@ -207,4 +207,156 @@ test('conditional receiver shadows retain globals through multiple nested scopes
   const source = 'struct Motor {int state;}; struct Sensor {int state;}; struct Third {int state;}; struct Motor m; void run(void){\n#if A\nstruct Sensor m;\n#endif\n{\n#if B\nstruct Third m;\n#endif\nm.state=1;}}';
   const value = index({ 'main.c': source });
   assert.deepEqual(at(value, source, 'm.state').map(s => s.containerName).sort(), ['Motor', 'Sensor', 'Third']);
+});
+
+test('explicit casts bind fields using their written lexical types', () => {
+  const source = 'struct Motor {int state;}; typedef struct Motor Motor; typedef Motor *Ptr; struct Sensor {int state;}; void run(void *p){((struct Motor*)p)->state=1;((Ptr)p)->state++;{typedef struct Sensor Motor;((Motor*)p)->state=3;}}';
+  const value = index({ 'main.c': source });
+  for (const expression of ['((struct Motor*)p)->state', '((Ptr)p)->state']) assert.equal(at(value, source, expression)[0]?.containerName, 'Motor');
+  assert.equal(at(value, source, '((Motor*)p)->state')[0]?.containerName, 'Sensor');
+  const member = at(value, source, '((Ptr)p)->state')[0]; assert.ok(member);
+  const sites = value.relations(member.id, 'references')[0].sites;
+  assert.deepEqual(sites.map(site => site.access), ['write', 'readwrite']);
+  assert.equal(sites[0].location.start, source.indexOf('state=1'));
+});
+
+test('declared returns and callback returns bind members in their declaration context', () => {
+  const source = '#include "api.h"\nstruct Sensor {int state;}; void run(struct Motor *(*factory)(void)){typedef struct Sensor Motor;get_motor()->state=1;get_value().state++;factory()->state=2;}';
+  const value = index({ 'main.c': source, 'api.h': 'typedef struct Motor {int state;} Motor; Motor *get_motor(void); Motor get_value(void);' });
+  for (const expression of ['get_motor()->state', 'get_value().state', 'factory()->state']) {
+    const member = at(value, source, expression)[0]; assert.ok(member, expression);
+    assert.equal(member.location.uri, uri('api.h'));
+  }
+  assert.deepEqual(value.relations(at(value, source, 'get_motor()->state')[0].id, 'references')[0].sites.map(site => site.access), ['write', 'readwrite', 'write']);
+});
+
+test('casts and returns preserve pointer and array layers and conditional types', () => {
+  const source = '#if BOARD\ntypedef struct A {int state;} Item;\n#else\ntypedef struct B {int state;} Item;\n#endif\nItem *get(void); void run(void *p){get()->state=1;((Item(*)[2])p)[0][1].state=2;((Item**)p)->state=3;get().state=4;}';
+  const value = index({ 'main.c': source });
+  for (const expression of ['get()->state', '((Item(*)[2])p)[0][1].state']) {
+    const members = at(value, source, expression);
+    assert.deepEqual(members.map(s => s.containerName).sort(), ['A', 'B']);
+    assert.ok(members.every(member => value.relations(member.id, 'references')[0].sites.every(site => site.ambiguous)));
+  }
+  assert.deepEqual(at(value, source, '((Item**)p)->state'), []);
+  assert.deepEqual(at(value, source, 'get().state'), []);
+});
+
+test('anonymous struct and union members promote fields without promoting named fields', () => {
+  const source = 'struct Motor {union {struct {int state;};int mode;};struct {int hidden;} named;};struct Sensor {int state;};void run(struct Motor *m,struct Sensor *s){m->state=1;m->mode=2;m->named.hidden=3;m->hidden=4;s->state=5;}';
+  const value = index({ 'main.c': source });
+  const member = at(value, source, 'm->state')[0]; assert.ok(member);
+  assert.equal(member.containerName, 'Motor');
+  assert.notEqual(member.id, at(value, source, 's->state')[0]?.id);
+  assert.ok(value.resolveAt(uri('main.c'), source.indexOf('mode=2'))[0]);
+  const hidden = value.resolveAt(uri('main.c'), source.indexOf('hidden=3'))[0]; assert.ok(hidden);
+  assert.deepEqual(value.resolveAt(uri('main.c'), source.indexOf('hidden=4')), []);
+  assert.equal(value.relations(member.id, 'references')[0].sites.length, 1);
+});
+
+test('anonymous promotion preserves conditional paths and inactive branch exclusion', () => {
+  const source = 'struct Motor {\n#if BOARD\nunion {int state;};\n#else\nstruct {int state;};\n#endif\n#if 0\nunion {int state;};\n#endif\n};void run(struct Motor *m){m->state=1;}';
+  const value = index({ 'main.c': source });
+  const members = at(value, source, 'm->state'); assert.equal(members.length, 2);
+  assert.ok(members.every(member => value.relations(member.id, 'references')[0].sites[0].ambiguous));
+});
+
+test('field designators are exact writes owned by their variable or containing function', () => {
+  const source = 'struct Motor {int state;};struct Motor global={.state=1};void run(void){struct Motor local={.state=2};}';
+  const value = index({ 'main.c': source });
+  const member = value.resolveAt(uri('main.c'), source.indexOf('state=1'))[0]; assert.ok(member);
+  assert.equal(member.id, value.resolveAt(uri('main.c'), source.indexOf('state=2'))[0]?.id);
+  const groups = value.relations(member.id, 'references', 'write');
+  assert.deepEqual(groups.map(g => g.name), ['global', 'run']);
+  assert.deepEqual(groups.flatMap(g => g.sites.map(site => site.location.start)), [source.indexOf('state=1'), source.indexOf('state=2')]);
+  assert.deepEqual(value.relations(member.id, 'references', 'read'), []);
+});
+
+test('nested field and array designators and compound literals retain receiving types', () => {
+  const source = 'typedef struct {int state;} Motor;struct Outer {Motor items[2];};struct Outer a={.items[1].state=1};struct Outer b={.items={[0]={.state=2}}};Motor c=(Motor){.state=3};void run(void){use((Motor){.state=4});sizeof((Motor){.state=5});}';
+  const value = index({ 'main.c': source });
+  const member = value.resolveAt(uri('main.c'), source.indexOf('state=1'))[0]; assert.ok(member);
+  for (const number of [2, 3, 4]) assert.equal(value.resolveAt(uri('main.c'), source.indexOf('state='+number))[0]?.id, member.id);
+  const sites = value.relations(member.id, 'references').flatMap(g => g.sites);
+  assert.equal(sites.length, 4);
+  assert.ok(sites.every(site => site.access === 'write'));
+});
+
+test('anonymous initializer designators and safe positional nesting resolve', () => {
+  const source = 'struct Outer {struct {int state;};};struct Outer a={.state=1};typedef struct {int state;} Motor;struct Pair {Motor first;Motor second;};struct Pair b={{.state=2},{.state=3}};';
+  const value = index({ 'main.c': source });
+  assert.ok(value.resolveAt(uri('main.c'), source.indexOf('state=1'))[0]);
+  const member = value.resolveAt(uri('main.c'), source.indexOf('state=2'))[0]; assert.ok(member);
+  assert.equal(value.resolveAt(uri('main.c'), source.indexOf('state=3'))[0]?.id, member.id);
+});
+
+test('cast and returned member references invalidate when their header changes or disappears', () => {
+  const source = '#include "api.h"\nvoid run(void *p){((Motor*)p)->state=1;get()->state=2;}';
+  const header = 'typedef struct {int state;} Motor;Motor *get(void);';
+  const value = index({ 'main.c': source, 'api.h': header });
+  assert.ok(at(value, source, 'get()->state')[0]);
+  value.update(parse(header.replace('state', 'other'), 'api.h'));
+  assert.deepEqual(at(value, source, 'get()->state'), []);
+  assert.deepEqual(at(value, source, '((Motor*)p)->state'), []);
+  value.update(parse(header, 'api.h'));
+  assert.ok(at(value, source, 'get()->state')[0]);
+  value.remove(uri('api.h'));
+  assert.deepEqual(at(value, source, 'get()->state'), []);
+});
+
+test('unsupported member expressions produce notices instead of unrelated field guesses', () => {
+  const source = 'struct Motor {int state;};int state;void run(struct Motor *p){(p+1)->state=2;}';
+  const file = parse(source), value = new RelationIndex(); value.update(file);
+  assert.deepEqual(at(value, source, '(p+1)->state'), []);
+  assert.ok(file.issues.some(issue => /member.*unsupported|unsupported.*member/i.test(issue)));
+});
+
+test('review: intermediate designators do not claim writes to entire parent fields', () => {
+  const source = 'typedef struct {int state;} Motor;struct Outer {Motor items[2];Motor child;};struct Outer a={.items[0].state=1,.child.state=2};';
+  const value = index({ 'main.c': source });
+  for (const token of ['items[0]', 'child.state']) {
+    const member = value.resolveAt(uri('main.c'), source.indexOf(token))[0]; assert.ok(member);
+    assert.deepEqual(value.relations(member.id, 'references'), []);
+  }
+});
+
+test('review: positional nesting counts anonymous aggregate fields in source order', () => {
+  const source = 'typedef struct {int state;} Motor;struct Outer {union {int mode;};Motor motor;};struct Outer a={{.mode=1},{.state=2}};';
+  const value = index({ 'main.c': source });
+  assert.ok(value.resolveAt(uri('main.c'), source.indexOf('mode=1'))[0]);
+  const member = value.resolveAt(uri('main.c'), source.indexOf('state=2'))[0]; assert.ok(member);
+  assert.equal(member.containerName, 'Motor');
+});
+
+test('review: conditional layouts and scalar brace elision do not guess positional fields', () => {
+  for (const source of [
+    'typedef struct {int state;} Motor;struct Outer {\n#if BOARD\nMotor first;\n#endif\nMotor second;};struct Outer a={{.state=1}};',
+    'typedef struct {int state;} Motor;struct Outer {int padding[3];Motor motor;};struct Outer a={1,{.state=1}};'
+  ]) {
+    const value = index({ 'main.c': source });
+    assert.deepEqual(value.resolveAt(uri('main.c'), source.indexOf('state=1')), []);
+  }
+});
+
+test('unsupported positional continuation is reported and never assigned by ordinal', () => {
+  const source = 'typedef struct {int state;} Motor;struct Pair {Motor a;Motor b;};struct Pair p={.b={.state=1},{.state=2}};';
+  const file = parse(source), value = new RelationIndex(); value.update(file);
+  assert.ok(value.resolveAt(uri('main.c'), source.indexOf('state=1'))[0]);
+  assert.deepEqual(value.resolveAt(uri('main.c'), source.indexOf('state=2')), []);
+  assert.ok(file.issues.some(issue => /unsupported member/.test(issue)));
+});
+
+test('anonymous ownership is invalidated when headers change, disappear or the index resets', () => {
+  const source = '#include "types.h"\nvoid run(struct Motor *m){m->state=1;}';
+  const header = 'struct Motor {union {int state;};};';
+  const value = index({ 'main.c': source, 'types.h': header });
+  assert.ok(at(value, source, 'm->state')[0]);
+  value.update(parse('struct Motor {struct {int state;} named;};', 'types.h'));
+  assert.deepEqual(at(value, source, 'm->state'), []);
+  value.update(parse(header, 'types.h'));
+  assert.ok(at(value, source, 'm->state')[0]);
+  value.remove(uri('types.h'));
+  assert.deepEqual(at(value, source, 'm->state'), []);
+  value.clear(); value.update(parse(source)); value.update(parse(header, 'types.h'));
+  assert.equal(at(value, source, 'm->state').length, 1);
 });

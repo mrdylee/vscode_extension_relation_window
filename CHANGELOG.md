@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.32 — 2026-10-18
+
+- Bind member selections through explicit casts and declared function/callback
+  return types, using lexical typedef scope and preserving pointer/array layers.
+- Promote actual anonymous struct/union fields while keeping named nested fields
+  and unrelated same-named members separate.
+- Link designated initializer fields to their receiving types and original
+  locations. Terminal field designators are writes; intermediate paths remain
+  selectable without claiming writes to whole parent fields.
+- Preserve function/global initializer ownership, R/W filters, conditional
+  candidates, header invalidation and original Context/editor navigation.
+- Report unsupported member expressions/initializer paths in Analysis notices.
+  Keep runtime pointer inference, build-free operation and graph limits unchanged.
+
 ## 0.1.31 — 2026-10-18
 
 - Add default-off Include Function Arguments in Settings. Show explicitly passed
