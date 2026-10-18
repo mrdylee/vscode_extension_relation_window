@@ -8,6 +8,7 @@ import { getHeapStatistics } from 'node:v8';
 import { Diagnostics, WorkerDiagnostics } from './diagnostics';
 
 const builtInExcludes = ['**/node_modules/**', '**/.git/**', '**/.vscode-test/**'];
+const maxFiles = 10_000;
 
 export class WorkspaceIndex implements vscode.Disposable {
   readonly index = new RelationIndex();
@@ -27,6 +28,8 @@ export class WorkspaceIndex implements vscode.Disposable {
   private jobs = new Set<Promise<void>>();
   private timers = new Map<string, ReturnType<typeof setTimeout>>();
   private versions = new Map<string, number>();
+  private reservedFiles = new Set<string>();
+  private fileLimitReached = false;
   private disposables: vscode.Disposable[] = [];
   private serial = 0;
   private epoch = 0;
@@ -110,6 +113,7 @@ export class WorkspaceIndex implements vscode.Disposable {
     this.versions.set(key, (this.versions.get(key) ?? 0) + 1);
     clearTimeout(this.timers.get(key)); this.timers.delete(key);
     this.index.remove(key); this.rawVersions.delete(key); this.appliedDerived.delete(key); this.revision++;
+    this.reservedFiles.delete(key);
     this.worker.postMessage({ type: 'remove', uri: key });
     this.failures.delete(key); this.changed.fire();
     if (!this.indexing) void this.derive();
@@ -123,6 +127,16 @@ export class WorkspaceIndex implements vscode.Disposable {
     this.timers.set(key, setTimeout(() => { this.timers.delete(key); void this.enqueue(uri); }, 100));
   }
   private enqueue(uri: vscode.Uri) {
+    if (this.disposed || !this.eligible(uri)) return Promise.resolve();
+    const key = uri.toString();
+    if (!this.reservedFiles.has(key) && this.reservedFiles.size >= maxFiles) {
+      this.fileLimitReached = true;
+      if (!this.indexing) this.status = this.completedStatus();
+      this.changed.fire();
+      return this.derive();
+    }
+    // Reserve before IO so simultaneous new files cannot exceed the limit.
+    this.reservedFiles.add(key);
     const job = this.analyze(uri);
     this.jobs.add(job);
     void job.finally(() => { this.jobs.delete(job); if (!this.indexing && !this.jobs.size && !this.timers.size) void this.derive(); });
@@ -138,6 +152,8 @@ export class WorkspaceIndex implements vscode.Disposable {
       // Opening every file as an editor document causes cache eviction and close/reopen loops.
       const doc = vscode.workspace.textDocuments.find(document => !document.isClosed && document.uri.toString() === key);
       const text = doc ? doc.getText() : Buffer.from(await vscode.workspace.fs.readFile(uri)).toString('utf8');
+      if (this.disposed || epoch !== this.epoch || version !== this.versions.get(key)) return;
+      if (this.workerError) throw this.workerError;
       if (text.length > 2_000_000) throw new Error('File exceeds the 2,000,000 character analysis limit');
       const folder = vscode.workspace.getWorkspaceFolder(uri)!;
       const expandMacros = this.scope(folder).macros.some(matcher => matcher.match(vscode.workspace.asRelativePath(uri, false).replace(/\\/g, '/')));
@@ -149,6 +165,7 @@ export class WorkspaceIndex implements vscode.Disposable {
     } catch (error) {
       if (this.disposed || epoch !== this.epoch || version !== this.versions.get(key)) return;
       this.index.remove(key); this.rawVersions.delete(key); this.appliedDerived.delete(key); this.revision++;
+      this.reservedFiles.delete(key);
       this.worker.postMessage({ type: 'remove', uri: key });
       this.failures.set(key, String(error)); this.changed.fire();
     }
@@ -161,13 +178,13 @@ export class WorkspaceIndex implements vscode.Disposable {
     });
     return { id, promise };
   }
-  private completedStatus(fileLimit = false) {
+  private completedStatus() {
     if (this.workerError) return this.status;
     if (this.failures.has('derived')) return 'Partial index: call analysis failed. See Analysis notices.';
     if ([...this.failures.values()].some(error => error.includes('memory budget')) ||
       [...this.index.files.values()].some(file => file.issues.some(issue => issue.includes('memory budget'))))
       return 'Partial index: memory budget reached. Narrow Include/Exclude, then Rebuild index.';
-    return fileLimit ? 'Partial index: 10,000 file limit reached' : 'Index ready';
+    return this.fileLimitReached ? 'Partial index: 10,000 file limit reached' : 'Index ready';
   }
   private derive(): Promise<void> {
     if (this.deriving) return this.deriving;
@@ -178,11 +195,11 @@ export class WorkspaceIndex implements vscode.Disposable {
         const versions = [...this.rawVersions].map(([uri, id]) => [uri, id, this.appliedDerived.get(uri) ?? -id]);
         const result = await this.request<{ stale: boolean; files: FileAnalysis[]; versions: [string, number][] }>({ type: 'derive', versions }).promise;
         if (this.disposed || revision !== this.revision) continue;
-        if (result.stale) break;
+        if (result.stale) throw new Error('Analysis input changed unexpectedly. Rebuild index to retry.');
         for (const file of result.files) this.index.update(file);
         for (const [uri, stamp] of result.versions) this.appliedDerived.set(uri, stamp);
         this.derivedRevision = revision; this.failures.delete('derived');
-        this.status = this.completedStatus(this.status.includes('10,000 file limit'));
+        this.status = this.completedStatus();
         this.changed.fire();
       }
     })().catch(error => {
@@ -205,6 +222,7 @@ export class WorkspaceIndex implements vscode.Disposable {
       if (this.disposed || epoch !== this.epoch) return;
     }
     this.rawVersions.clear(); this.appliedDerived.clear(); this.revision++;
+    this.reservedFiles.clear(); this.fileLimitReached = false;
     this.worker.postMessage({ type: 'reset' });
     this.scopes.clear();
     this.index.clear(); this.failures.clear();
@@ -216,18 +234,19 @@ export class WorkspaceIndex implements vscode.Disposable {
         const scope = this.scope(folder), exclude = `{${scope.exclude.join(',')}}`;
         // Preserve each pattern: wrapping braces/commas in another brace group changes its meaning.
         for (const include of scope.include.length ? scope.include : ['**/*.{c,h}']) {
-          const found = await vscode.workspace.findFiles(new vscode.RelativePattern(folder, include), exclude, scope.include.length ? undefined : 10001 - uris.length);
+          const found = await vscode.workspace.findFiles(new vscode.RelativePattern(folder, include), exclude, scope.include.length ? undefined : maxFiles + 1 - uris.length);
           if (this.disposed || epoch !== this.epoch) return;
           for (const uri of found) {
             const key = uri.toString();
             if (!seen.has(key) && this.eligible(uri)) { seen.add(key); uris.push(uri); }
-            if (uris.length > 10000) break;
+            if (uris.length > maxFiles) break;
           }
-          if (uris.length > 10000) break;
+          if (uris.length > maxFiles) break;
         }
-        if (uris.length > 10000) break;
+        if (uris.length > maxFiles) break;
       }
-      for (const uri of uris.slice(0, 10000)) {
+      this.fileLimitReached ||= uris.length > maxFiles;
+      for (const uri of uris.slice(0, maxFiles)) {
         if (this.disposed || epoch !== this.epoch) return;
         await this.enqueue(uri);
         if (this.workerError && epoch === this.epoch) { this.indexing = false; return; }
@@ -238,7 +257,7 @@ export class WorkspaceIndex implements vscode.Disposable {
         await this.derive();
         if (epoch !== this.epoch) return;
         if (this.workerError) return;
-        this.status = this.completedStatus(uris.length > 10000);
+        this.status = this.completedStatus();
         this.changed.fire();
       }
     } catch (error) {

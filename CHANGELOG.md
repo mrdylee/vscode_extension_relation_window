@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.41 — 2026-10-19
+
+- Discard obsolete disk reads before sending source to the analysis Worker.
+  Preserve newer buffered edits and callback results across edit, delete and
+  rebuild races. Report persistent analysis-version mismatches as a partial index.
+- Apply the 10,000-file limit to watched additions and pending reads, while
+  allowing existing files to update and freeing slots on deletion/read failure.
+- Exclude unevaluated `sizeof` calls from Callers and Callers & Callees, matching
+  the existing Callees behavior. Keep those uses in References.
+
 ## 0.1.40 — 2026-10-18
 
 - Add Diagnostics → Report issue and a Command Palette entry. Prepare a local,

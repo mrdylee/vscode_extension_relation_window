@@ -111,6 +111,17 @@ test('Callees excludes inactive and unevaluated calls and preserves unknown cond
   assert.deepEqual(groups.map(g => g.name), ['inner', 'maybe', 'outer']);
   assert.ok(groups.find(g => g.name === 'maybe')!.sites[0].conditions.length);
 });
+test('Callers excludes unevaluated sizeof calls while References retains them', () => {
+  const source = 'int target(void){return 1;} void unevaluated(void){(void)sizeof((target()));} void actual(void){target();}';
+  const raw = parse(source);
+  for (const files of [[raw], analyzer.derive([raw])]) {
+    const value = new RelationIndex(); files.forEach(file => value.update(file));
+    const target = value.symbols().find(s => s.name === 'target')!;
+    for (const mode of ['callers', 'both'] as const)
+      assert.deepEqual(value.relations(target.id, mode).map(g => g.name), ['actual']);
+    assert.ok(value.relations(target.id, 'references').some(g => g.name === 'unevaluated'));
+  }
+});
 test('Callees updates only changed file owners and resolves target changes on demand', () => {
   const value = index({ 'a.c': 'void task(void){target();}', 'b.c': 'void target(void){}', 'untouched.c': 'void other(void){target();}' });
   const task = value.symbols().find(s => s.name === 'task')!;

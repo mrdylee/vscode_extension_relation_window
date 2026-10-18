@@ -353,9 +353,14 @@ the entire source file from ordinary symbol navigation.
 
 1. Check **Following selection** versus **Pinned · Follow paused**.
 2. Check the status and file count. If **Index ready** shows zero files, use **Settings** to check Include paths, casing and Exclude matches. An empty folder or a folder without C/H files also produces zero files.
-3. **Partial index: 10,000 file limit reached** means the initial scan omitted files. Narrow Include or add Exclude patterns. Scope filtering happens before this limit.
+3. **Partial index: 10,000 file limit reached** means the initial scan or later file changes exceeded the cap, including pending reads. Existing files still update; deletion or a failed read frees a slot for later events. Narrow Include or add Exclude patterns, then rebuild to select the intended files. Scope filtering happens before this limit.
 4. Expand **Analysis notices**. Files above 2,000,000 UTF-16 code units are skipped. Unsupported C syntax can also produce notices. **Index ready** means indexing finished, not that every file was analyzed without errors.
 5. **Rebuild index** repeats analysis with the current settings. It does not change the scope or limits.
+
+**Partial index: call analysis failed** means follow-up call analysis did not finish.
+If Analysis notices says **Analysis input changed unexpectedly**, click **Rebuild
+index** to resynchronize the Worker. Obsolete reads after edits/deletion/rebuild
+are discarded automatically.
 
 The graph displays at most 300 nodes. Recursion stops expansion along that path. Macro and callback analysis is bounded, and compiler-specific syntax may remain unsupported. Missing relationships can therefore also be an analysis limitation.
 

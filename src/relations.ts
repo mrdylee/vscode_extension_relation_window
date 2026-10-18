@@ -248,7 +248,7 @@ export class RelationIndex {
         if (!ref.access || (filter !== 'all' && ref.access !== filter &&
           !(ref.access === 'readwrite' && (filter === 'read' || filter === 'write')))) continue;
       } else {
-        if ((mode === 'callers' || mode === 'both') && ((ref.kind !== 'call' && !ref.argument) || target.kind !== 'function')) continue;
+        if ((mode === 'callers' || mode === 'both') && (((ref.kind !== 'call' || !ref.access) && !ref.argument) || target.kind !== 'function')) continue;
         if (ref.location.start === target.location.start && ref.location.uri === target.location.uri) continue;
       }
       const candidates = this.resolve(ref);
