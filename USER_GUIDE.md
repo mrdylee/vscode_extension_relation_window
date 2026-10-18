@@ -275,6 +275,30 @@ It does not determine build-specific `#ifdef`, `#ifndef`, `defined(...)` or macr
 
 ## If results are missing or slow
 
+### Photograph a memory diagnostic (v0.1.38)
+
+Click **Diagnostics** in the Relation footer. A new memory-limit incident or
+Worker failure opens the summary once automatically. Close it to resume browsing;
+the same incident will not keep reopening it.
+
+1. Open Diagnostics **before Rebuild index or Reload Window**, which clears this
+   diagnostic session. Click **Refresh** if needed.
+2. Increase the panel height if the summary needs scrolling.
+3. Photograph the entire summary, from the version heading through the bottom
+   measurements, and share it when reporting the problem.
+
+It shows the environment (including WSL), index status, Worker JS heap used/limit,
+the 60% analysis guard, sampled peak, external memory, source/macro/callback/transfer
+checkpoints, first budget hit and raw input counts. **Last Worker sample** is
+timestamped; a busy Worker may not answer Refresh immediately. **Worker stopped**
+preserves the last available sample rather than presenting it as current memory.
+
+Values use **MiB** (1,048,576 bytes). Extension-host JS memory is shared with other
+extensions and shown separately. Samples include caches and garbage collection;
+stage differences are not exact allocations and these values are not total system
+RAM. Only a bounded summary is held in memory; no source text or automatic upload
+is added. Diagnostics does not change memory limits or analysis results.
+
 From **v0.1.34**, the Worker reserves heap headroom before it exhausts its memory
 limit. Macro expansion and callback propagation can stop with **Partial index:
 memory budget reached**, while available source calls and literal function

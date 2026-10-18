@@ -18,12 +18,17 @@ export class RelationView implements vscode.Disposable {
   private selection?: string;
   private listener: vscode.Disposable;
   private preferences: vscode.Disposable;
+  private diagnosticsListener: vscode.Disposable;
   private refreshTimer?: ReturnType<typeof setTimeout>;
   private openingSource = false;
   private lastEditor?: vscode.TextEditor;
   private pendingTrack = false;
   private syntaxCache?: { text: string; tokens: SyntaxToken[][] };
   constructor(private workspace: WorkspaceIndex, private extensionUri: vscode.Uri) {
+    this.diagnosticsListener = workspace.diagnosticsChanged.event(() => {
+      this.state.diagnostics = workspace.diagnostics;
+      void this.webview?.webview.postMessage({ type: 'diagnostics', diagnostics: this.state.diagnostics });
+    });
     this.readPreferences();
     this.preferences = vscode.workspace.onDidChangeConfiguration(event => {
       if (event.affectsConfiguration('cRelation.calleeSort') || event.affectsConfiguration('cRelation.contextLayout') || event.affectsConfiguration('cRelation.includeFunctionArguments')) {
@@ -103,6 +108,7 @@ export class RelationView implements vscode.Disposable {
     this.state.candidates = []; this.refresh();
   }
   refresh() {
+    this.state.diagnostics = this.workspace.diagnostics;
     this.state.skipInactive = this.workspace.skipInactive;
     this.state.status = this.workspace.status;
     this.state.fileCount = this.workspace.index.files.size;
@@ -157,6 +163,7 @@ export class RelationView implements vscode.Disposable {
     if (!message || typeof message !== 'object') return;
     const m = message as Record<string, unknown>;
     switch (m.type) {
+      case 'diagnostics': this.workspace.refreshDiagnostics(); break;
       case 'ready': this.refresh(); this.track(vscode.window.activeTextEditor); break;
       case 'readyContext': void this.contextView?.webview.postMessage({ type: 'context', context: this.state.context }); break;
       case 'settings': await vscode.commands.executeCommand('cRelation.openSettings'); break;
@@ -229,5 +236,5 @@ export class RelationView implements vscode.Disposable {
       }
     }
   }
-  dispose() { clearTimeout(this.refreshTimer); this.listener.dispose(); this.preferences.dispose(); }
+  dispose() { clearTimeout(this.refreshTimer); this.listener.dispose(); this.preferences.dispose(); this.diagnosticsListener.dispose(); }
 }

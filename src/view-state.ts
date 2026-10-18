@@ -1,5 +1,6 @@
 import { AccessFilter, CalleeSort, GraphData, Location, RelationMode, SymbolRecord } from './model';
 import { SyntaxToken } from './syntax';
+import { Diagnostics } from './diagnostics';
 export interface Preview { location: Location; text: string; tokens: SyntaxToken[][]; firstLine: number; path: string; label: string }
 export interface ViewState {
   graph?: GraphData; context?: Preview; candidates: SymbolRecord[];
@@ -8,4 +9,5 @@ export interface ViewState {
   calleeSort: CalleeSort; contextLayout: 'combined' | 'combined-full-width' | 'separate';
   callGraphDirection: 'callers-left' | 'callees-left';
   includeFunctionArguments: boolean;
+  diagnostics?: Diagnostics;
 }

@@ -59,6 +59,21 @@ body.vscode-light .highlight, body.vscode-light .selected, body.vscode-high-cont
 .syntax-keyword { color: var(--syntax-keyword); }.syntax-type { color: var(--syntax-type); }.syntax-function { color: var(--syntax-function); font-weight: 600; }.syntax-variable { color: var(--syntax-variable); }.syntax-macro { color: var(--syntax-macro); }.syntax-number { color: var(--syntax-number); }.syntax-string { color: var(--syntax-string); }.syntax-comment { color: var(--syntax-comment); }.syntax-preprocessor { color: var(--syntax-preprocessor); }
 
 .detail-kind { font-weight: 600; }
+.memory-diagnostics { color: var(--fg); background: var(--bg); border: 1px solid var(--accent); border-radius: 6px; padding: 10px 16px; width: min(880px, calc(100vw - 16px)); max-height: calc(100vh - 16px); overflow: auto; font-size: 13px; line-height: 1.35; }
+.memory-diagnostics::backdrop { background: #0008; }
+.diagnostics-heading { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.diagnostics-heading strong { margin-right: auto; }
+.diagnostics-status, .diagnostics-selection { overflow-wrap: anywhere; }
+.diagnostics-status { font-weight: 600; margin: 4px 0; }
+.diagnostics-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; margin: 8px 0; }
+.diagnostics-metrics span, .diagnostics-metrics strong { display: block; }
+.diagnostics-metrics span { font-size: 12px; color: var(--muted); }
+.diagnostics-metrics strong { font-size: 16px; font-variant-numeric: tabular-nums; }
+.memory-diagnostics table { border-collapse: collapse; width: 100%; margin: 6px 0; font-variant-numeric: tabular-nums; }
+.memory-diagnostics th, .memory-diagnostics td { text-align: left; padding: 2px 8px; border-bottom: 1px solid var(--border); }
+.diagnostics-incident { font-weight: 600; margin: 6px 0; }
+.diagnostics-host { margin-top: 6px; }
+.diagnostics-note { font-size: 11px; margin-top: 6px; }
 .detail-location { color: var(--syntax-number); font-weight: 600; }
 .node-details .detail-label { display: block; color: var(--fg); }
 .node-details .detail-warning, .node-details .badge { color: var(--vscode-editorWarning-foreground, #d6b36a); font-weight: 600; }

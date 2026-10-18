@@ -506,6 +506,42 @@ try {
   assert.ok(await page.locator('.context').isVisible());
   assert.ok(await page.locator('.relation').isVisible());
   assert.equal(await divider.isVisible(), false);
+  await page.setViewportSize({ width: 900, height: 500 });
+  const MiB = 1024 * 1024, at = Date.now();
+  const memory = used => ({ at, heapUsed: used * MiB, heapLimit: 2048 * MiB, external: 128 * MiB });
+  const diagnostics = { environment: 'linux x64 · wsl · VS Code test', host: memory(180), worker: {
+    run: '1:2', phase: 'idle', sample: memory(900), peakHeap: 1300 * MiB,
+    phases: { sources: { before: memory(20), after: memory(240) }, macros: { before: memory(240), after: memory(1100) }, callbacks: { before: memory(1100), after: memory(900) }, transfer: { before: memory(900), after: memory(900) } },
+    counts: { files: 1820, sourceChars: 6000000, references: 82000, programs: 12000, macroFiles: 420 }
+  } };
+  await configure({ diagnostics, status: 'Index ready' });
+  await page.getByRole('button', { name: 'Diagnostics', exact: true }).click();
+  const diagnosticDialog = page.getByRole('dialog', { name: 'Memory diagnostics' });
+  assert.ok(await diagnosticDialog.isVisible());
+  assert.match(await diagnosticDialog.textContent(), /900\.0 MiB/);
+  assert.match(await diagnosticDialog.textContent(), /1228\.8 MiB/);
+  await diagnosticDialog.getByRole('button', { name: 'Refresh' }).click();
+  assert.ok(await page.evaluate(() => window.sent.some(m => m.type === 'diagnostics')));
+  await page.keyboard.press('Escape');
+  assert.equal(await diagnosticDialog.isVisible(), false);
+  diagnostics.worker.firstLimit = { phase: 'callbacks', sample: memory(1300) };
+  await configure({ diagnostics, status: 'Partial index: memory budget reached. Narrow Include/Exclude, then Rebuild index.' });
+  assert.ok(await diagnosticDialog.isVisible(), 'memory incidents open the photographable summary automatically');
+  await diagnosticDialog.getByRole('button', { name: 'Close' }).focus();
+  await page.evaluate(diagnostics => window.dispatchEvent(new MessageEvent('message', { data: { type: 'diagnostics', diagnostics } })), diagnostics);
+  assert.equal(await diagnosticDialog.getByRole('button', { name: 'Close' }).evaluate(node => node === document.activeElement), true, 'live metrics preserve controls and focus');
+  await page.screenshot({ path: 'output/playwright/memory-diagnostics.png' });
+  const diagnosticSize = await diagnosticDialog.evaluate(node => ({ scroll: node.scrollHeight, client: node.clientHeight }));
+  assert.ok(diagnosticSize.scroll <= diagnosticSize.client, `summary fits a 900x500 photo without scrolling: ${JSON.stringify(diagnosticSize)}`);
+  await diagnosticDialog.getByRole('button', { name: 'Close' }).click();
+  await configure({ diagnostics });
+  assert.equal(await diagnosticDialog.isVisible(), false, 'dismissing the same incident is respected');
+  diagnostics.workerError = 'Worker terminated due to reaching memory limit: JS heap out of memory';
+  await configure({ diagnostics });
+  assert.ok(await diagnosticDialog.isVisible());
+  assert.match(await diagnosticDialog.textContent(), /Worker stopped/);
+  assert.match(await diagnosticDialog.textContent(), /Last Worker sample/);
+  await diagnosticDialog.getByRole('button', { name: 'Close' }).click();
   await writeFile('test-results/ui.json', JSON.stringify({ passed: true, functionArguments: true, checks: ['Settings entry point for sorting and layout', 'background panning without extension messages', 'reversible dual graph geometry and whole-graph left alignment', 'separate Context syntax/navigation and combined restoration', 'Context click coordinates and drag selection', 'Context UTF-16 and CRLF coordinates', 'variable filters R/W/RW/address', 'variable badges preserve one-line height', 'variable click and popup preview exact use sites', 'variable access colors in dark/light themes', 'function mode preserved', '500-ms stationary hover with movement reset and leave cancellation', 'mouse click does not bypass delay', 'popup tint and condition syntax in dark/light themes', 'single-line graph nodes', 'hover popup without layout shift', 'Context selected call and symbol', 'syntax colors in dark/light themes', 'keyboard popup access and Escape', 'root preserved', 'variable icon', 'keyboard expansion/collapse/special', 'explicit source open', 'lock toggle', 'split resize', 'narrow layout', '80 candidates keep graph space and distinguish paths'], errors }, null, 2));
   assert.deepEqual(errors, []);
   console.log('Browser UI checks passed, including Settings-based preferences, reversible branches and left-aligned graphs');

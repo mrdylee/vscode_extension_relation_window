@@ -4,12 +4,15 @@ import path from 'node:path';
 import { FileAnalysis } from './model';
 import { RelationIndex } from './relations';
 import { Minimatch } from 'minimatch';
+import { getHeapStatistics } from 'node:v8';
+import { Diagnostics, WorkerDiagnostics } from './diagnostics';
 
 const builtInExcludes = ['**/node_modules/**', '**/.git/**', '**/.vscode-test/**'];
 
 export class WorkspaceIndex implements vscode.Disposable {
   readonly index = new RelationIndex();
   readonly changed = new vscode.EventEmitter<void>();
+  readonly diagnosticsChanged = new vscode.EventEmitter<void>();
   readonly ready: Promise<void>;
   status = 'Preparing C index…';
   failures = new Map<string, string>();
@@ -29,14 +32,27 @@ export class WorkspaceIndex implements vscode.Disposable {
   private epoch = 0;
   private disposed = false;
   private workerError?: Error;
+  private workerDiagnostics?: WorkerDiagnostics;
+  get diagnostics(): Diagnostics {
+    const heap = getHeapStatistics();
+    return { environment: `${process.platform} ${process.arch} · ${vscode.env.remoteName ?? 'local'} · VS Code ${vscode.version}`,
+      host: { at: Date.now(), heapUsed: heap.used_heap_size, heapLimit: heap.heap_size_limit, external: heap.external_memory },
+      worker: this.workerDiagnostics, workerError: this.workerError
+        ? [(this.workerError as NodeJS.ErrnoException).code, this.workerError.message].filter(Boolean).join(': ') : undefined };
+  }
+  refreshDiagnostics() {
+    this.diagnosticsChanged.fire();
+    if (!this.disposed && !this.workerError) this.worker.postMessage({ type: 'diagnostics' });
+  }
   private scopes = new Map<string, { include: string[]; exclude: string[]; included: Minimatch[]; excluded: Minimatch[]; macros: Minimatch[] }>();
   get skipInactive() { return vscode.workspace.getConfiguration('cRelation').get<boolean>('skipInactive', true); }
   private startWorker() {
     const assets = path.join(this.extensionPath, 'dist');
     const worker = new Worker(path.join(assets, 'analysis-worker.cjs'), { workerData: { assets } });
-    this.worker = worker; this.workerError = undefined;
-    worker.on('message', ({ id, result, error }) => {
+    this.worker = worker; this.workerError = undefined; this.workerDiagnostics = undefined;
+    worker.on('message', ({ id, result, error, type, diagnostics }) => {
       if (this.disposed || this.worker !== worker) return;
+      if (type === 'diagnostics') { this.workerDiagnostics = diagnostics; this.diagnosticsChanged.fire(); return; }
       const request = this.requests.get(id);
       this.requests.delete(id);
       if (error) request?.reject(new Error(error)); else request?.resolve(result);
@@ -50,6 +66,7 @@ export class WorkspaceIndex implements vscode.Disposable {
         ? 'Analysis stopped: Worker ran out of memory. Narrow Include/Exclude, then Rebuild index.'
         : `Analysis unavailable: ${error.message}`;
       this.failures.set('worker', this.status);
+      this.diagnosticsChanged.fire();
       this.changed.fire();
     };
     worker.on('error', failed);
@@ -244,6 +261,6 @@ export class WorkspaceIndex implements vscode.Disposable {
     for (const request of this.requests.values()) request.reject(new Error('Analysis disposed'));
     this.requests.clear();
     void this.worker.terminate();
-    this.disposables.forEach(d => d.dispose()); this.changed.dispose();
+    this.disposables.forEach(d => d.dispose()); this.changed.dispose(); this.diagnosticsChanged.dispose();
   }
 }

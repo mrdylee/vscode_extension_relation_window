@@ -3,6 +3,17 @@ import assert from 'node:assert/strict';
 import { Worker } from 'node:worker_threads';
 import path from 'node:path';
 
+function snapshot(worker, accept = () => true) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { worker.off('message', listener); reject(new Error('No diagnostic response')); }, 3000);
+    const listener = message => {
+      if (message.type !== 'diagnostics' || !accept(message.diagnostics)) return;
+      clearTimeout(timer); worker.off('message', listener); resolve(message.diagnostics);
+    };
+    worker.on('message', listener); worker.postMessage({ type: 'diagnostics' });
+  });
+}
+
 test('Worker applies macro folder policy without removing raw calls or unchecked header definitions', async () => {
   const worker = new Worker(path.resolve('dist/analysis-worker.cjs'), { workerData: { assets: path.resolve('dist') } });
   let serial = 0; const pending = new Map();
@@ -36,6 +47,16 @@ test('Worker applies macro folder policy without removing raw calls or unchecked
     };
     for (const source of sources) await parse(...source);
     await derive();
+    const measured = await snapshot(worker);
+    assert.ok(measured, 'Worker emits photographable memory measurements');
+    assert.ok(measured.sample.heapUsed > 0 && measured.sample.heapLimit > measured.sample.heapUsed);
+    assert.equal(measured.phase, 'idle');
+    assert.deepEqual(Object.keys(measured.phases), ['sources', 'macros', 'callbacks', 'transfer']);
+    assert.equal(measured.counts.files, 3);
+    assert.equal(measured.counts.macroFiles, 1);
+    assert.equal(measured.counts.sourceChars, sources.reduce((n, source) => n + source[1].length, 0));
+    assert.ok(measured.peakHeap >= measured.sample.heapUsed);
+    assert.equal(measured.firstLimit, undefined);
     assert.ok(actual.get(sources[1][0]).references.some(ref => ref.name === 'target' && ref.expansion));
     const vendor = actual.get(sources[2][0]);
     assert.equal(vendor.expandMacros, false);
@@ -52,11 +73,19 @@ test('Worker applies macro folder policy without removing raw calls or unchecked
     const app = actual.get(sources[1][0]);
     assert.ok(app.references.some(ref => ref.name === 'changed' && ref.expansion));
     assert.equal(app.references.some(ref => ref.name === 'target' && ref.expansion), false);
+    assert.equal((await snapshot(worker)).counts.files, 3, 'editing files does not accumulate counters');
+    worker.postMessage({ type: 'reset' });
+    const reset = await snapshot(worker, value => value.run !== measured.run);
+    assert.notEqual(reset.run, measured.run);
+    assert.equal(reset.counts.files, 0);
+    assert.deepEqual(reset.phases, {}, 'a rebuild starts a new diagnostic session');
   } finally { await worker.terminate(); }
 });
 
 test('macro growth yields partial function arguments without exhausting a small Worker heap', async () => {
   const worker = new Worker(path.resolve('dist/analysis-worker.cjs'), { workerData: { assets: path.resolve('dist') }, resourceLimits: { maxOldGenerationSizeMb: 128 } });
+  const diagnostics = [];
+  worker.on('message', message => { if (message.type === 'diagnostics') diagnostics.push(message.diagnostics); });
   let serial = 0; const pending = new Map();
   worker.on('message', message => {
     const request = pending.get(message.id); pending.delete(message.id);
@@ -84,8 +113,15 @@ test('macro growth yields partial function arguments without exhausting a small 
     for (let n = 0; n < 20; n++) assert.ok(result.files.find(file => file.uri === `file:///source${n}.c`).functionArguments?.some(ref => ref.name === `cb${n}`), 'literal callback arguments survive partial analysis');
     assert.ok(result.files.some(file => file.functionArguments?.some(ref => ref.inference?.incomplete)));
     assert.ok(result.files.every(file => !file.argumentPrograms));
+    const incident = diagnostics.find(sample => sample.firstLimit)?.firstLimit;
+    assert.ok(incident, 'capture the actual first memory-budget detection before the result arrives');
+    assert.ok(incident.sample.heapUsed > incident.sample.heapLimit * 0.6);
+    assert.ok(['macros', 'callbacks'].includes(incident.phase));
+    assert.ok(diagnostics.every(sample => Object.keys(sample.phases).length <= 4), 'diagnostics history stays bounded');
+    assert.ok(diagnostics.every(sample => JSON.stringify(sample).length < 10000), 'measurements never copy source or reference arrays');
     const next = await request({ uri: 'file:///next.c', text: 'void next(void){}', skip: true }).promise;
     assert.ok(next.symbols.some(symbol => symbol.name === 'next'), 'the Worker still accepts source changes');
+    assert.deepEqual((await snapshot(worker)).firstLimit, incident, 'refresh preserves the incident even after memory is reclaimed');
   } finally { clearTimeout(timer); await worker.terminate(); }
 });
 

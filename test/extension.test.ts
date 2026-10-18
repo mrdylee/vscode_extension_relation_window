@@ -46,6 +46,13 @@ export async function run() {
   editor.selection = new vscode.Selection(document.positionAt(offset), document.positionAt(offset));
   await new Promise(resolve => setTimeout(resolve, 500));
   const selected = { ...api.view.state };
+  assert.ok(api.workspace.diagnostics.worker.sample.heapUsed > 0, 'real Worker measurements reach the host');
+  const graphBeforeDiagnostics = api.view.state.graph;
+  await api.view.handleMessage({ type: 'diagnostics' });
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal(api.view.state.graph, graphBeforeDiagnostics, 'diagnostic refresh must not rebuild the graph');
+  assert.ok(api.workspace.diagnostics.host.heapUsed > 0);
+  assert.ok(api.workspace.diagnostics.environment.includes(process.platform));
   assert.equal(selected.calleeSort, 'name');
   assert.equal(selected.contextLayout, 'combined');
   assert.equal(selected.callGraphDirection, 'callers-left');
@@ -627,10 +634,14 @@ export async function run() {
   assert.ok(injectedWorkerFailure);
   assert.match(api.workspace.status, /memory/i, 'a fatal Worker failure must not be overwritten with Index ready');
   assert.ok(api.workspace.failures.has('worker'), 'the fatal Worker failure remains visible in Analysis notices');
+  assert.ok(api.workspace.diagnostics.worker, 'preserve the last measurement when the Worker stops');
+  assert.match(api.workspace.diagnostics.workerError, /memory/i);
+  assert.match(api.workspace.diagnostics.workerError, /ERR_WORKER_OUT_OF_MEMORY/);
   await api.workspace.reindex(); await api.workspace.whenIdle();
   assert.notEqual(api.workspace.worker, failedWorker, 'Rebuild index replaces a failed Worker');
   assert.equal(api.workspace.status, 'Index ready');
   assert.equal(api.workspace.failures.has('worker'), false);
+  assert.equal(api.workspace.diagnostics.workerError, undefined, 'fresh Worker clears the stopped state');
   assert.ok(api.workspace.index.files.size > 90, 'rebuilding after Worker failure restores the index');
   const limitedWorker = api.workspace.worker;
   let injectedMemoryNotice = false;

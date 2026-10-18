@@ -1,12 +1,14 @@
 import type { Access, GraphNode, Kind } from '../src/model';
 import type { ViewState } from '../src/view-state';
 import { highlightC } from '../src/syntax';
+import { createDiagnostics } from './diagnostics';
 declare const __EXTENSION_VERSION__: string;
 declare function acquireVsCodeApi(): { postMessage(message: unknown): void };
 const api = acquireVsCodeApi();
 const send = (type: string, rest = {}) => api.postMessage({ type, ...rest });
 const app = document.getElementById('app')!;
 const contextOnly = document.body.dataset.view === 'context';
+const diagnostics = contextOnly ? undefined : createDiagnostics(__EXTENSION_VERSION__, () => send('diagnostics'));
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text = '') {
   const node = document.createElement(tag); node.className = className; node.textContent = text; return node;
 }
@@ -423,12 +425,15 @@ function render(state: ViewState) {
   popup.querySelectorAll<HTMLElement>('.site').forEach(site => site.classList.toggle('selected', site.dataset.site === `${preview?.location.uri}@${preview?.location.start}`));
   graph.querySelectorAll<HTMLElement>('.node-title').forEach(title => title.classList.toggle('selected', title.dataset.preview === `${preview?.location.uri}#${preview?.location.start}` || title.dataset.preview === `${preview?.location.uri}@${preview?.location.start}`));
   footer.replaceChildren(el('span', '', `${state.status} · ${state.fileCount} files`), el('span', 'muted', 'Space Details · → Expand · ← Collapse · Shift+→ Levels · Enter Open source'));
+  footer.append(button('Diagnostics', () => diagnostics?.open(), 'Show memory measurements for a screenshot'));
+  diagnostics?.update(state.diagnostics, state);
   if (state.graph?.truncated) footer.append(el('span', 'warning', 'Limited to 300 nodes'));
   if (state.issues.length) {
     const details = el('details', 'warning'); details.append(el('summary', '', `Analysis notices: ${state.issues.length}`), el('pre', '', state.issues.slice(0, 100).join('\n'))); footer.append(details);
   }
 }
 window.addEventListener('message', event => {
+  if (event.data?.type === 'diagnostics') diagnostics?.update(event.data.diagnostics);
   if (event.data?.type === 'state' && !contextOnly) render(event.data.state);
   if (event.data?.type === 'context' && contextOnly) renderContext(event.data.context);
 });

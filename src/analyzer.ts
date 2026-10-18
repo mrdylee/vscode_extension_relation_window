@@ -292,8 +292,11 @@ export async function createAnalyzer(runtime: string, grammar: string) {
     const value: FlowExpression = facts.initializers[0]?.value ?? { kind: 'unknown', location: original(0, text.length) };
     const issues = tree.rootNode.hasError ? ['Expanded initializer has incomplete or unsupported syntax'] : [];
     tree.delete(); return { value, issues };
-  }, derive(files: FileAnalysis[], memoryPressure?: () => boolean): FileAnalysis[] {
-    return inferPointerCalls(deriveMacroCalls(files, analyzer.analyze, analyzer.calls, analyzer.initializer, memoryPressure), memoryPressure);
+  }, derive(files: FileAnalysis[], memoryPressure?: () => boolean, phase?: (value: 'macros' | 'callbacks') => void): FileAnalysis[] {
+    phase?.('macros');
+    const expanded = deriveMacroCalls(files, analyzer.analyze, analyzer.calls, analyzer.initializer, memoryPressure);
+    phase?.('callbacks');
+    return inferPointerCalls(expanded, memoryPressure);
   } };
   return analyzer;
 }

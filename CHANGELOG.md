@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.38 — 2026-10-18
+
+- Add photographable Diagnostics in the Relation footer: measured Worker heap
+  usage/limit and 60% guard, sampled peak, external memory, phase checkpoints,
+  input counts and the first budget hit. Show environment and shared extension-host
+  heap separately. Open once on memory incidents and preserve timestamped last
+  samples on Worker failure. Keep updates bounded without rebuilding the graph.
+- Include screenshot instructions in the offline Help and README. Analysis
+  behavior and memory limits are unchanged.
+
 ## 0.1.37 — 2026-10-18
 
 - Prevent quadratic memory growth when Callees has many same-name target
