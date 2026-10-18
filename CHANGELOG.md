@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.33 — 2026-10-18
+
+- Bound repeated macro include traversal even when headers emit no define/undef
+  events, preventing exponential work from blocking following Worker requests.
+- Stop incomplete include environments with an explicit Analysis notice. Retain
+  source calls as partial candidates instead of expanding from a truncated prefix.
+- Keep result identity caching and recover after header edits; verify queued
+  source analysis and native Relation updates continue after a limited include graph.
+
 ## 0.1.32 — 2026-10-18
 
 - Bind member selections through explicit casts and declared function/callback

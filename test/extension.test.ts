@@ -404,6 +404,38 @@ export async function run() {
   await api.view.handleMessage({ type: 'open', id: syntaxTask.sites[0].id });
   assert.equal(vscode.window.activeTextEditor!.document.uri.toString(), syntaxUri.toString());
   assert.equal(syntaxDocument.offsetAt(vscode.window.activeTextEditor!.selection.start), syntaxSource.indexOf('state=2'));
+  const includeRoot = vscode.Uri.joinPath(root, 'repeated-includes');
+  await vscode.workspace.fs.createDirectory(includeRoot);
+  const includeUri = vscode.Uri.joinPath(includeRoot, 'main.c');
+  const includeSource = '#include "h27.h"\nvoid include_target(void){}void include_other(void){}void include_task(void){include_target();}\n';
+  await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(includeRoot, 'h0.h'), Buffer.from(''));
+  for (let n = 1; n <= 27; n++) await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(includeRoot, `h${n}.h`), Buffer.from(`#include "h${n-1}.h"\n#include "h${n-1}.h"\n`));
+  await vscode.workspace.fs.writeFile(includeUri, Buffer.from(includeSource));
+  const includeIdle = async () => {
+    await new Promise(resolve => setTimeout(resolve, 500));
+    let timeout: ReturnType<typeof setTimeout>;
+    try {
+      await Promise.race([api.workspace.whenIdle(), new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('Repeated includes blocked editor indexing')), 10000); })]);
+    } finally { clearTimeout(timeout!); }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  };
+  await includeIdle();
+  assert.ok(api.workspace.index.files.get(includeUri.toString()).issues.some((issue: string) => /Macro include.*limit/.test(issue)));
+  const includeDocument = await vscode.workspace.openTextDocument(includeUri);
+  const includeEditor = await vscode.window.showTextDocument(includeDocument);
+  const includePosition = includeDocument.positionAt(includeSource.indexOf('include_task'));
+  includeEditor.selection = new vscode.Selection(includePosition, includePosition);
+  api.view.track(includeEditor, true);
+  await api.view.handleMessage({ type: 'mode', value: 'callees' });
+  assert.equal(api.view.state.graph.root.name, 'include_task');
+  assert.equal(api.view.state.graph.root.children[0].name, 'include_target');
+  assert.equal(api.view.state.graph.root.children[0].sites[0].ambiguous, true);
+  await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(includeRoot, 'h27.h'), Buffer.from(''));
+  await includeIdle();
+  assert.equal(api.workspace.index.files.get(includeUri.toString()).issues.some((issue: string) => /Macro include.*limit/.test(issue)), false);
+  await vscode.workspace.fs.writeFile(includeUri, Buffer.from(includeSource.replace('include_target();', 'include_other();')));
+  await includeIdle();
+  assert.equal(api.view.state.graph.root.children[0].name, 'include_other', 'later source edits still update Relation');
   const macroHeader = vscode.Uri.joinPath(root, 'macro-review.h'), macroUri = vscode.Uri.joinPath(root, 'macro-review.c');
   await vscode.workspace.fs.writeFile(macroHeader, Buffer.from('#define CALL(x) macro_target(x)\n#define WRAP(x) CALL(x)\n'));
   const macroSource = '#include "macro-review.h"\nvoid leaf(void){} void macro_target(int x){leaf();} void changed_target(int x){}\nvoid macro_run(void){WRAP(7);}\n';
@@ -538,6 +570,6 @@ export async function run() {
   assert.equal(api.workspace.index.files.has(argumentsUri.toString()), false);
   const output = process.env.C_RELATION_TEST_OUTPUT!;
   await mkdir(path.dirname(output), { recursive: true });
-  await writeFile(output, JSON.stringify({ passed: true, functionArguments: true, memberSyntax: true, checks: ['cast, returned, anonymous and initialized member navigation', 'workspace-persistent sorting, layout and direction preferences', 'native Settings entry point, separate Context registration and shared navigation', 'dual-direction call-site preview and index reuse', 'Context source navigation and relation reroot', 'Context cross-file variable navigation', 'Context lock and stale-message checks', 'selected identifier tracking', 'selection retry after indexing', 'unlock follows latest editor', 'same-symbol graph reuse', 'variable selection and access filters', 'variable actual-site preview preserves editor', 'variable access filter validation', 'variable uses continue into caller tree', 'activation', '93-file index completion', 'indexing does not open documents', 'WASM worker', 'click tracking', 'variable icon data', 'call sites', 'Context preserves editor', 'mode/depth/expand/collapse', 'locked root', 'explicit source open', 'invalid message target', '#if0 setting reindex', 'unsaved buffer', 'file create/delete', 'ambiguous symbol clears stale graph and Context', 'candidate selection'] }, null, 2));
+  await writeFile(output, JSON.stringify({ passed: true, functionArguments: true, memberSyntax: true, boundedIncludeTraversal: true, checks: ['cast, returned, anonymous and initialized member navigation', 'workspace-persistent sorting, layout and direction preferences', 'native Settings entry point, separate Context registration and shared navigation', 'dual-direction call-site preview and index reuse', 'Context source navigation and relation reroot', 'Context cross-file variable navigation', 'Context lock and stale-message checks', 'selected identifier tracking', 'selection retry after indexing', 'unlock follows latest editor', 'same-symbol graph reuse', 'variable selection and access filters', 'variable actual-site preview preserves editor', 'variable access filter validation', 'variable uses continue into caller tree', 'activation', '93-file index completion', 'indexing does not open documents', 'WASM worker', 'click tracking', 'variable icon data', 'call sites', 'Context preserves editor', 'mode/depth/expand/collapse', 'locked root', 'explicit source open', 'invalid message target', '#if0 setting reindex', 'unsaved buffer', 'file create/delete', 'ambiguous symbol clears stale graph and Context', 'candidate selection'] }, null, 2));
   console.log('C Relation extension integration checks passed');
 }

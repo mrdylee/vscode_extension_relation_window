@@ -26,7 +26,7 @@ export async function run() {
   const functionArgumentSites = [...api.workspace.index.files.values()].reduce((count: number, file: any) => count + (file.functionArguments?.length ?? 0), 0);
   assert.ok(functionArgumentSites > 0, 'FreeRTOS has function argument relationships');
   const callbackNotices = [...api.workspace.index.files.values()].flatMap((file: any) => file.issues.filter((issue:string)=>issue.startsWith('Callback')));
-  assert.ok(expandedCallSites > 0, 'real FreeRTOS macro invocations produce expanded call sites');
+  assert.ok(expandedCallSites > 10000, 'full FreeRTOS macro coverage must not collapse to a small partial result');
   const document = await vscode.workspace.openTextDocument(vscode.Uri.joinPath(vscode.workspace.workspaceFolders![0].uri, 'queue.c'));
   const editor = await vscode.window.showTextDocument(document);
   const offset = document.getText().indexOf('prvUnlockQueue');

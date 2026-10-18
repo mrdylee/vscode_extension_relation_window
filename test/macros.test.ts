@@ -14,6 +14,45 @@ function project(sources: Record<string, string>) {
 }
 const calls = (index: RelationIndex, name = 'run') => index.relations(index.symbols().find(s => s.name === name && s.kind === 'function' && s.definition)!.id, 'callees');
 
+test('include traversal is bounded even when repeated headers produce no macro events', () => {
+  const sources: Record<string, string> = { 'main.c': '#include "h18.h"\nvoid target(void){} void run(void){target();}', 'h0.h': '' };
+  for (let n = 1; n <= 18; n++) sources[`h${n}.h`] = `#include "h${n-1}.h"\n#include "h${n-1}.h"\n`;
+  const index = project(sources), file = index.files.get('file:///demo/main.c')!;
+  assert.ok(file.issues.some(issue => /Macro include.*limit/.test(issue)));
+  const target = calls(index).find(group => group.name === 'target'); assert.ok(target);
+  assert.ok(target.sites.every(site => site.ambiguous && site.inference?.incomplete));
+});
+
+test('incomplete include environments retain source calls without fabricated expansions', () => {
+  const sources: Record<string, string> = { 'main.c': '#define CALL() stale_target()\n#include "h18.h"\n#undef CALL\n#define CALL() actual_target()\nvoid stale_target(void){}void actual_target(void){}void run(void){CALL();}', 'h0.h': '' };
+  for (let n = 1; n <= 18; n++) sources[`h${n}.h`] = `#include "h${n-1}.h"\n#include "h${n-1}.h"\n`;
+  const index = project(sources), file = index.files.get('file:///demo/main.c')!;
+  assert.ok(file.issues.some(issue => /Macro include.*limit/.test(issue)));
+  assert.equal(file.references.some(ref => ref.expansion), false);
+  assert.ok(file.references.some(ref => ref.name === 'CALL' && ref.kind === 'call' && ref.inference?.incomplete));
+});
+
+test('limited include results reuse cache identity and recover after header edits', () => {
+  const sources: Record<string, string> = { 'main.c': '#define CALL() target()\n#include "h18.h"\nvoid target(void){}void run(void){CALL();}', 'h0.h': '' };
+  for (let n = 1; n <= 18; n++) sources[`h${n}.h`] = `#include "h${n-1}.h"\n#include "h${n-1}.h"\n`;
+  const raw = Object.entries(sources).map(([name, text]) => analyzer.analyze('file:///demo/' + name, text));
+  const limited = analyzer.derive(raw);
+  assert.ok(limited[0].issues.some(issue => /Macro include.*limit/.test(issue)));
+  assert.equal(analyzer.derive(raw)[0], limited[0]);
+  const edited = raw.map(file => file.uri.endsWith('/h18.h') ? analyzer.analyze(file.uri, '') : file);
+  const recovered = analyzer.derive(edited)[0];
+  assert.equal(recovered.issues.some(issue => /Macro include.*limit/.test(issue)), false);
+  assert.ok(recovered.references.some(ref => ref.name === 'target' && ref.expansion));
+});
+
+test('existing include-depth limits preserve previously supported macro expansions', () => {
+  const sources: Record<string, string> = { 'main.c': '#define CALL() target()\n#include "h65.h"\nvoid target(void){}void run(void){CALL();}', 'h0.h': '' };
+  for (let n = 1; n <= 65; n++) sources[`h${n}.h`] = `#include "h${n-1}.h"\n`;
+  const index = project(sources), file = index.files.get('file:///demo/main.c')!;
+  assert.ok(file.issues.some(issue => /Macro include\/event limit/.test(issue)));
+  assert.ok(calls(index).some(group => group.name === 'target' && group.callKind === 'expanded'));
+});
+
 test('source sorting interleaves expanded, direct and inferred calls at their original sites', () => {
   const source = '#define EARLY() zulu()\ntypedef void (*CB)(void); void alpha(void){} void beta(void){} void zulu(void){} void run(void){EARLY();beta();CB cb=alpha;cb();zulu();EARLY();}';
   const index = project({ 'main.c': source });

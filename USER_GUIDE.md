@@ -232,6 +232,15 @@ It does not determine build-specific `#ifdef`, `#ifndef`, `defined(...)` or macr
 
 ## If results are missing or slow
 
+From **v0.1.33**, macro include processing also bounds repeated header visits,
+including headers with no macro definitions. A pathological include graph stops
+with **Macro include traversal limit reached** instead of blocking later
+source updates. Affected files retain source-call candidates marked incomplete;
+macro expansion and callback inference for those files are skipped. Narrow the
+analysis scope or correct the include graph to obtain fuller results. Editing a
+relevant header automatically retries analysis. This limit does not exclude
+the entire source file from ordinary symbol navigation.
+
 1. Check **Following selection** versus **Pinned · Follow paused**.
 2. Check the status and file count. If **Index ready** shows zero files, use **Settings** to check Include paths, casing and Exclude matches. An empty folder or a folder without C/H files also produces zero files.
 3. **Partial index: 10,000 file limit reached** means the initial scan omitted files. Narrow Include or add Exclude patterns. Scope filtering happens before this limit.

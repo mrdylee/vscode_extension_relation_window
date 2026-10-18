@@ -3,6 +3,38 @@ import assert from 'node:assert/strict';
 import { Worker } from 'node:worker_threads';
 import path from 'node:path';
 
+test('repeated empty includes cannot block following source analysis in the Worker', async () => {
+  const worker = new Worker(path.resolve('dist/analysis-worker.cjs'), { workerData: { assets: path.resolve('dist') } });
+  let serial = 0;
+  const pending = new Map();
+  worker.on('message', message => {
+    const request = pending.get(message.id); pending.delete(message.id);
+    if (message.error) request?.reject(new Error(message.error)); else request?.resolve(message.result);
+  });
+  const request = data => {
+    const id = ++serial;
+    const promise = new Promise((resolve, reject) => { pending.set(id, { resolve, reject }); worker.postMessage({ ...data, id }); });
+    return { id, promise };
+  };
+  let timer;
+  try {
+    const versions = [], sources = [['file:///main.c', '#include "h27.h"\nvoid run(void){target();}'], ['file:///h0.h', '']];
+    for (let n = 1; n <= 27; n++) sources.push([`file:///h${n}.h`, `#include "h${n-1}.h"\n#include "h${n-1}.h"\n`]);
+    for (const [uri, text] of sources) {
+      const job = request({ uri, text, skip: true }); await job.promise;
+      versions.push([uri, job.id, -job.id]);
+    }
+    const deriving = request({ type: 'derive', versions });
+    const next = request({ uri: 'file:///next.c', text: 'void next(void){}', skip: true });
+    const [result, parsed] = await Promise.race([
+      Promise.all([deriving.promise, next.promise]),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Include traversal blocked the following Worker request')), 3000); })
+    ]);
+    assert.ok(result.files.find(file => file.uri === 'file:///main.c').issues.some(issue => /Macro include.*limit/.test(issue)));
+    assert.ok(parsed.symbols.some(symbol => symbol.name === 'next'));
+  } finally { clearTimeout(timer); await worker.terminate(); }
+});
+
 test('discarded derived responses are retried until the caller acknowledges them', async () => {
   const worker = new Worker(path.resolve('dist/analysis-worker.cjs'), { workerData: { assets: path.resolve('dist') } });
   let id = 0; const pending = new Map();

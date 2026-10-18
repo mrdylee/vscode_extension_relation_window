@@ -6,18 +6,23 @@ type Analyze = (uri: string, text: string, skip?: boolean) => FileAnalysis;
 interface Event { offset: number; value: PreprocessorEvent }
 interface Cached { raw: FileAnalysis; paths: string; dependencies: Set<FileAnalysis>; result: FileAnalysis }
 const caches = new WeakMap<Analyze, Map<string, Cached>>();
+const includeLimit = 'Macro include traversal limit reached; call relationships may be incomplete';
 function timeline(file: FileAnalysis, files: Map<string, FileAnalysis>, issues: Set<string>, dependencies: Set<FileAnalysis>): Event[] {
   const result: Event[] = [];
   const defined = new Set<string>();
+  let visits = 0;
   const byName = new Map<string, string[]>();
   for (const uri of files.keys()) { const name = uri.split('/').pop()!; const list = byName.get(name) ?? []; list.push(uri); byName.set(name, list); }
   function visit(current: FileAnalysis, offset: number | undefined, stack: Set<string>, inherited: string[]) {
+    if (visits > 40_000) return;
     dependencies.add(current);
+    if (++visits > 40_000) { issues.add(includeLimit); return; }
     if (current.guard && defined.has(current.guard.name)) return;
     if (stack.has(current.uri)) return;
     if (stack.size >= 64 || result.length >= 40_000) { issues.add('Macro include/event limit reached'); return; }
     const next = new Set(stack).add(current.uri);
     for (const event of current.preprocessor ?? []) {
+      if (visits > 40_000) break;
       if (result.length >= 40_000) { issues.add('Macro include/event limit reached'); break; }
       const conditions = [...inherited, ...event.conditions.filter(condition => condition !== current.guard?.condition)];
       if (event.kind !== 'include') {
@@ -81,6 +86,15 @@ export function deriveMacroCalls(raw: FileAnalysis[], analyze: Analyze, parseCal
     if (previous?.raw === file && previous.paths === paths && [...previous.dependencies].every(dep => files.get(dep.uri) === dep)) return previous.result;
     const dependencies = new Set<FileAnalysis>();
     const issues = new Set<string>(); const events = timeline(file, files, issues, dependencies);
+    if (issues.has(includeLimit)) {
+      // A prefix cannot establish the active macro environment. Retain source
+      // calls as partial candidates and avoid deriving targets from raw flow.
+      const result: FileAnalysis = { ...file, programs: [], initializers: [],
+        references: file.references.map(ref => ref.kind === 'call' ? { ...ref,
+          inference: { expression: ref.name, evidence: [], incomplete: true, reasons: [includeLimit] } } : ref),
+        issues: [...file.issues, ...issues] };
+      cache!.set(file.uri, { raw: file, paths, dependencies, result }); return result;
+    }
     const lookup = environment(events);
     const sourceLocation = locationIn(file.text, file.uri);
     const macroIds = (name: string, offset: number) => lookup(name, offset).filter((m): m is MacroDefinition => !!m).map(m => `${m.location.uri}#${m.location.start}`);
