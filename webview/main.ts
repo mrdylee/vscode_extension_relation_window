@@ -344,7 +344,7 @@ function render(state: ViewState) {
   mode.onchange = () => send(variable ? 'access' : 'mode', { value: mode.value });
   if (depth.value !== String(state.depth)) depth.value = String(state.depth);
   lock.textContent = state.locked ? 'Pinned · Follow paused' : 'Following selection'; lock.setAttribute('aria-pressed', String(state.locked));
-  lock.title = state.locked ? 'Click to unpin and follow the selected symbol.' : 'Click to pin the current Relation and pause following selection.';
+  lock.title = state.locked ? `Pinned to ${state.graph?.root.name ?? 'the current Relation'}. Click to unpin and follow the selected symbol.` : 'Click to pin the current Relation and pause following selection.';
   skip.checked = state.skipInactive;
   const nextCandidates = JSON.stringify(state.candidates);
   if (nextCandidates !== candidateSignature) {
@@ -399,6 +399,16 @@ function render(state: ViewState) {
     if (rootChanged || directionChanged) resetGraphPosition();
     if (key) Array.from(graph.querySelectorAll<HTMLButtonElement>('.node-title')).find(b => b.dataset.key === key)?.focus({ preventScroll: true });
   }
+  const rootTitle = graph.querySelector<HTMLButtonElement>(':scope > .branch > .node > .node-title');
+  const marker = rootTitle?.querySelector('.pin-marker');
+  if (rootTitle && state.locked) {
+    if (!marker) {
+      const pin = el('span', 'pin-marker'); pin.title = 'Pinned root'; pin.setAttribute('aria-hidden', 'true');
+      pin.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path fill="currentColor" transform="rotate(35 8 8)" d="M5 1h6v2l-1 1v4l2 2v1H9v4l-1 1-1-1v-4H4v-1l2-2V4L5 3z"/></svg>';
+      rootTitle.append(pin);
+    }
+    rootTitle.setAttribute('aria-description', 'Pinned root. Following selection is paused.');
+  } else { marker?.remove(); rootTitle?.removeAttribute('aria-description'); }
   const preview = state.context;
   if (state.contextLayout !== 'separate') renderContext(preview);
   popup.querySelectorAll<HTMLElement>('.site').forEach(site => site.classList.toggle('selected', site.dataset.site === `${preview?.location.uri}@${preview?.location.start}`));

@@ -61,7 +61,7 @@ Other examples: `App/**/*.{c,h}` matches C/H files under App; `**/vendor/**` mat
 - **1 level – 8 levels** controls the initial tree depth. Click a Relation symbol to preview it in Context and expand from that node by the selected depth. The root stays in place; already deeper branches remain open. Repeated clicks do not grow the same node indefinitely.
 - **Double-click / Enter** opens the symbol or reference in the main editor.
 - **Context code click** moves the main editor to that location. When following selection, Relation also follows the clicked symbol. Drag to select and copy text without navigating.
-- **Following selection** means Relation follows symbols selected in the editor or Context. Click it to switch to **Pinned · Follow paused** and keep the current root. Click again to resume. Pinning does not stop indexing or manual branch expansion.
+- **Following selection** means Relation follows symbols selected in the editor or Context. Click it to switch to **Pinned · Follow paused** and keep the current root. A small pushpin appears on that root node; hover over the toolbar button to see the pinned symbol's name. Click again to remove the pin and resume following. Pinning does not stop indexing or manual branch expansion.
 - Hover over a node without moving for 500 ms, or press **Space** on a focused node, to see details and individual call/reference locations. Click a location to preview the exact use in Context. **Escape** closes details.
 - **→** expands a focused node, **←** collapses it, and **Shift+→** lets you choose an expansion depth. The details popup also offers **Levels…**.
 - If multiple definitions match, use **Select definition** to choose the correct file.
@@ -72,10 +72,14 @@ Other examples: `App/**/*.{c,h}` matches C/H files under App; `**/vendor/**` mat
 Click **Settings** in Relation to open all C Relations settings in one place. Sorting and layout choices are configured here:
 
 - **Callees sorting → Name order / Source order**: the default is name order. Source order groups each target at its first original call location, including macro-expanded and inferred calls. Repeated calls stay in one node, with popup locations in source order. Tied locations retain discovery order. This is the order written in source, not runtime evaluation order. Callers/References keep name order.
-- **Context layout → Combined / Separate**: Combined keeps the existing two-pane layout. Separate gives Relation the panel's full width and opens **C Relations Context** as an independent Explorer view. Drag that view's **header**, or use **View: Move View**, to move it below the file tree or to another supported VS Code location. VS Code remembers docking positions. Its width follows the destination area; long code lines may require horizontal scrolling. Choose Combined to return to the shared window. Syntax colors, code clicks, pinning and shared selection remain available.
+- **Context layout → Combined / Combined · Full width / Separate**: Combined keeps Context and Relation together. **Combined · Full width** places them together across the bottom, beneath both sidebars, using VS Code's Justify panel alignment. Terminal and other bottom-panel views share that width. Selecting Combined or Separate after Full width restores Center alignment (editor width). Separate gives Relation the panel's available width and opens **C Relations Context** as an independent Explorer view. Drag that view's **header**, or use **View: Move View**, to move it below the file tree or to another supported VS Code location. VS Code remembers docking positions. Its width follows the destination area; long code lines may require horizontal scrolling. Syntax colors, code clicks, pinning and shared selection remain available in all three choices.
 - **Call Graph Direction → Callers left / Callees right**, or **Callees left / Callers right**: applies to Callers & Callees mode. Changing sides preserves expanded branches, selection and the Callees sorting rule. The graph remains left aligned and left-side branches are visible initially; it does not center the selected function or reanalyze sources. Single-direction modes keep their existing orientation.
 
 Right-click inside Relation (or focus a node and press **Shift+F10**) for **Settings…** and **Reset graph position**. Reset returns the whole graph to its initial left-aligned position.
+
+For a full-width bottom panel beneath both sidebars, select **Settings → Context
+Layout → Combined · Full width**. The same VS Code alignment is available manually
+through **View → Appearance → Align Panel → Justify**.
 
 Hold the left mouse button on the graph's **background** and drag to pan. A small movement threshold distinguishes a drag from a click. Dragging does not analyze files or change selection. Node clicks, double-clicks and Context text selection keep their existing behavior. A new root resets the graph position.
 

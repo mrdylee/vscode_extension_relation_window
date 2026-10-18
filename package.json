@@ -2,7 +2,7 @@
   "name": "c-relation-explorer",
   "displayName": "C Relation Explorer",
   "description": "Build-free C references, caller/callee graphs and a linked Context preview.",
-  "version": "0.1.34",
+  "version": "0.1.35",
   "publisher": "local-james-black",
   "license": "MIT",
   "engines": {
@@ -95,11 +95,12 @@
         },
         "cRelation.contextLayout": {
           "type": "string",
-          "enum": ["combined", "separate"],
-          "enumDescriptions": ["Show Context and Relation together.", "Show Context as an independent Explorer view; drag its header to move it."],
+          "enum": ["combined", "combined-full-width", "separate"],
+          "enumItemLabels": ["Combined", "Combined · Full width", "Separate"],
+          "enumDescriptions": ["Show Context and Relation together in the normal panel. Leaving Full width restores editor-width alignment.", "Show Context and Relation together across the bottom, beneath both sidebars. Also changes the width of Terminal and other bottom-panel views.", "Show Context as an independent Explorer view; drag its header to move it. Leaving Full width restores editor-width panel alignment."],
           "default": "combined",
           "scope": "window",
-          "description": "Context layout. Open with the Relation Settings button. Separate Context shares the same analysis and selection."
+          "description": "Choose Combined, Combined · Full width (beneath both sidebars), or Separate Context. Full width also changes Terminal and other bottom-panel views. All layouts share the same analysis and selection."
         },
         "cRelation.include": {
           "type": "array",
@@ -140,7 +141,7 @@
     "test:freertos": "npm run build && node scripts/test-freertos.mjs",
     "test:ui": "npm run build && tsx test/create-ui-fixture.ts && node test/ui.mjs",
     "vscode:prepublish": "npm run build",
-    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license --out artifacts/c-relation-explorer-0.1.34.vsix"
+    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license --out artifacts/c-relation-explorer-0.1.35.vsix"
   },
   "dependencies": {
     "minimatch": "10.2.6",

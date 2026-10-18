@@ -29,6 +29,7 @@ export class RelationView implements vscode.Disposable {
       if (event.affectsConfiguration('cRelation.calleeSort') || event.affectsConfiguration('cRelation.contextLayout') || event.affectsConfiguration('cRelation.includeFunctionArguments')) {
         const previousLayout = this.state.contextLayout;
         this.readPreferences(); this.refresh();
+        if (previousLayout !== this.state.contextLayout) void this.applyPanelLayout(previousLayout);
         if (previousLayout !== 'separate' && this.state.contextLayout === 'separate') {
           void vscode.commands.executeCommand('cRelation.context.focus', { preserveFocus: true });
         }
@@ -46,9 +47,18 @@ export class RelationView implements vscode.Disposable {
   private readPreferences() {
     const config = vscode.workspace.getConfiguration('cRelation');
     this.state.calleeSort = config.get('calleeSort') === 'source' ? 'source' : 'name';
-    this.state.contextLayout = config.get('contextLayout') === 'separate' ? 'separate' : 'combined';
+    const layout = config.get('contextLayout');
+    this.state.contextLayout = layout === 'separate' || layout === 'combined-full-width' ? layout : 'combined';
     this.state.callGraphDirection = config.get('callGraphDirection') === 'callees-left' ? 'callees-left' : 'callers-left';
     this.state.includeFunctionArguments = config.get('includeFunctionArguments') === true;
+  }
+  private async applyPanelLayout(previousLayout?: ViewState['contextLayout']) {
+    try {
+      if (this.state.contextLayout === 'combined-full-width') {
+        await vscode.commands.executeCommand('workbench.action.positionPanelBottom');
+        if (this.state.contextLayout === 'combined-full-width') await vscode.commands.executeCommand('workbench.action.alignPanelJustify');
+      } else if (previousLayout === 'combined-full-width') await vscode.commands.executeCommand('workbench.action.alignPanelCenter');
+    } catch (error) { void vscode.window.showErrorMessage(`C Relations: Could not change panel layout: ${String(error)}`); }
   }
   resolveWebviewView(view: vscode.WebviewView, contextOnly = false) {
     if (contextOnly) this.contextView = view; else this.webview = view;
@@ -65,7 +75,7 @@ export class RelationView implements vscode.Disposable {
       if (contextOnly && this.contextView === view) this.contextView = undefined;
       if (!contextOnly && this.webview === view) this.webview = undefined;
     });
-    if (!contextOnly) this.publish();
+    if (!contextOnly) { this.publish(); void this.applyPanelLayout(); }
   }
   track(editor: vscode.TextEditor | undefined, explicit = false) {
     if (!editor || !/\.[ch]$/i.test(editor.document.uri.path)) return false;

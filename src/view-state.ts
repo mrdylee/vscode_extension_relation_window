@@ -5,7 +5,7 @@ export interface ViewState {
   graph?: GraphData; context?: Preview; candidates: SymbolRecord[];
   status: string; fileCount: number; issues: string[];
   mode: RelationMode; accessFilter: AccessFilter; depth: number; locked: boolean; skipInactive: boolean;
-  calleeSort: CalleeSort; contextLayout: 'combined' | 'separate';
+  calleeSort: CalleeSort; contextLayout: 'combined' | 'combined-full-width' | 'separate';
   callGraphDirection: 'callers-left' | 'callees-left';
   includeFunctionArguments: boolean;
 }

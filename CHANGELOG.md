@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.35 — 2026-10-18
+
+- Add Combined · Full width to Context Layout settings. Place Context and Relation
+  across the bottom beneath both sidebars; restore Center alignment when leaving
+  this mode. Explain the shared width with Terminal and other Panel views.
+- Mark the pinned Relation root with a compact pushpin and identify its symbol
+  in the existing toolbar tooltip. Unpin removes the marker without rebuilding
+  the graph or changing branch expansion and navigation behavior.
+
 ## 0.1.34 — 2026-10-18
 
 - Reserve Worker heap headroom during macro expansion and callback propagation;
