@@ -55,6 +55,7 @@ Other examples: `App/**/*.{c,h}` matches C/H files under App; `**/vendor/**` mat
 
 - **References** shows calls, address references and declarations. **Callers** includes direct, macro-expanded and inferred callback calls. The tree grows toward the code that calls or references the selected symbol.
 - **Callees · Called functions** grows in the opposite direction: from the selected function to the functions it calls. Repeated calls share one node; the popup lists each actual call site. Click a child to preview the call site in Context and expand its outgoing calls. Enter or double-click opens that call site in the editor.
+- **Callers & Callees** shows one center function, incoming callers branching left and outgoing callees branching right. The depth selector applies to both sides; click a branch to expand it independently. Variable selections still use the existing R/W filters. Both sides share a 300-node limit, with roughly half reserved for outgoing calls.
 - **Macro-expanded call** shows a call found after token expansion. **Inferred call** shows a possible function-pointer/callback target, with a dashed candidate icon and evidence. **Macro invocation**, **Indirect call** and **Unresolved call** leaves retain unavailable expansions, unknown indirect targets or names missing from the analyzed scope. Declared functions without an indexed body have no outgoing calls to expand.
 - Variable selections keep their Read/Write filters and incoming caller tree, even when the remembered function mode is Callees. Returning to a function restores that mode.
 - **1 level – 8 levels** controls the initial tree depth. Click a Relation symbol to preview it in Context and expand from that node by the selected depth. The root stays in place; already deeper branches remain open. Repeated clicks do not grow the same node indefinitely.
@@ -65,6 +66,27 @@ Other examples: `App/**/*.{c,h}` matches C/H files under App; `**/vendor/**` mat
 - **→** expands a focused node, **←** collapses it, and **Shift+→** lets you choose an expansion depth. The details popup also offers **Levels…**.
 - If multiple definitions match, use **Select definition** to choose the correct file.
 - Drag the divider to resize Context and Relation.
+
+## Relation options and moving Context (v0.1.29)
+
+Right-click inside Relation (or focus a node and press **Shift+F10**) to open **Relation options**:
+
+- **Callees sorting → Name order / Source order**: the default is name order. Source order groups each target at its first original call location, including macro-expanded and inferred calls. Repeated calls stay in one node, with popup locations in source order. Tied locations retain discovery order. This is the order written in source, not runtime evaluation order. Callers/References keep name order.
+- **Context layout → Combined / Separate**: Combined keeps the existing two-pane layout. Separate gives Relation the panel's full width and opens **C Relations Context** as an independent Explorer view. Drag that view's **header**, or use **View: Move View**, to move it below the file tree or to another supported VS Code location. VS Code remembers docking positions. Its width follows the destination area; long code lines may require horizontal scrolling. Choose Combined to return to the shared window. Syntax colors, code clicks, pinning and shared selection remain available.
+- **Reset graph position** restores the initial graph position and centers the selected function horizontally in both-direction mode.
+
+Hold the left mouse button on the graph's **background** and drag to pan. A small movement threshold distinguishes a drag from a click. Dragging does not analyze files or change selection. Node clicks, double-clicks and Context text selection keep their existing behavior. A new root resets the graph position.
+
+Sorting and Context layout are saved in workspace settings (user settings when no folder is open). They are also available as **C Relation: Callee Sort** and **C Relation: Context Layout**:
+
+```json
+{
+  "cRelation.calleeSort": "source",
+  "cRelation.contextLayout": "separate"
+}
+```
+
+Both views share one analysis index. Separate Context receives preview updates; it does not start a second analysis pass. Actual responsiveness depends on project size and displayed relationships.
 
 Functions, variables, types and macros have distinct icons. Context and detail popups use syntax colors; these are not full compiler-based semantic highlighting.
 

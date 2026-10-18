@@ -22,6 +22,46 @@ test('Callees groups direct and unresolved calls with exact sites, not address r
   assert.equal(groups[1].sites[0].access, undefined, 'outgoing calls are not variable reads');
   assert.deepEqual(value.relations(task.id, 'callers').map(g => g.name), ['entry']);
 });
+test('optional source sorting follows first calls at every depth and preserves incoming name order', () => {
+  const source = 'void alpha(void){inside_z();inside_a();} void zulu(void){} void run(void){zulu();alpha();zulu();missing();} void zebra(void){run();} void aardvark(void){run();}';
+  const value = index({ 'a.c': source });
+  const run = value.symbols().find(s => s.name === 'run')!;
+  assert.deepEqual(value.relations(run.id, 'callees').map(g => g.name), ['alpha', 'missing', 'zulu']);
+  const graph = value.graph(run.id, 'callees', 2, {}, 'all', 'source')!;
+  assert.deepEqual(graph.root.children.map(n => n.name), ['zulu', 'alpha', 'missing']);
+  assert.deepEqual(graph.root.children[1].children.map(n => n.name), ['inside_z', 'inside_a']);
+  assert.equal(graph.root.children[0].sites.length, 2);
+  assert.deepEqual(value.relations(run.id, 'callers', 'all', 'source').map(g => g.name), ['aardvark', 'zebra']);
+});
+test('both-direction graphs have a single root with independent caller and callee expansion', () => {
+  const value = index({ 'a.c': 'void leaf(void){} void next(void){leaf();} void run(void){next();run();} void entry(void){run();} void launch(void){entry();}' });
+  const run = value.symbols().find(s => s.name === 'run')!;
+  const graph = value.graph(run.id, 'both', 1)!;
+  assert.deepEqual(graph.root.children.map(n => n.name), ['next', 'run']);
+  assert.deepEqual(graph.callers!.map(n => n.name), ['entry', 'run']);
+  assert.ok(graph.root.children.find(n => n.name === 'run')!.cycle);
+  assert.ok(graph.callers!.find(n => n.name === 'run')!.cycle);
+  const entry = graph.callers![0], next = graph.root.children[0];
+  assert.equal(new Set([...graph.callers!, ...graph.root.children].map(n => n.key)).size, 4);
+  const expanded = value.graph(run.id, 'both', 1, { [entry.key]: 1, [next.key]: 1 })!;
+  assert.equal(expanded.callers![0].children[0].name, 'launch');
+  assert.equal(expanded.root.children[0].children[0].name, 'leaf');
+  const collapsed = value.graph(run.id, 'both', 2, { [entry.key]: 0 })!;
+  assert.equal(collapsed.callers![0].children.length, 0);
+  assert.equal(collapsed.root.children[0].children[0].name, 'leaf');
+  const closed = value.graph(run.id, 'both', 2, { root: 0 })!;
+  assert.deepEqual(closed.root.children, []); assert.deepEqual(closed.callers, []);
+});
+test('both-direction graphs share the 300-node budget and retain both sides', () => {
+  const source = Array.from({ length: 200 }, (_, i) => `void leaf${i}(void){}`).join('')
+    + 'void root(void){' + Array.from({ length: 200 }, (_, i) => `leaf${i}();`).join('') + '}'
+    + Array.from({ length: 200 }, (_, i) => `void entry${i}(void){root();}`).join('');
+  const value = index({ 'a.c': source });
+  const graph = value.graph(value.symbols().find(s => s.name === 'root')!.id, 'both', 1)!;
+  assert.equal(1 + graph.root.children.length + graph.callers!.length, 300);
+  assert.ok(graph.root.children.length >= 149 && graph.callers!.length >= 149);
+  assert.equal(graph.truncated, true);
+});
 test('Callees resolves static scope and retains conditional candidates', () => {
   const value = index({ 'a.c': 'static void helper(void){} void task(void){helper();}', 'b.c': 'static void helper(void){}',
     'c.c': '#if BOARD\nvoid target(void){}\n#endif', 'd.c': 'void target(void){}', 'use.c': 'void use(void){target();}' });
@@ -72,9 +112,12 @@ test('Callees updates only changed file owners and resolves target changes on de
 test('Callees preference preserves variable use and incoming caller traversal', () => {
   const value = index({ 'a.c': 'int state; void writer(void){state=1;} void entry(void){writer();}' });
   const variable = value.symbols().find(s => s.name === 'state')!;
-  const graph = value.graph(variable.id, 'callees', 2, {}, 'write')!;
-  assert.equal(graph.root.children[0].name, 'writer');
-  assert.equal(graph.root.children[0].children[0].name, 'entry');
+  for (const mode of ['callees', 'both'] as const) {
+    const graph = value.graph(variable.id, mode, 2, {}, 'write')!;
+    assert.equal(graph.root.children[0].name, 'writer');
+    assert.equal(graph.root.children[0].children[0].name, 'entry');
+    assert.equal(graph.callers, undefined);
+  }
 });
 test('Callees indirect records do not hide ordinary variable selection', () => {
   const source = 'void task(struct Ops *ops){ops->run();}';

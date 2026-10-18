@@ -108,6 +108,10 @@ Settings 화면에서는 `@id:cRelation.include` 또는 `@id:cRelation.exclude`�
 - **References**: 호출, 함수 주소 참조, 함수 선언을 함께 표시합니다. 함수 포인터 테이블은 변수 아이콘으로 표시합니다.
 - **Callers**: 직접 호출, 매크로 확장 호출과 추정 콜백 호출을 표시합니다. 그래프는 선택한 함수에서 **호출하는 쪽으로** 펼쳐집니다.
 - **Callees · Called functions**: 선택한 함수가 **호출하는 대상 쪽으로** 펼쳐집니다. 반복 호출은 노드 하나로 묶고 팝업에 실제 호출 위치를 모두 표시합니다. 자식 노드를 클릭하면 Context에서 호출 위치를 미리 보며, 선택한 단계만큼 대상 함수의 호출을 추가로 펼칩니다. Enter/더블클릭은 해당 호출 위치를 엽니다.
+- **Callers & Callees**: 선택한 함수를 가운데 한 번 표시하고 왼쪽에는 호출자, 오른쪽에는 호출 대상을 펼칩니다. 각 방향의 가지를 별도로 확장할 수 있으며 전체 300개 노드 제한을 공유합니다.
+- **Relation 우클릭 → Callees sorting**: 기본 이름순과 소스의 첫 호출 위치순을 선택합니다. 반복 호출은 한 노드로 묶으며 팝업의 위치 목록은 소스순입니다. 소스순은 실제 실행 순서를 의미하지 않습니다. 선택은 프로젝트별로 저장됩니다.
+- **Relation 배경을 왼쪽 버튼으로 드래그**하면 그래프를 이동합니다. 우클릭의 **Reset graph position**으로 되돌립니다. 심볼 클릭·더블클릭과 Context 텍스트 선택은 그대로 사용할 수 있습니다.
+- **Relation 우클릭 → Context layout → Combined / Separate**: 기본은 기존 통합 화면입니다. Separate는 Relation을 전체 폭으로 표시하고 **C Relations Context**를 Explorer의 독립 뷰로 엽니다. 제목줄 드래그 또는 **View: Move View**로 왼쪽 파일 트리 아래 등 원하는 위치에 배치합니다. Combined를 선택하면 통합 화면으로 돌아옵니다. 설정은 `cRelation.calleeSort` (`name`/`source`), `cRelation.contextLayout` (`combined`/`separate`)에서도 변경할 수 있습니다. 두 뷰는 분석 인덱스·미리보기·코드 이동을 공유합니다.
 - **Macro-expanded call**은 매크로 확장으로 찾은 호출입니다. **Inferred call**은 정적 분석으로 찾은 함수 포인터·콜백 후보이며 점선 아이콘과 근거 위치를 표시합니다. **Macro invocation**은 확장하지 못한 호출, **Indirect call**은 아직 모르는 간접 대상, **Unresolved call**은 분석 범위에 정의가 없는 호출입니다. 미확정 대상은 말단 노드로 남깁니다.
 - 함수 이름 선택: 해당 정의를 Context에서 미리 봅니다.
 - Relation 노드는 **아이콘 + 심볼 이름 한 줄**로 표시합니다. 마우스를 같은 노드 위에서 500ms 동안 멈추거나 노드에 포커스를 두고 Space를 누르면 상세 팝업이 열립니다. Escape로 닫습니다.

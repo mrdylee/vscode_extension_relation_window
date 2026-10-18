@@ -14,6 +14,16 @@ function project(sources: Record<string, string>) {
 }
 const calls = (index: RelationIndex, name = 'run') => index.relations(index.symbols().find(s => s.name === name && s.kind === 'function' && s.definition)!.id, 'callees');
 
+test('source sorting interleaves expanded, direct and inferred calls at their original sites', () => {
+  const source = '#define EARLY() zulu()\ntypedef void (*CB)(void); void alpha(void){} void beta(void){} void zulu(void){} void run(void){EARLY();beta();CB cb=alpha;cb();zulu();EARLY();}';
+  const index = project({ 'main.c': source });
+  const run = index.symbols().find(s => s.name === 'run')!;
+  const groups = index.relations(run.id, 'callees', 'all', 'source');
+  assert.deepEqual(groups.map(g => g.name), ['zulu', 'beta', 'alpha']);
+  assert.deepEqual(groups[0].sites.map(s => s.location.start), [source.indexOf('EARLY();'), source.indexOf('zulu();'), source.lastIndexOf('EARLY();')]);
+  assert.equal(groups[2].callKind, 'inferred');
+});
+
 test('macro expansion creates outgoing and incoming calls at the original invocation', () => {
   const source = '#define CALL(x) foo(x)\nvoid foo(int x){} void run(void){CALL(1);}';
   const index = project({ 'main.c': source });

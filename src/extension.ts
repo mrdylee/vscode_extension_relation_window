@@ -9,7 +9,8 @@ export function activate(context: vscode.ExtensionContext) {
   const view = new RelationView(workspace, context.extensionUri);
   let timer: ReturnType<typeof setTimeout> | undefined;
   context.subscriptions.push(workspace, view,
-    vscode.window.registerWebviewViewProvider('cRelation.explorer', view),
+    vscode.window.registerWebviewViewProvider('cRelation.explorer', { resolveWebviewView: webview => view.resolveWebviewView(webview) }),
+    vscode.window.registerWebviewViewProvider('cRelation.context', { resolveWebviewView: webview => view.resolveWebviewView(webview, true) }),
     vscode.commands.registerCommand('cRelation.open', async () => {
       await vscode.commands.executeCommand('cRelation.explorer.focus');
       await workspace.ready;

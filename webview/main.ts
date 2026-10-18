@@ -6,6 +6,7 @@ declare function acquireVsCodeApi(): { postMessage(message: unknown): void };
 const api = acquireVsCodeApi();
 const send = (type: string, rest = {}) => api.postMessage({ type, ...rest });
 const app = document.getElementById('app')!;
+const contextOnly = document.body.dataset.view === 'context';
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text = '') {
   const node = document.createElement(tag); node.className = className; node.textContent = text; return node;
 }
@@ -38,9 +39,28 @@ divider.onpointermove = event => { if (divider.hasPointerCapture(event.pointerId
 divider.onpointerup = event => divider.releasePointerCapture(event.pointerId);
 divider.onkeydown = event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); resize(split + (event.key === 'ArrowLeft' ? -3 : 3)); } };
 relation.append(graphHeader, candidates, graph);
-panes.append(context, divider, relation); app.append(toolbar, panes, footer);
+panes.append(context, divider, relation);
+if (contextOnly) app.append(context); else app.append(toolbar, panes, footer);
 let signature: string | undefined = '', previewSignature: string | undefined = '';
 let rootKey: string | undefined;
+let currentState: ViewState | undefined;
+let currentGraphBoth = false;
+let panX = 0, panY = 0;
+function positionGraph() {
+  const canvas = graph.firstElementChild as HTMLElement | null;
+  if (canvas) canvas.style.transform = `translate(${panX}px, ${panY}px)`;
+}
+function resetGraphPosition() {
+  panX = panY = 0; positionGraph(); graph.scrollLeft = graph.scrollTop = 0;
+  if (currentState?.graph?.callers) {
+    const center = graph.querySelector<HTMLElement>('.dual-root > .node');
+    if (center) {
+      const box = center.getBoundingClientRect(), viewport = graph.getBoundingClientRect();
+      graph.scrollLeft += box.left + box.width / 2 - viewport.left - graph.clientWidth / 2;
+      graph.scrollTop += box.top + box.height / 2 - viewport.top - graph.clientHeight / 2;
+    }
+  }
+}
 const icons: Record<Kind, string> = { function: 'ƒ', variable: 'v', type: 'T', macro: '#', unknown: '?' };
 const kindNames: Record<Kind, string> = { function: 'Function', variable: 'Variable', type: 'Type', macro: 'Macro', unknown: 'Unknown' };
 const accessNames: Record<Access, string> = { read: 'R · Read', write: 'W · Write', readwrite: 'RW · Read/write', address: '& · Address passed' };
@@ -81,6 +101,7 @@ function scheduleClose() {
 }
 function scheduleHover(node: GraphNode, anchor: HTMLButtonElement) {
   clearTimeout(hoverTimer); clearTimeout(closeTimer);
+  if (graph.classList.contains('panning') || !options.hidden) return;
   if (popupKey === node.key && !popup.hidden) return;
   hideDetails();
   hoverTimer = setTimeout(() => {
@@ -98,6 +119,74 @@ function condition(text: string) {
 popup.onmouseenter = () => clearTimeout(closeTimer);
 popup.onmouseleave = scheduleClose;
 popup.addEventListener('focusout', event => { if (!popup.contains(event.relatedTarget as Node) && event.relatedTarget !== popupAnchor) hideDetails(); });
+const options = el('div', 'context-menu'); options.hidden = true;
+options.setAttribute('role', 'menu'); options.setAttribute('aria-label', 'Relation options'); app.append(options);
+let menuAnchor: HTMLElement | undefined;
+function closeOptions(restoreFocus = false) {
+  options.hidden = true;
+  if (restoreFocus) menuAnchor?.focus({ preventScroll: true });
+}
+function showOptions(event: MouseEvent | KeyboardEvent) {
+  event.preventDefault(); hideDetails();
+  menuAnchor = (event.target as HTMLElement).closest<HTMLElement>('.node-title') ?? graph;
+  options.replaceChildren();
+  const choice = (label: string, type: 'calleeSort' | 'contextLayout', value: string, checked: boolean) => {
+    const item = button(label, () => { closeOptions(); send(type, { value }); });
+    item.setAttribute('aria-label', label);
+    item.setAttribute('role', 'menuitemradio'); item.setAttribute('aria-checked', String(checked)); options.append(item);
+  };
+  options.append(el('div', 'menu-heading', 'Callees sorting'));
+  choice('Source order', 'calleeSort', 'source', currentState?.calleeSort === 'source');
+  choice('Name order', 'calleeSort', 'name', currentState?.calleeSort !== 'source');
+  options.append(el('div', 'menu-heading', 'Context layout'));
+  choice('Combined', 'contextLayout', 'combined', currentState?.contextLayout !== 'separate');
+  choice('Separate', 'contextLayout', 'separate', currentState?.contextLayout === 'separate');
+  const reset = button('Reset graph position', () => { closeOptions(); resetGraphPosition(); }); reset.setAttribute('role', 'menuitem'); options.append(reset);
+  options.hidden = false;
+  const anchor = menuAnchor.getBoundingClientRect();
+  const x = 'clientX' in event ? event.clientX : anchor.left;
+  const y = 'clientY' in event ? event.clientY : anchor.bottom;
+  options.style.left = `${Math.max(4, Math.min(x, innerWidth - options.offsetWidth - 4))}px`;
+  options.style.top = `${Math.max(4, Math.min(y, innerHeight - options.offsetHeight - 4))}px`;
+  options.querySelector<HTMLButtonElement>('button')?.focus();
+}
+relation.oncontextmenu = showOptions;
+graph.tabIndex = 0; graph.setAttribute('aria-label', 'Relation graph');
+relation.addEventListener('keydown', event => {
+  if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) showOptions(event);
+});
+options.onkeydown = event => {
+  if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeOptions(true); }
+  if (event.key === 'Tab') closeOptions();
+  if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+    event.preventDefault();
+    const items = Array.from(options.querySelectorAll<HTMLButtonElement>('button'));
+    const index = items.indexOf(document.activeElement as HTMLButtonElement);
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : (index + (event.key === 'ArrowUp' ? -1 : 1) + items.length) % items.length;
+    items[next].focus();
+  }
+};
+document.addEventListener('pointerdown', event => { if (!options.contains(event.target as Node)) closeOptions(); });
+let drag: { id: number; x: number; y: number; panX: number; panY: number; moved: boolean } | undefined;
+graph.onpointerdown = event => {
+  if (event.button !== 0 || (event.target as HTMLElement).closest('.node, button, select')) return;
+  hideDetails(); closeOptions();
+  drag = { id: event.pointerId, x: event.clientX, y: event.clientY, panX, panY, moved: false };
+  graph.setPointerCapture(event.pointerId);
+};
+graph.onpointermove = event => {
+  if (!drag || drag.id !== event.pointerId) return;
+  const dx = event.clientX - drag.x, dy = event.clientY - drag.y;
+  if (!drag.moved && Math.hypot(dx, dy) < 6) return;
+  event.preventDefault(); drag.moved = true; graph.classList.add('panning');
+  panX = drag.panX + dx; panY = drag.panY + dy; positionGraph();
+};
+function finishDrag() { drag = undefined; graph.classList.remove('panning'); }
+graph.onpointerup = graph.onpointercancel = event => {
+  if (graph.hasPointerCapture(event.pointerId)) graph.releasePointerCapture(event.pointerId);
+  finishDrag();
+};
+graph.onlostpointercapture = finishDrag;
 document.addEventListener('keydown', event => {
   if (event.key === 'Escape' && !popup.hidden) { event.preventDefault(); hideDetails(true); }
 });
@@ -173,7 +262,7 @@ function showDetails(node: GraphNode, anchor: HTMLButtonElement) {
 function drawNode(node: GraphNode): HTMLElement {
   const branch = el('div', 'branch');
   const card = el('article', 'node'); card.dataset.nodeName = node.name;
-  const openId = node.callKind || node.sites[0]?.access ? node.sites[0].id : node.symbolId ?? node.sites[0]?.id;
+  const openId = node.callKind || node.direction || node.sites[0]?.access ? node.sites[0].id : node.symbolId ?? node.sites[0]?.id;
   const title = button('', event => { if (event.detail <= 1) send('selectNode', { key: node.key }); }, '');
   title.className = 'node-title'; title.dataset.key = node.key;
   title.dataset.preview = openId;
@@ -219,14 +308,47 @@ toolbar.append(brand, mode, depth, lock, skipLabel, button('Rebuild index', () =
   button('Help', () => send('help'), 'Open the bundled offline user guide'));
 let variableMode: boolean | undefined;
 let candidateSignature: string | undefined;
+function renderContext(preview: ViewState['context']) {
+  const previewNext = JSON.stringify(preview);
+  if (previewNext !== previewSignature) {
+    previewSignature = previewNext; context.replaceChildren();
+    const heading = el('div', 'pane-heading'); heading.append(el('strong', '', `Context v${__EXTENSION_VERSION__}`), el('span', 'muted', preview ? `${preview.path}:${preview.location.line + 1}` : 'Code preview'));
+    context.append(heading);
+    if (preview) {
+      const code = el('div', 'code');
+      preview.text.split('\n').forEach((text, i) => {
+        const line = el('div', 'code-line'); const number = i + preview.firstLine;
+        if (number === preview.location.line) line.classList.add('highlight');
+        line.append(el('span', 'line-number', String(number + 1)));
+        const source = el('span', 'source');
+        let column = 0;
+        for (const token of preview.tokens[i] ?? [{ text, kind: 'plain' }]) {
+          const span = el('span', `syntax-${token.kind}`, token.text);
+          span.dataset.column = String(column); column += token.text.length; source.append(span);
+        }
+        if (!text) source.append(document.createTextNode(' '));
+        line.onclick = event => {
+          if (window.getSelection()?.isCollapsed === false) return;
+          const token = (event.target as HTMLElement).closest<HTMLElement>('[data-column]');
+          send('navigateContext', { uri: preview.location.uri, line: number, column: Number(token?.dataset.column ?? 0), text: text.replace(/\r$/, '') });
+        };
+        line.append(source); code.append(line);
+      });
+      context.append(code); code.querySelector('.highlight')?.scrollIntoView({ block: 'center' });
+    } else context.append(el('div', 'empty', 'Select a symbol or call site in Relation.'));
+  }
+}
 function render(state: ViewState) {
+  currentState = state;
+  const separate = state.contextLayout === 'separate';
+  panes.classList.toggle('separate', separate); context.hidden = divider.hidden = separate;
   const variable = state.graph?.root.kind === 'variable';
   if (variable !== variableMode) {
     variableMode = variable;
     mode.setAttribute('aria-label', variable ? 'Variable access' : 'Relation type');
     mode.replaceChildren();
     const options = variable ? [['all', 'Variable · All uses'], ['read', 'R · Read (includes RW)'], ['write', 'W · Write (includes RW)'], ['readwrite', accessNames.readwrite], ['address', accessNames.address]]
-      : [['references', 'References · All references'], ['callers', 'Callers · Direct calls'], ['callees', 'Callees · Called functions']];
+      : [['references', 'References · All references'], ['callers', 'Callers · Direct calls'], ['callees', 'Callees · Called functions'], ['both', 'Callers & Callees']];
     for (const [value, label] of options) {
       const option = el('option', '', label); option.value = value; mode.append(option);
     }
@@ -258,45 +380,39 @@ function render(state: ViewState) {
   graphHeader.replaceChildren(el('strong', '', 'Relation'), el('span', 'muted', state.graph?.root.name ?? state.candidates[0]?.name ?? 'Select a symbol'));
   if (state.graph) graphHeader.dataset.rootName = state.graph.root.name; else delete graphHeader.dataset.rootName;
   const nextRoot = state.graph?.root.symbolId;
-  if (nextRoot !== rootKey) { rootKey = nextRoot; graph.scrollTop = 0; graph.scrollLeft = 0; }
+  const rootChanged = nextRoot !== rootKey;
+  const directionChanged = !!currentGraphBoth !== !!state.graph?.callers;
+  currentGraphBoth = !!state.graph?.callers;
+  if (rootChanged) { rootKey = nextRoot; finishDrag(); }
   const next = JSON.stringify(state.graph);
   if (next !== signature) {
+    const previousCenter = currentGraphBoth && !rootChanged && !directionChanged
+      ? graph.querySelector<HTMLElement>('.dual-root > .node')?.getBoundingClientRect().left : undefined;
     const key = (document.activeElement as HTMLElement)?.dataset.key;
     hideDetails();
     signature = next; graph.replaceChildren();
-    if (state.graph) graph.append(drawNode(state.graph.root));
+    if (state.graph) {
+      const tree = drawNode(state.graph.root);
+      if (state.graph.callers) {
+        tree.classList.add('dual-root');
+        if (state.graph.callers.length) {
+          const incoming = el('div', 'children incoming');
+          state.graph.callers.forEach(node => incoming.append(drawNode(node))); tree.prepend(incoming);
+        }
+      }
+      graph.append(tree);
+    }
     else graph.append(el('div', 'empty', state.candidates.length ? 'Select a definition above to show its references.' : 'Click a function or variable name in C source to show its references.'));
+    positionGraph();
+    if (rootChanged || directionChanged) resetGraphPosition();
+    else if (previousCenter !== undefined) {
+      const center = graph.querySelector<HTMLElement>('.dual-root > .node');
+      if (center) graph.scrollLeft += center.getBoundingClientRect().left - previousCenter;
+    }
     if (key) Array.from(graph.querySelectorAll<HTMLButtonElement>('.node-title')).find(b => b.dataset.key === key)?.focus({ preventScroll: true });
   }
   const preview = state.context;
-  const previewNext = JSON.stringify(preview);
-  if (previewNext !== previewSignature) {
-    previewSignature = previewNext; context.replaceChildren();
-    const heading = el('div', 'pane-heading'); heading.append(el('strong', '', `Context v${__EXTENSION_VERSION__}`), el('span', 'muted', preview ? `${preview.path}:${preview.location.line + 1}` : 'Code preview'));
-    context.append(heading);
-    if (preview) {
-      const code = el('div', 'code');
-      preview.text.split('\n').forEach((text, i) => {
-        const line = el('div', 'code-line'); const number = i + preview.firstLine;
-        if (number === preview.location.line) line.classList.add('highlight');
-        line.append(el('span', 'line-number', String(number + 1)));
-        const source = el('span', 'source');
-        let column = 0;
-        for (const token of preview.tokens[i] ?? [{ text, kind: 'plain' }]) {
-          const span = el('span', `syntax-${token.kind}`, token.text);
-          span.dataset.column = String(column); column += token.text.length; source.append(span);
-        }
-        if (!text) source.append(document.createTextNode(' '));
-        line.onclick = event => {
-          if (window.getSelection()?.isCollapsed === false) return;
-          const token = (event.target as HTMLElement).closest<HTMLElement>('[data-column]');
-          send('navigateContext', { uri: preview.location.uri, line: number, column: Number(token?.dataset.column ?? 0), text: text.replace(/\r$/, '') });
-        };
-        line.append(source); code.append(line);
-      });
-      context.append(code); code.querySelector('.highlight')?.scrollIntoView({ block: 'center' });
-    } else context.append(el('div', 'empty', 'Select a symbol or call site in Relation.'));
-  }
+  if (state.contextLayout !== 'separate') renderContext(preview);
   popup.querySelectorAll<HTMLElement>('.site').forEach(site => site.classList.toggle('selected', site.dataset.site === `${preview?.location.uri}@${preview?.location.start}`));
   graph.querySelectorAll<HTMLElement>('.node-title').forEach(title => title.classList.toggle('selected', title.dataset.preview === `${preview?.location.uri}#${preview?.location.start}` || title.dataset.preview === `${preview?.location.uri}@${preview?.location.start}`));
   footer.replaceChildren(el('span', '', `${state.status} · ${state.fileCount} files`), el('span', 'muted', 'Space Details · → Expand · ← Collapse · Shift+→ Levels · Enter Open source'));
@@ -305,5 +421,8 @@ function render(state: ViewState) {
     const details = el('details', 'warning'); details.append(el('summary', '', `Analysis notices: ${state.issues.length}`), el('pre', '', state.issues.slice(0, 100).join('\n'))); footer.append(details);
   }
 }
-window.addEventListener('message', event => { if (event.data?.type === 'state') render(event.data.state); });
-send('ready');
+window.addEventListener('message', event => {
+  if (event.data?.type === 'state' && !contextOnly) render(event.data.state);
+  if (event.data?.type === 'context' && contextOnly) renderContext(event.data.context);
+});
+send(contextOnly ? 'readyContext' : 'ready');

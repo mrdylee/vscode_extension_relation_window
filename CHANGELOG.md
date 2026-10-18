@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.29 — 2026-10-18
+
+- Add Callers & Callees to the existing mode selector, with one center root,
+  independent left/right branches and a shared 300-node limit.
+- Add a keyboard-accessible Relation context menu for Callees name/source sorting,
+  Combined/Separate Context layout and resetting graph position. Preserve defaults
+  and save sorting/layout choices in workspace settings.
+- Pan by dragging the graph background without index queries or source navigation.
+- Provide a movable Explorer Context view sharing the existing index, preview,
+  syntax colors and validated code navigation. Keep Combined as the default.
+- Cover original macro/callback call positions, directional expansion, shared node
+  limits, mouse/keyboard interaction and native split-view registration in tests.
+
 ## 0.1.28 — 2026-10-18
 
 - Expand supported object/function macros, nested arguments, stringizing, token

@@ -1,5 +1,6 @@
 export type Kind = 'function' | 'variable' | 'type' | 'macro' | 'unknown';
-export type RelationMode = 'references' | 'callers' | 'callees';
+export type RelationMode = 'references' | 'callers' | 'callees' | 'both';
+export type CalleeSort = 'name' | 'source';
 export type CallKind = 'direct' | 'macro' | 'indirect' | 'unresolved' | 'expanded' | 'inferred';
 export type Access = 'read' | 'write' | 'readwrite' | 'address';
 export type AccessFilter = 'all' | Access;
@@ -78,8 +79,9 @@ export interface GraphNode {
   key: string; symbolId?: string; name: string; kind: Kind; location: Location;
   definition?: boolean;
   callKind?: CallKind;
+  direction?: 'callers' | 'callees';
   containerName?: string;
   conditions: string[]; sites: RelationSite[]; children: GraphNode[];
   cycle: boolean; expanded: boolean; ambiguous: boolean;
 }
-export interface GraphData { root: GraphNode; truncated: boolean }
+export interface GraphData { root: GraphNode; callers?: GraphNode[]; truncated: boolean }

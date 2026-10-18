@@ -1,4 +1,4 @@
-import { AccessFilter, FileAnalysis, GraphData, GraphNode, ReferenceRecord, RelationGroup, RelationMode, SymbolRecord } from './model';
+import { AccessFilter, CalleeSort, FileAnalysis, GraphData, GraphNode, ReferenceRecord, RelationGroup, RelationMode, SymbolRecord } from './model';
 import { MemberResolver } from './member-resolver';
 
 // Keep each file's contribution separate so edits never rebuild unrelated files.
@@ -194,10 +194,11 @@ export class RelationIndex {
     const ref = file.references.find(ref => !ref.indirect && ref.callKind !== 'inferred' && contains(ref));
     return ref ? this.resolve(ref) : symbol ? [symbol] : [];
   }
-  private callees(target: SymbolRecord): RelationGroup[] {
+  private callees(target: SymbolRecord, sort: CalleeSort): RelationGroup[] {
     if (target.kind !== 'function') return [];
     const groups = new Map<string, RelationGroup>();
-    for (const ref of this.outgoing.get(target.id) ?? []) {
+    const calls = [...(this.outgoing.get(target.id) ?? [])].sort((a, b) => a.location.start - b.location.start);
+    for (const ref of calls) {
       const candidates = this.resolve(ref);
       for (const symbol of candidates.length ? candidates : [undefined]) {
         const callKind = ref.indirect || symbol?.kind === 'variable' ? 'indirect'
@@ -210,12 +211,13 @@ export class RelationIndex {
         groups.set(key, group);
       }
     }
-    return [...groups.values()].sort((a, b) => a.name.localeCompare(b.name));
+    const result = [...groups.values()];
+    return sort === 'source' ? result : result.sort((a, b) => a.name.localeCompare(b.name));
   }
-  relations(id: string, mode: RelationMode, filter: AccessFilter = 'all'): RelationGroup[] {
+  relations(id: string, mode: RelationMode, filter: AccessFilter = 'all', sort: CalleeSort = 'name'): RelationGroup[] {
     const target = this.byId.get(id);
     if (!target) return [];
-    if (mode === 'callees' && target.kind !== 'variable') return this.callees(target);
+    if (mode === 'callees' && target.kind !== 'variable') return this.callees(target, sort);
     const groups = new Map<string, RelationGroup>();
     for (const ref of this.references.get(target.name, this.fileOrder)) {
       const variable = target.kind === 'variable';
@@ -223,7 +225,7 @@ export class RelationIndex {
         if (!ref.access || (filter !== 'all' && ref.access !== filter &&
           !(ref.access === 'readwrite' && (filter === 'read' || filter === 'write')))) continue;
       } else {
-        if (mode === 'callers' && (ref.kind !== 'call' || target.kind !== 'function')) continue;
+        if ((mode === 'callers' || mode === 'both') && (ref.kind !== 'call' || target.kind !== 'function')) continue;
         if (ref.location.start === target.location.start && ref.location.uri === target.location.uri) continue;
       }
       const candidates = this.resolve(ref);
@@ -240,32 +242,45 @@ export class RelationIndex {
     }
     return [...groups.values()].sort((a, b) => a.name.localeCompare(b.name));
   }
-  graph(id: string, mode: RelationMode, depth: number, expanded: Record<string, number> = {}, filter: AccessFilter = 'all'): GraphData | undefined {
+  graph(id: string, mode: RelationMode, depth: number, expanded: Record<string, number> = {}, filter: AccessFilter = 'all', sort: CalleeSort = 'name'): GraphData | undefined {
     const rootSymbol = this.byId.get(id);
     if (!rootSymbol) return undefined;
-    if (rootSymbol.kind === 'variable' && mode === 'callees') mode = 'callers';
+    if (rootSymbol.kind === 'variable' && (mode === 'callees' || mode === 'both')) mode = 'callers';
+    const both = mode === 'both';
     let count = 0, truncated = false;
-    const make = (symbol: SymbolRecord | undefined, group: RelationGroup | undefined, key: string, remaining: number, path: Set<string>): GraphNode => {
+    const make = (symbol: SymbolRecord | undefined, group: RelationGroup | undefined, key: string, remaining: number, path: Set<string>, direction: Exclude<RelationMode, 'both'>, limit: number): GraphNode => {
       const cycle = !!symbol && path.has(symbol.id);
       const node: GraphNode = { key, symbolId: symbol?.id, name: symbol?.memberOf ? `${symbol.containerName}.${symbol.name}` : symbol?.name ?? group!.name,
         kind: symbol?.kind ?? group!.kind, location: symbol?.location ?? group!.sites[0].location,
         definition: symbol?.definition ?? (group?.sites.every(site => site.kind === 'declaration') ? false : undefined),
         callKind: group?.callKind,
+        direction: both && key !== 'root' ? direction as 'callers' | 'callees' : undefined,
         containerName: symbol?.containerName,
         conditions: symbol?.conditions ?? [], sites: group?.sites ?? [], children: [], cycle,
         expanded: false, ambiguous: group?.sites.some(s => s.ambiguous) ?? false };
       count++;
       const levels = key in expanded ? expanded[key] : remaining;
-      if (symbol && levels > 0 && !cycle && (mode !== 'callees' || symbol.kind === 'function')) {
+      if (symbol && levels > 0 && !cycle && (direction !== 'callees' || symbol.kind === 'function')) {
         node.expanded = true;
         const nextPath = new Set(path).add(symbol.id);
-        for (const child of this.relations(symbol.id, mode, key === 'root' ? filter : 'all')) {
-          if (count >= 300) { truncated = true; break; }
-          node.children.push(make(child.symbol, child, `${key}/${encodeURIComponent(child.key)}`, levels - 1, nextPath));
+        for (const child of this.relations(symbol.id, direction, key === 'root' ? filter : 'all', sort)) {
+          if (count >= limit) { truncated = true; break; }
+          const childKey = both && key === 'root' ? `${direction}:${child.key}` : child.key;
+          node.children.push(make(child.symbol, child, `${key}/${encodeURIComponent(childKey)}`, levels - 1, nextPath, direction, limit));
         }
       }
       return node;
     };
-    return { root: make(rootSymbol, undefined, 'root', Math.max(0, Math.min(8, depth)), new Set()), truncated };
+    const levels = Math.max(0, Math.min(8, depth));
+    const root = make(rootSymbol, undefined, 'root', levels, new Set(), mode === 'both' ? 'callees' : mode, both ? 151 : 300);
+    const callers: GraphNode[] | undefined = both ? [] : undefined;
+    if (callers && (expanded.root ?? levels) > 0) {
+      for (const child of this.relations(id, 'callers')) {
+        if (count >= 300) { truncated = true; break; }
+        callers.push(make(child.symbol, child, `root/${encodeURIComponent('callers:' + child.key)}`,
+          (expanded.root ?? levels) - 1, new Set([id]), 'callers', 300));
+      }
+    }
+    return { root, callers, truncated };
   }
 }

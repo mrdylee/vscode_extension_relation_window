@@ -26,7 +26,11 @@ async function main() {
   const macroGraph = index.graph(index.symbols().find(s => s.name === 'macro_run')!.id, 'callees', 2);
   analyzer.derive([analyzer.analyze('file:///demo/pointer.c', 'typedef void (*CB)(void);\nvoid callback_leaf(void){} void callback_target(void){callback_leaf();}\nstruct CallbackOps{CB run;};struct CallbackOps callbacks={.run=callback_target};\nvoid pointer_run(void){callbacks.run();}\n')]).forEach(file=>index.update(file));
   const pointerGraph = index.graph(index.symbols().find(s => s.name === 'pointer_run')!.id, 'callees', 2);
+  index.update(analyzer.analyze('file:///demo/navigation.c', 'void nav_leaf(void){} void alpha(void){nav_leaf();} void zulu(void){} void pivot(void){zulu();alpha();zulu();} void entry(void){pivot();} void launch(void){entry();}'));
+  const pivot = index.symbols().find(s => s.name === 'pivot')!;
+  const navigation = { both: index.graph(pivot.id, 'both', 1), bothExpanded: index.graph(pivot.id, 'both', 2),
+    name: index.graph(pivot.id, 'callees', 1), source: index.graph(pivot.id, 'callees', 1, {}, 'all', 'source') };
   await mkdir('test-results', { recursive: true });
-  await writeFile('test-results/ui-fixture.json', JSON.stringify({ graph, expandedGraph, calleeGraph, macroGraph, pointerGraph, memberGraph, variableGraphs, files: [...index.files.values()].map(file => ({ ...file, tokens: highlightC(file.text) })) }));
+  await writeFile('test-results/ui-fixture.json', JSON.stringify({ graph, expandedGraph, calleeGraph, macroGraph, pointerGraph, memberGraph, variableGraphs, navigation, files: [...index.files.values()].map(file => ({ ...file, tokens: highlightC(file.text) })) }));
 }
 void main();

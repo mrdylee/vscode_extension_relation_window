@@ -8,7 +8,7 @@ const css = await readFile('dist/webview.css');
 const server = createServer((req, res) => {
   if (req.url === '/app.js') { res.setHeader('Content-Type', 'text/javascript'); res.end(script); }
   else if (req.url === '/app.css') { res.setHeader('Content-Type', 'text/css'); res.end(css); }
-  else res.end('<!doctype html><html lang="ko"><head><link rel="stylesheet" href="/app.css"></head><body><div id="app"></div><script src="/app.js"></script></body></html>');
+  else res.end(`<!doctype html><html lang="ko"><head><link rel="stylesheet" href="/app.css"></head><body data-view="${req.url === '/context' ? 'context' : 'relation'}"><div id="app"></div><script src="/app.js"></script></body></html>`);
 });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
@@ -16,7 +16,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1450, height: 700 }, colorScheme: 'dark' });
   const errors = [];
   page.on('pageerror', error => errors.push(String(error)));
-  const state = { graph: fixture.graph, candidates: [], status: 'Index ready', fileCount: 4, issues: [], mode: 'references', accessFilter: 'all', depth: 1, locked: false, skipInactive: true };
+  const state = { graph: fixture.graph, candidates: [], status: 'Index ready', fileCount: 4, issues: [], mode: 'references', accessFilter: 'all', depth: 1, locked: false, skipInactive: true, calleeSort: 'name', contextLayout: 'combined' };
   const items = new Map();
   function collect(node) {
     if (node.symbolId) items.set(node.symbolId, node.location);
@@ -32,6 +32,10 @@ try {
   collect(fixture.memberGraph.root);
   collect(fixture.macroGraph.root);
   collect(fixture.pointerGraph.root);
+  collect(fixture.navigation.both.root);
+  fixture.navigation.both.callers.forEach(collect);
+  collect(fixture.navigation.bothExpanded.root);
+  fixture.navigation.bothExpanded.callers.forEach(collect);
   function preview(id) {
     const location = items.get(id);
     const file = fixture.files.find(f => f.uri === location.uri);
@@ -42,24 +46,32 @@ try {
     if (message.type === 'preview') preview(message.id);
     if (message.type === 'selectNode') {
       const find = node => node.key === message.key ? node : node.children.map(find).find(Boolean);
-      const node = find(state.graph.root);
-      preview(node.callKind || node.sites[0]?.access ? node.sites[0].id : node.symbolId ?? node.sites[0]?.id);
+      const node = find(state.graph.root) ?? state.graph.callers?.map(find).find(Boolean);
+      preview(node.callKind || node.direction || node.sites[0]?.access ? node.sites[0].id : node.symbolId ?? node.sites[0]?.id);
       if (node.name === 'control_task') state.graph = fixture.expandedGraph;
+      if (node.name === 'entry') state.graph = fixture.navigation.bothExpanded;
     }
     if (message.type === 'expand') state.graph = fixture.expandedGraph;
     if (message.type === 'collapse') state.graph = fixture.graph;
     if (message.type === 'lock') state.locked = !state.locked;
     if (message.type === 'depth') state.depth = message.value;
     if (message.type === 'access') { state.accessFilter = message.value; state.graph = fixture.variableGraphs[message.value]; }
-    if (message.type === 'mode') { state.mode = message.value; state.graph = message.value === 'callees' ? fixture.calleeGraph : fixture.graph; }
+    if (message.type === 'mode') { state.mode = message.value; state.graph = message.value === 'both' ? fixture.navigation.both : message.value === 'callees' ? fixture.calleeGraph : fixture.graph; }
+    if (message.type === 'calleeSort') { state.calleeSort = message.value; state.graph = fixture.navigation[message.value]; }
+    if (message.type === 'contextLayout') state.contextLayout = message.value;
     await page.evaluate(state => window.dispatchEvent(new MessageEvent('message', { data: { type: 'state', state } })), state);
   });
   await page.addInitScript(() => {
     window.sent = [];
-    window.acquireVsCodeApi = () => ({ postMessage(message) { window.sent.push(message); void window.bridge(message); } });
+    window.pendingBridge = 0;
+    window.acquireVsCodeApi = () => ({ postMessage(message) {
+      window.sent.push(message); window.pendingBridge++;
+      void window.bridge(message).finally(() => window.pendingBridge--);
+    } });
   });
   await page.goto(`http://127.0.0.1:${server.address().port}`);
   await page.locator('[data-node-name="check_fault"]').waitFor({ timeout: 3000 });
+  assert.equal(await page.locator('option[value="both"]').textContent(), 'Callers & Callees');
   await page.getByRole('button', { name: 'Settings', exact: true }).click({ timeout: 3000 });
   assert.ok(await page.evaluate(() => window.sent.some(m => m.type === 'settings')), 'Settings button requests scope configuration');
   await page.getByRole('button', { name: 'Help', exact: true }).click();
@@ -175,6 +187,8 @@ try {
   await page.locator('[data-node-name="main"]').first().waitFor({ timeout: 3000 });
   assert.ok((await page.locator('.code-line.highlight').textContent()).includes('control_task(void)'));
   assert.ok(await page.evaluate(() => window.sent.some(m => m.type === 'selectNode')), 'node click requests preview and expansion together');
+  await page.waitForFunction(() => window.pendingBridge === 0);
+  await caller.locator('.node-title').focus();
   await page.keyboard.press('Space');
   await popup.waitFor({ state: 'visible' });
   await page.keyboard.press('Tab');
@@ -324,6 +338,79 @@ try {
   await page.screenshot({ path: 'output/playwright/member-binding.png', fullPage: true });
   state.graph = fixture.graph;
   await page.evaluate(state => window.dispatchEvent(new MessageEvent('message', { data: { type: 'state', state } })), state);
+  state.graph = fixture.navigation.name; state.mode = 'callees';
+  preview(state.graph.root.symbolId);
+  await page.evaluate(state => window.dispatchEvent(new MessageEvent('message', { data: { type: 'state', state } })), state);
+  const graphArea = page.locator('.graph');
+  const relationMenu = page.getByRole('menu', { name: 'Relation options' });
+  await graphArea.click({ button: 'right', position: { x: 8, y: 100 } });
+  assert.equal(await relationMenu.getByRole('menuitemradio', { name: 'Name order', exact: true }).getAttribute('aria-checked'), 'true');
+  await relationMenu.getByRole('menuitemradio', { name: 'Source order', exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('.graph > .branch > .children > .branch > .node')?.dataset.nodeName === 'zulu');
+  assert.deepEqual(await page.locator('.graph > .branch > .children > .branch > .node').evaluateAll(nodes => nodes.map(n => n.dataset.nodeName)), ['zulu', 'alpha']);
+  const sentBeforeDrag = await page.evaluate(() => window.sent.length);
+  const graphBox = await graphArea.boundingBox();
+  await page.mouse.move(graphBox.x + 10, graphBox.y + graphBox.height - 20);
+  await page.mouse.down();
+  await page.mouse.move(graphBox.x + 90, graphBox.y + graphBox.height - 50, { steps: 5 });
+  assert.equal(await graphArea.evaluate(node => node.classList.contains('panning')), true);
+  await page.mouse.up();
+  assert.equal(await page.locator('.graph > .branch').evaluate(node => node.style.transform), 'translate(80px, -30px)');
+  assert.equal(await page.evaluate(() => window.sent.length), sentBeforeDrag, 'panning never sends analysis/navigation messages');
+  assert.equal(await popup.isVisible(), false);
+  await graphArea.click({ button: 'right', position: { x: 8, y: 100 } });
+  await relationMenu.getByRole('menuitem', { name: 'Reset graph position', exact: true }).click();
+  assert.equal(await page.locator('.graph > .branch').evaluate(node => node.style.transform), 'translate(0px, 0px)');
+  await page.locator('[data-node-name="pivot"] .node-title').focus();
+  await page.keyboard.press('Shift+F10');
+  await page.keyboard.press('Escape');
+  assert.equal(await relationMenu.isVisible(), false);
+  await graphArea.click({ button: 'right', position: { x: 8, y: 100 } });
+  await relationMenu.getByRole('menuitemradio', { name: 'Name order', exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('.graph > .branch > .children > .branch > .node')?.dataset.nodeName === 'alpha');
+  await page.getByRole('combobox', { name: 'Relation type' }).selectOption('both');
+  await page.locator('.incoming [data-node-name="entry"]').waitFor();
+  const centerBox = await page.locator('.dual-root > .node').boundingBox();
+  const incomingBox = await page.locator('.incoming [data-node-name="entry"]').boundingBox();
+  const outgoingBox = await page.locator('.dual-root > .children:not(.incoming) [data-node-name="alpha"]').boundingBox();
+  assert.ok(incomingBox.x + incomingBox.width < centerBox.x, 'callers are left of the selected root');
+  assert.ok(outgoingBox.x > centerBox.x + centerBox.width, 'callees are right of the selected root');
+  assert.equal(await page.locator('[data-node-name="pivot"]').count(), 1, 'one shared center root');
+  await page.locator('.incoming [data-node-name="entry"] .node-title').click();
+  await page.locator('.incoming [data-node-name="launch"]').waitFor();
+  const deeperCaller = await page.locator('.incoming [data-node-name="launch"]').boundingBox();
+  const expandedEntry = await page.locator('.incoming [data-node-name="entry"] .node-title').boundingBox();
+  assert.ok(deeperCaller.x + deeperCaller.width < expandedEntry.x, 'deeper callers continue branching left');
+  assert.ok(Math.abs((await page.locator('.dual-root > .node').boundingBox()).x - centerBox.x) < 2, 'expanding callers keeps the center root in place');
+  assert.ok((await page.locator('.code-line.highlight').textContent()).includes('entry(void){pivot();}'), 'incoming click previews caller call site');
+  await page.screenshot({ path: 'output/playwright/callers-and-callees.png', fullPage: true });
+  await graphArea.click({ button: 'right', position: { x: 8, y: 100 } });
+  await relationMenu.getByRole('menuitemradio', { name: 'Separate', exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('.context').hidden);
+  assert.equal(await divider.isVisible(), false);
+  const combinedRelationBox = await page.locator('.relation').boundingBox();
+  assert.ok(combinedRelationBox.width > 1400, 'separate mode gives Relation the full width');
+  const contextPage = await browser.newPage({ viewport: { width: 450, height: 600 } });
+  contextPage.on('pageerror', error => errors.push(String(error)));
+  await contextPage.addInitScript(() => {
+    window.sent = [];
+    window.acquireVsCodeApi = () => ({ postMessage(message) { window.sent.push(message); } });
+  });
+  await contextPage.goto(`http://127.0.0.1:${server.address().port}/context`);
+  await contextPage.evaluate(context => window.dispatchEvent(new MessageEvent('message', { data: { type: 'context', context } })), state.context);
+  assert.equal(await contextPage.locator('.relation').count(), 0);
+  assert.ok(await contextPage.locator('.syntax-function').count() > 0, 'separate Context retains syntax colors');
+  await contextPage.locator('.code-line.highlight .syntax-function').first().click();
+  assert.ok(await contextPage.evaluate(() => window.sent.some(m => m.type === 'navigateContext')), 'separate Context navigates with the shared protocol');
+  await contextPage.screenshot({ path: 'output/playwright/separate-context.png', fullPage: true });
+  await page.screenshot({ path: 'output/playwright/separate-relation.png', fullPage: true });
+  await contextPage.close();
+  await graphArea.click({ button: 'right', position: { x: 8, y: 100 } });
+  await relationMenu.getByRole('menuitemradio', { name: 'Combined', exact: true }).click();
+  await page.waitForFunction(() => !document.querySelector('.context').hidden);
+  assert.equal(await divider.isVisible(), true);
+  state.graph = fixture.graph; state.mode = 'references';
+  await page.evaluate(state => window.dispatchEvent(new MessageEvent('message', { data: { type: 'state', state } })), state);
   const prefix = '/* 한글 😀 */ ';
   const unicodePreview = { ...state.context, firstLine: 120, text: prefix + 'state++;\r', tokens: [[
     { text: prefix, kind: 'comment' }, { text: 'state', kind: 'variable' }, { text: '++;\r', kind: 'plain' }
@@ -355,7 +442,7 @@ try {
   assert.ok(await page.locator('.context').isVisible());
   assert.ok(await page.locator('.relation').isVisible());
   assert.equal(await divider.isVisible(), false);
-  await writeFile('test-results/ui.json', JSON.stringify({ passed: true, checks: ['Context click coordinates and drag selection', 'Context UTF-16 and CRLF coordinates', 'variable filters R/W/RW/address', 'variable badges preserve one-line height', 'variable click and popup preview exact use sites', 'variable access colors in dark/light themes', 'function mode preserved', '500-ms stationary hover with movement reset and leave cancellation', 'mouse click does not bypass delay', 'popup tint and condition syntax in dark/light themes', 'single-line graph nodes', 'hover popup without layout shift', 'Context selected call and symbol', 'syntax colors in dark/light themes', 'keyboard popup access and Escape', 'root preserved', 'variable icon', 'keyboard expansion/collapse/special', 'explicit source open', 'lock toggle', 'split resize', 'narrow layout', '80 candidates keep graph space and distinguish paths'], errors }, null, 2));
+  await writeFile('test-results/ui.json', JSON.stringify({ passed: true, checks: ['source/name sorting from accessible context menu', 'background panning without extension messages', 'dual graph geometry and stable center during expansion', 'separate Context syntax/navigation and combined restoration', 'Context click coordinates and drag selection', 'Context UTF-16 and CRLF coordinates', 'variable filters R/W/RW/address', 'variable badges preserve one-line height', 'variable click and popup preview exact use sites', 'variable access colors in dark/light themes', 'function mode preserved', '500-ms stationary hover with movement reset and leave cancellation', 'mouse click does not bypass delay', 'popup tint and condition syntax in dark/light themes', 'single-line graph nodes', 'hover popup without layout shift', 'Context selected call and symbol', 'syntax colors in dark/light themes', 'keyboard popup access and Escape', 'root preserved', 'variable icon', 'keyboard expansion/collapse/special', 'explicit source open', 'lock toggle', 'split resize', 'narrow layout', '80 candidates keep graph space and distinguish paths'], errors }, null, 2));
   assert.deepEqual(errors, []);
-  console.log('Browser UI checks passed, including variable access filters, colors and actual-site previews');
+  console.log('Browser UI checks passed, including sorting, panning, dual-direction graphs and separate Context');
 } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }

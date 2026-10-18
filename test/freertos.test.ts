@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import assert from 'node:assert/strict';
 import { writeFile } from 'node:fs/promises';
+import { performance } from 'node:perf_hooks';
 
 export async function run() {
   const opened: string[] = [];
@@ -97,7 +98,24 @@ export async function run() {
     await new Promise(resolve => setTimeout(resolve, 200));
     assert.equal(api.view.state.graph, graph, 'same-symbol cursor movement does not rebuild or resend the graph');
   }
-  const variableResult = { ...result, variable: variableName, accessKinds: [...accessKinds], variableFilters: true, trackingMs, member: member.name, memberWriteFunctions: memberWrites.length, memberQueryMs };
+  const graphProjection = [];
+  for (const name of ['prvUnlockQueue', 'vTaskSuspendAll', 'xTaskResumeAll']) {
+    const symbol = api.workspace.index.symbols().find((s: any) => s.name === name && s.definition && s.kind === 'function');
+    assert.ok(symbol);
+    for (const depth of [1, 3]) for (const mode of ['callers', 'callees', 'both']) {
+      const samples = [];
+      let graph: any;
+      for (let sample = 0; sample < 5; sample++) {
+        const started = performance.now(); graph = api.workspace.index.graph(symbol.id, mode, depth);
+        samples.push(performance.now() - started);
+      }
+      const count = (node: any): number => 1 + node.children.reduce((sum: number, child: any) => sum + count(child), 0);
+      const nodes = count(graph.root) + (graph.callers ?? []).reduce((sum: number, node: any) => sum + count(node), 0);
+      assert.ok(nodes <= 300);
+      graphProjection.push({ name, depth, mode, medianMs: samples.sort((a, b) => a - b)[2], nodes });
+    }
+  }
+  const variableResult = { ...result, variable: variableName, accessKinds: [...accessKinds], variableFilters: true, trackingMs, member: member.name, memberWriteFunctions: memberWrites.length, memberQueryMs, graphProjection };
   await writeFile(process.env.C_RELATION_TEST_OUTPUT!, JSON.stringify(variableResult, null, 2));
   console.log('FreeRTOS full-workspace verification', JSON.stringify(variableResult));
 }
