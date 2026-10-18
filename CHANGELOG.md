@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.36 — 2026-10-18
+
+- Add a compact ↩ Pin button beside Pinned · Follow paused. Reveal the pinned
+  root in Relation and return the editor and Context to its source without
+  changing the pin, expanded branches or traversal settings.
+
 ## 0.1.35 — 2026-10-18
 
 - Add Combined · Full width to Context Layout settings. Place Context and Relation

@@ -287,10 +287,17 @@ const depth = el('select'); depth.setAttribute('aria-label', 'Depth');
 for (let n = 1; n <= 8; n++) { const option = el('option', '', `${n} ${n === 1 ? 'level' : 'levels'}`); option.value = String(n); depth.append(option); }
 depth.onchange = () => send('depth', { value: Number(depth.value) });
 const lock = button('', () => send('lock'));
+const goToPin = button('↩ Pin', () => {
+  if (!rootKey) return;
+  hideDetails(); finishDrag(); resetGraphPosition();
+  graph.querySelector<HTMLElement>(':scope > .branch > .node > .node-title')?.scrollIntoView({ block: 'center', inline: 'center' });
+  send('preview', { id: rootKey }); send('open', { id: rootKey });
+}, 'Go to pinned symbol');
+goToPin.setAttribute('aria-label', 'Go to pinned symbol'); goToPin.hidden = true;
 const skipLabel = el('label', 'skip'); const skip = el('input'); skip.type = 'checkbox';
 skipLabel.title = 'Skip branches disabled by literal #if/#elif 0 or 1. Macro conditions (#ifdef, #ifndef, defined) are kept; #define and #undef are not evaluated.';
 skip.onchange = () => send('skip', { value: skip.checked }); skipLabel.append(skip, document.createTextNode('Skip inactive branches'));
-toolbar.append(brand, mode, depth, lock, skipLabel, button('Rebuild index', () => send('refresh')),
+toolbar.append(brand, mode, depth, lock, goToPin, skipLabel, button('Rebuild index', () => send('refresh')),
   button('Settings', () => send('settings'), 'Configure layout, sorting, call graph direction and analysis scope'),
   button('Help', () => send('help'), 'Open the bundled offline user guide'));
 let variableMode: boolean | undefined;
@@ -345,6 +352,8 @@ function render(state: ViewState) {
   if (depth.value !== String(state.depth)) depth.value = String(state.depth);
   lock.textContent = state.locked ? 'Pinned · Follow paused' : 'Following selection'; lock.setAttribute('aria-pressed', String(state.locked));
   lock.title = state.locked ? `Pinned to ${state.graph?.root.name ?? 'the current Relation'}. Click to unpin and follow the selected symbol.` : 'Click to pin the current Relation and pause following selection.';
+  goToPin.hidden = !state.locked; goToPin.disabled = !state.graph?.root.symbolId;
+  goToPin.title = state.graph ? `Go to pinned symbol: ${state.graph.root.name}` : 'Pinned symbol is unavailable';
   skip.checked = state.skipInactive;
   const nextCandidates = JSON.stringify(state.candidates);
   if (nextCandidates !== candidateSignature) {

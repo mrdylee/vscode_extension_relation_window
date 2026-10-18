@@ -193,6 +193,8 @@ try {
   assert.ok((await page.locator('.code-line.highlight').textContent()).includes('control_task(void)'));
   assert.ok(await page.evaluate(() => window.sent.some(m => m.type === 'selectNode')), 'node click requests preview and expansion together');
   await page.waitForFunction(() => window.pendingBridge === 0);
+  // Expansion can move another node under the pointer; isolate keyboard navigation from hover.
+  await page.mouse.move(10, 10);
   await caller.locator('.node-title').focus();
   await page.keyboard.press('Space');
   await popup.waitFor({ state: 'visible' });

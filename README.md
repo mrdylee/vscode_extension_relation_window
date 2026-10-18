@@ -111,6 +111,7 @@ Settings 화면에서는 `@id:cRelation.include` 또는 `@id:cRelation.exclude`�
 - **Callers & Callees**: 기본은 선택한 함수 왼쪽에 호출자, 오른쪽에 호출 대상을 표시하며 **Settings → Call Graph Direction**에서 좌우를 바꿀 수 있습니다. 그래프 전체를 왼쪽부터 표시하고 선택 함수를 화면 가운데로 자동 이동시키지 않습니다. 배치를 바꿔도 펼친 가지·선택·Callees 정렬을 유지합니다. 전체 300개 노드 제한을 공유합니다.
 - **Settings → Callee Sort**: 기본 이름순과 소스의 첫 호출 위치순을 선택합니다. 반복 호출은 한 노드로 묶으며 팝업의 위치 목록은 소스순입니다. 소스순은 실제 실행 순서를 의미하지 않습니다. 선택은 프로젝트별로 저장됩니다.
 - **Relation 배경을 왼쪽 버튼으로 드래그**하면 그래프를 이동합니다. 우클릭의 **Reset graph position**으로 되돌립니다. 심볼 클릭·더블클릭과 Context 텍스트 선택은 그대로 사용할 수 있습니다.
+- 고정 중에는 **Pinned · Follow paused** 옆의 **↩ Pin** 버튼으로 고정한 심볼 위치로 돌아갈 수 있습니다. 메인 편집기와 Context가 해당 심볼을 표시하고 Relation에서도 핀이 꽂힌 루트가 보이도록 이동합니다. 고정 상태와 펼친 가지는 유지됩니다.
 - **Settings → Context Layout → Combined / Combined · Full width / Separate**: Combined는 Context와 Relation을 함께 표시합니다. **Combined · Full width**는 두 창을 왼쪽·오른쪽 사이드바 아래까지 하단 전체 너비로 표시합니다. VS Code의 패널 정렬을 바꾸므로 Terminal 등 다른 하단 패널도 같은 너비를 사용하며, Combined나 Separate로 바꾸면 기본 편집기 너비로 돌아옵니다. Separate는 **C Relations Context**를 Explorer의 독립 뷰로 엽니다. 제목줄 드래그 또는 **View: Move View**로 왼쪽 파일 트리 아래 등 원하는 위치에 배치합니다. 세 방식 모두 분석 인덱스·미리보기·코드 이동·고정 상태를 공유합니다. Settings 버튼은 Include/Exclude를 포함한 확장의 모든 설정을 한곳에서 엽니다.
 - **Macro-expanded call**은 매크로 확장으로 찾은 호출입니다. **Inferred call**은 정적 분석으로 찾은 함수 포인터·콜백 후보이며 점선 아이콘과 근거 위치를 표시합니다. **Macro invocation**은 확장하지 못한 호출, **Indirect call**은 아직 모르는 간접 대상, **Unresolved call**은 분석 범위에 정의가 없는 호출입니다. 미확정 대상은 말단 노드로 남깁니다.
 - 함수 이름 선택: 해당 정의를 Context에서 미리 봅니다.
