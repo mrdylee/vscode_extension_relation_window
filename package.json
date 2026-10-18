@@ -125,7 +125,7 @@
           "items": { "type": "string", "minLength": 1 },
           "default": ["**"],
           "scope": "resource",
-          "markdownDescription": "[Select folders…](command:cRelation.selectMacroExpansionFolders) with checkboxes, or enter workspace-relative glob patterns such as `App/**`. Default `['**']` expands all indexed sources; an empty list disables macro expansion. Unchecked sources keep basic analysis and header definitions remain available to checked sources. Include/Exclude still control which files are indexed. Changes automatically rebuild the index."
+          "markdownDescription": "[Select folders…](command:cRelation.selectMacroExpansionFolders) with checkboxes, or enter workspace-relative glob patterns such as `App/**`. Default `[\"**\"]` expands all indexed sources; an empty list disables macro expansion. Unchecked sources keep basic analysis and header definitions remain available to checked sources. Include/Exclude still control which files are indexed. Changes automatically rebuild the index."
         },
         "cRelation.skipInactive": {
           "type": "boolean",

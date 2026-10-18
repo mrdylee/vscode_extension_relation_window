@@ -55,7 +55,9 @@ for selected sources and pointer analysis still cost memory. This does not promi
 to eliminate memory-budget partial results or OOM in every workspace. New native
 verification ran on macOS; no new Windows or WSL machine run was performed.
 
-Final local package: `artifacts/c-relation-explorer-0.1.36.vsix`, **516827 bytes**.
+Implementation package before the final Settings text correction (superseded by
+the package recorded in `2026-10-18-release-0.1.36.md`):
+`artifacts/c-relation-explorer-0.1.36.vsix`, **516827 bytes**.
 SHA-256: `92ae7a4b30247e88a3c5220426aa96fd046979bd2ea876b5cbd57d93c849fbe2`.
 ZIP inspection verified manifest/default/command, both runtime bundles, Go to Pin,
 offline Help and changelog. VSCE converts relative README links to GitHub links;
