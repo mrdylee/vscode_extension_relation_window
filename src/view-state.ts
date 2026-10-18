@@ -6,4 +6,5 @@ export interface ViewState {
   status: string; fileCount: number; issues: string[];
   mode: RelationMode; accessFilter: AccessFilter; depth: number; locked: boolean; skipInactive: boolean;
   calleeSort: CalleeSort; contextLayout: 'combined' | 'separate';
+  callGraphDirection: 'callers-left' | 'callees-left';
 }

@@ -2,7 +2,7 @@
   "name": "c-relation-explorer",
   "displayName": "C Relation Explorer",
   "description": "Build-free C references, caller/callee graphs and a linked Context preview.",
-  "version": "0.1.29",
+  "version": "0.1.30",
   "publisher": "local-james-black",
   "license": "MIT",
   "engines": {
@@ -35,7 +35,7 @@
       },
       {
         "command": "cRelation.openSettings",
-        "title": "C Relations: Configure Analysis Scope"
+        "title": "C Relations: Open Settings"
       },
       {
         "command": "cRelation.help",
@@ -71,13 +71,21 @@
     "configuration": {
       "title": "C Relations",
       "properties": {
+        "cRelation.callGraphDirection": {
+          "type": "string",
+          "enum": ["callers-left", "callees-left"],
+          "enumItemLabels": ["Callers left / Callees right", "Callees left / Callers right"],
+          "default": "callers-left",
+          "scope": "window",
+          "description": "Left/right branch placement in Callers & Callees mode. Changes presentation immediately without reindexing or resetting expanded branches."
+        },
         "cRelation.calleeSort": {
           "type": "string",
           "enum": ["name", "source"],
           "enumDescriptions": ["Sort Callees by symbol name.", "Sort Callees by their first call location in source, not runtime execution order."],
           "default": "name",
           "scope": "window",
-          "description": "Callees sorting. Also available from the Relation right-click menu. Callers and References keep name order."
+          "description": "Callees sorting. Open with the Relation Settings button. Callers and References keep name order."
         },
         "cRelation.contextLayout": {
           "type": "string",
@@ -85,7 +93,7 @@
           "enumDescriptions": ["Show Context and Relation together.", "Show Context as an independent Explorer view; drag its header to move it."],
           "default": "combined",
           "scope": "window",
-          "description": "Context layout. Also available from the Relation right-click menu. Separate Context shares the same analysis and selection."
+          "description": "Context layout. Open with the Relation Settings button. Separate Context shares the same analysis and selection."
         },
         "cRelation.include": {
           "type": "array",
@@ -126,7 +134,7 @@
     "test:freertos": "npm run build && node scripts/test-freertos.mjs",
     "test:ui": "npm run build && tsx test/create-ui-fixture.ts && node test/ui.mjs",
     "vscode:prepublish": "npm run build",
-    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license --out artifacts/c-relation-explorer-0.1.29.vsix"
+    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license --out artifacts/c-relation-explorer-0.1.30.vsix"
   },
   "dependencies": {
     "minimatch": "10.2.6",

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.30 — 2026-10-18
+
+- Add Call Graph Direction in Settings: Callers left / Callees right (default)
+  or Callees left / Callers right. Preserve branch expansion, selection and sorting;
+  change presentation without reindexing or rebuilding graph data.
+- Left-align the whole dual graph instead of centering the selected function.
+  Remove viewport-width padding and root anchoring so left branches remain visible.
+- Open all extension preferences from Settings, including sorting, Context layout,
+  direction and analysis scope. Keep Settings and Reset in the context menu.
+- Reveal Separate Context when its preference changes through native Settings.
+- Update offline Help and cover both orientations, deeper branch geometry,
+  left alignment, single-direction stability and native configuration changes.
+
 ## 0.1.29 — 2026-10-18
 
 - Add Callers & Callees to the existing mode selector, with one center root,

@@ -19,7 +19,7 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('cRelation.reindex', () => workspace.reindex()),
     vscode.commands.registerCommand('cRelation.openSettings', () => vscode.commands.executeCommand(
       vscode.workspace.workspaceFolders?.length ? 'workbench.action.openWorkspaceSettings' : 'workbench.action.openSettings',
-      { query: '@id:cRelation.include @id:cRelation.exclude', jsonEditor: false })),
+      { query: '@ext:local-james-black.c-relation-explorer', jsonEditor: false })),
     vscode.commands.registerCommand('cRelation.help', () => vscode.commands.executeCommand(
       'markdown.showPreview', vscode.Uri.joinPath(context.extensionUri, 'USER_GUIDE.md'))),
     vscode.window.onDidChangeTextEditorSelection(event => {

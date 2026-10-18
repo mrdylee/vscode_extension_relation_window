@@ -16,7 +16,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1450, height: 700 }, colorScheme: 'dark' });
   const errors = [];
   page.on('pageerror', error => errors.push(String(error)));
-  const state = { graph: fixture.graph, candidates: [], status: 'Index ready', fileCount: 4, issues: [], mode: 'references', accessFilter: 'all', depth: 1, locked: false, skipInactive: true, calleeSort: 'name', contextLayout: 'combined' };
+  const state = { graph: fixture.graph, candidates: [], status: 'Index ready', fileCount: 4, issues: [], mode: 'references', accessFilter: 'all', depth: 1, locked: false, skipInactive: true, calleeSort: 'name', contextLayout: 'combined', callGraphDirection: 'callers-left' };
   const items = new Map();
   function collect(node) {
     if (node.symbolId) items.set(node.symbolId, node.location);
@@ -57,10 +57,13 @@ try {
     if (message.type === 'depth') state.depth = message.value;
     if (message.type === 'access') { state.accessFilter = message.value; state.graph = fixture.variableGraphs[message.value]; }
     if (message.type === 'mode') { state.mode = message.value; state.graph = message.value === 'both' ? fixture.navigation.both : message.value === 'callees' ? fixture.calleeGraph : fixture.graph; }
-    if (message.type === 'calleeSort') { state.calleeSort = message.value; state.graph = fixture.navigation[message.value]; }
-    if (message.type === 'contextLayout') state.contextLayout = message.value;
     await page.evaluate(state => window.dispatchEvent(new MessageEvent('message', { data: { type: 'state', state } })), state);
   });
+  async function configure(preferences) {
+    Object.assign(state, preferences);
+    if (preferences.calleeSort && state.mode === 'callees') state.graph = fixture.navigation[preferences.calleeSort];
+    await page.evaluate(state => window.dispatchEvent(new MessageEvent('message', { data: { type: 'state', state } })), state);
+  }
   await page.addInitScript(() => {
     window.sent = [];
     window.pendingBridge = 0;
@@ -344,8 +347,10 @@ try {
   const graphArea = page.locator('.graph');
   const relationMenu = page.getByRole('menu', { name: 'Relation options' });
   await graphArea.click({ button: 'right', position: { x: 8, y: 100 } });
-  assert.equal(await relationMenu.getByRole('menuitemradio', { name: 'Name order', exact: true }).getAttribute('aria-checked'), 'true');
-  await relationMenu.getByRole('menuitemradio', { name: 'Source order', exact: true }).click();
+  assert.equal(await relationMenu.getByRole('menuitemradio').count(), 0, 'preferences are centralized in Settings');
+  await relationMenu.getByRole('menuitem', { name: 'Settings…', exact: true }).click();
+  await page.waitForFunction(() => window.sent.filter(m => m.type === 'settings').length >= 2);
+  await configure({ calleeSort: 'source' });
   await page.waitForFunction(() => document.querySelector('.graph > .branch > .children > .branch > .node')?.dataset.nodeName === 'zulu');
   assert.deepEqual(await page.locator('.graph > .branch > .children > .branch > .node').evaluateAll(nodes => nodes.map(n => n.dataset.nodeName)), ['zulu', 'alpha']);
   const sentBeforeDrag = await page.evaluate(() => window.sent.length);
@@ -365,8 +370,11 @@ try {
   await page.keyboard.press('Shift+F10');
   await page.keyboard.press('Escape');
   assert.equal(await relationMenu.isVisible(), false);
-  await graphArea.click({ button: 'right', position: { x: 8, y: 100 } });
-  await relationMenu.getByRole('menuitemradio', { name: 'Name order', exact: true }).click();
+  await page.locator('.graph > .branch').evaluate(node => { node.dataset.singleDirection = 'preserved'; });
+  await configure({ callGraphDirection: 'callees-left' });
+  assert.equal(await page.locator('.graph > .branch').getAttribute('data-single-direction'), 'preserved', 'single-direction views are not rebuilt for orientation changes');
+  await configure({ callGraphDirection: 'callers-left' });
+  await configure({ calleeSort: 'name' });
   await page.waitForFunction(() => document.querySelector('.graph > .branch > .children > .branch > .node')?.dataset.nodeName === 'alpha');
   await page.getByRole('combobox', { name: 'Relation type' }).selectOption('both');
   await page.locator('.incoming [data-node-name="entry"]').waitFor();
@@ -381,11 +389,32 @@ try {
   const deeperCaller = await page.locator('.incoming [data-node-name="launch"]').boundingBox();
   const expandedEntry = await page.locator('.incoming [data-node-name="entry"] .node-title').boundingBox();
   assert.ok(deeperCaller.x + deeperCaller.width < expandedEntry.x, 'deeper callers continue branching left');
-  assert.ok(Math.abs((await page.locator('.dual-root > .node').boundingBox()).x - centerBox.x) < 2, 'expanding callers keeps the center root in place');
+  const expandedGraphBox = await page.locator('.dual-root').boundingBox();
+  assert.ok(Math.abs(expandedGraphBox.x - graphBox.x - 12) < 2, 'expanded graph stays at the left edge without centering');
+  assert.equal(await graphArea.evaluate(node => node.scrollLeft), 0, 'left callers are visible without an initial scroll');
   assert.ok((await page.locator('.code-line.highlight').textContent()).includes('entry(void){pivot();}'), 'incoming click previews caller call site');
   await page.screenshot({ path: 'output/playwright/callers-and-callees.png', fullPage: true });
-  await graphArea.click({ button: 'right', position: { x: 8, y: 100 } });
-  await relationMenu.getByRole('menuitemradio', { name: 'Separate', exact: true }).click();
+  const expandedData = JSON.stringify(state.graph);
+  await configure({ callGraphDirection: 'callees-left' });
+  const reversedRoot = await page.locator('.dual-root > .node').boundingBox();
+  const reversedCallee = await page.locator('.outgoing [data-node-name=alpha]').boundingBox();
+  const reversedCaller = await page.locator('.incoming [data-node-name=entry]').boundingBox();
+  assert.ok(reversedCallee.x + reversedCallee.width < reversedRoot.x, 'callees can be placed on the left');
+  assert.ok(reversedCaller.x > reversedRoot.x + reversedRoot.width, 'callers can be placed on the right');
+  const nestedCallee = await page.locator('.outgoing [data-node-name=nav_leaf]').boundingBox();
+  const nestedCaller = await page.locator('.incoming [data-node-name=launch]').boundingBox();
+  assert.ok(nestedCallee.x + nestedCallee.width < reversedCallee.x, 'nested callees expand left');
+  assert.ok(nestedCaller.x > reversedCaller.x + reversedCaller.width, 'nested callers expand right');
+  assert.equal(JSON.stringify(state.graph), expandedData, 'orientation preserves expanded graph data');
+  assert.equal(await graphArea.evaluate(node => node.scrollLeft), 0);
+  assert.ok(Math.abs((await page.locator('.dual-root').boundingBox()).x - graphBox.x - 12) < 2, 'reversed graph is left aligned');
+  await page.screenshot({ path: 'output/playwright/callees-left-callers-right.png', fullPage: true });
+  await page.locator('.outgoing [data-node-name=alpha] .node-title').click();
+  await page.waitForFunction(() => window.pendingBridge === 0);
+  assert.ok((await page.locator('.code-line.highlight').textContent()).includes('pivot(void){zulu();alpha();zulu();}'), 'reversed callee click previews its actual call');
+  await configure({ callGraphDirection: 'callers-left' });
+  assert.equal(JSON.stringify(state.graph), expandedData);
+  await configure({ contextLayout: 'separate' });
   await page.waitForFunction(() => document.querySelector('.context').hidden);
   assert.equal(await divider.isVisible(), false);
   const combinedRelationBox = await page.locator('.relation').boundingBox();
@@ -405,8 +434,7 @@ try {
   await contextPage.screenshot({ path: 'output/playwright/separate-context.png', fullPage: true });
   await page.screenshot({ path: 'output/playwright/separate-relation.png', fullPage: true });
   await contextPage.close();
-  await graphArea.click({ button: 'right', position: { x: 8, y: 100 } });
-  await relationMenu.getByRole('menuitemradio', { name: 'Combined', exact: true }).click();
+  await configure({ contextLayout: 'combined' });
   await page.waitForFunction(() => !document.querySelector('.context').hidden);
   assert.equal(await divider.isVisible(), true);
   state.graph = fixture.graph; state.mode = 'references';
@@ -442,7 +470,7 @@ try {
   assert.ok(await page.locator('.context').isVisible());
   assert.ok(await page.locator('.relation').isVisible());
   assert.equal(await divider.isVisible(), false);
-  await writeFile('test-results/ui.json', JSON.stringify({ passed: true, checks: ['source/name sorting from accessible context menu', 'background panning without extension messages', 'dual graph geometry and stable center during expansion', 'separate Context syntax/navigation and combined restoration', 'Context click coordinates and drag selection', 'Context UTF-16 and CRLF coordinates', 'variable filters R/W/RW/address', 'variable badges preserve one-line height', 'variable click and popup preview exact use sites', 'variable access colors in dark/light themes', 'function mode preserved', '500-ms stationary hover with movement reset and leave cancellation', 'mouse click does not bypass delay', 'popup tint and condition syntax in dark/light themes', 'single-line graph nodes', 'hover popup without layout shift', 'Context selected call and symbol', 'syntax colors in dark/light themes', 'keyboard popup access and Escape', 'root preserved', 'variable icon', 'keyboard expansion/collapse/special', 'explicit source open', 'lock toggle', 'split resize', 'narrow layout', '80 candidates keep graph space and distinguish paths'], errors }, null, 2));
+  await writeFile('test-results/ui.json', JSON.stringify({ passed: true, checks: ['Settings entry point for sorting and layout', 'background panning without extension messages', 'reversible dual graph geometry and whole-graph left alignment', 'separate Context syntax/navigation and combined restoration', 'Context click coordinates and drag selection', 'Context UTF-16 and CRLF coordinates', 'variable filters R/W/RW/address', 'variable badges preserve one-line height', 'variable click and popup preview exact use sites', 'variable access colors in dark/light themes', 'function mode preserved', '500-ms stationary hover with movement reset and leave cancellation', 'mouse click does not bypass delay', 'popup tint and condition syntax in dark/light themes', 'single-line graph nodes', 'hover popup without layout shift', 'Context selected call and symbol', 'syntax colors in dark/light themes', 'keyboard popup access and Escape', 'root preserved', 'variable icon', 'keyboard expansion/collapse/special', 'explicit source open', 'lock toggle', 'split resize', 'narrow layout', '80 candidates keep graph space and distinguish paths'], errors }, null, 2));
   assert.deepEqual(errors, []);
-  console.log('Browser UI checks passed, including sorting, panning, dual-direction graphs and separate Context');
+  console.log('Browser UI checks passed, including Settings-based preferences, reversible branches and left-aligned graphs');
 } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }

@@ -43,8 +43,7 @@ panes.append(context, divider, relation);
 if (contextOnly) app.append(context); else app.append(toolbar, panes, footer);
 let signature: string | undefined = '', previewSignature: string | undefined = '';
 let rootKey: string | undefined;
-let currentState: ViewState | undefined;
-let currentGraphBoth = false;
+let currentDirection: ViewState['callGraphDirection'] | undefined;
 let panX = 0, panY = 0;
 function positionGraph() {
   const canvas = graph.firstElementChild as HTMLElement | null;
@@ -52,14 +51,6 @@ function positionGraph() {
 }
 function resetGraphPosition() {
   panX = panY = 0; positionGraph(); graph.scrollLeft = graph.scrollTop = 0;
-  if (currentState?.graph?.callers) {
-    const center = graph.querySelector<HTMLElement>('.dual-root > .node');
-    if (center) {
-      const box = center.getBoundingClientRect(), viewport = graph.getBoundingClientRect();
-      graph.scrollLeft += box.left + box.width / 2 - viewport.left - graph.clientWidth / 2;
-      graph.scrollTop += box.top + box.height / 2 - viewport.top - graph.clientHeight / 2;
-    }
-  }
 }
 const icons: Record<Kind, string> = { function: 'ƒ', variable: 'v', type: 'T', macro: '#', unknown: '?' };
 const kindNames: Record<Kind, string> = { function: 'Function', variable: 'Variable', type: 'Type', macro: 'Macro', unknown: 'Unknown' };
@@ -130,17 +121,8 @@ function showOptions(event: MouseEvent | KeyboardEvent) {
   event.preventDefault(); hideDetails();
   menuAnchor = (event.target as HTMLElement).closest<HTMLElement>('.node-title') ?? graph;
   options.replaceChildren();
-  const choice = (label: string, type: 'calleeSort' | 'contextLayout', value: string, checked: boolean) => {
-    const item = button(label, () => { closeOptions(); send(type, { value }); });
-    item.setAttribute('aria-label', label);
-    item.setAttribute('role', 'menuitemradio'); item.setAttribute('aria-checked', String(checked)); options.append(item);
-  };
-  options.append(el('div', 'menu-heading', 'Callees sorting'));
-  choice('Source order', 'calleeSort', 'source', currentState?.calleeSort === 'source');
-  choice('Name order', 'calleeSort', 'name', currentState?.calleeSort !== 'source');
-  options.append(el('div', 'menu-heading', 'Context layout'));
-  choice('Combined', 'contextLayout', 'combined', currentState?.contextLayout !== 'separate');
-  choice('Separate', 'contextLayout', 'separate', currentState?.contextLayout === 'separate');
+  const settings = button('Settings…', () => { closeOptions(); send('settings'); });
+  settings.setAttribute('role', 'menuitem'); options.append(settings);
   const reset = button('Reset graph position', () => { closeOptions(); resetGraphPosition(); }); reset.setAttribute('role', 'menuitem'); options.append(reset);
   options.hidden = false;
   const anchor = menuAnchor.getBoundingClientRect();
@@ -304,7 +286,7 @@ const skipLabel = el('label', 'skip'); const skip = el('input'); skip.type = 'ch
 skipLabel.title = 'Skip branches disabled by literal #if/#elif 0 or 1. Macro conditions (#ifdef, #ifndef, defined) are kept; #define and #undef are not evaluated.';
 skip.onchange = () => send('skip', { value: skip.checked }); skipLabel.append(skip, document.createTextNode('Skip inactive branches'));
 toolbar.append(brand, mode, depth, lock, skipLabel, button('Rebuild index', () => send('refresh')),
-  button('Settings', () => send('settings'), 'Configure Include and Exclude for this workspace'),
+  button('Settings', () => send('settings'), 'Configure layout, sorting, call graph direction and analysis scope'),
   button('Help', () => send('help'), 'Open the bundled offline user guide'));
 let variableMode: boolean | undefined;
 let candidateSignature: string | undefined;
@@ -339,7 +321,6 @@ function renderContext(preview: ViewState['context']) {
   }
 }
 function render(state: ViewState) {
-  currentState = state;
   const separate = state.contextLayout === 'separate';
   panes.classList.toggle('separate', separate); context.hidden = divider.hidden = separate;
   const variable = state.graph?.root.kind === 'variable';
@@ -381,13 +362,12 @@ function render(state: ViewState) {
   if (state.graph) graphHeader.dataset.rootName = state.graph.root.name; else delete graphHeader.dataset.rootName;
   const nextRoot = state.graph?.root.symbolId;
   const rootChanged = nextRoot !== rootKey;
-  const directionChanged = !!currentGraphBoth !== !!state.graph?.callers;
-  currentGraphBoth = !!state.graph?.callers;
+  const direction = state.graph?.callers ? state.callGraphDirection ?? 'callers-left' : undefined;
+  const directionChanged = currentDirection !== direction;
+  currentDirection = direction;
   if (rootChanged) { rootKey = nextRoot; finishDrag(); }
-  const next = JSON.stringify(state.graph);
+  const next = JSON.stringify([state.graph, direction]);
   if (next !== signature) {
-    const previousCenter = currentGraphBoth && !rootChanged && !directionChanged
-      ? graph.querySelector<HTMLElement>('.dual-root > .node')?.getBoundingClientRect().left : undefined;
     const key = (document.activeElement as HTMLElement)?.dataset.key;
     hideDetails();
     signature = next; graph.replaceChildren();
@@ -395,9 +375,16 @@ function render(state: ViewState) {
       const tree = drawNode(state.graph.root);
       if (state.graph.callers) {
         tree.classList.add('dual-root');
+        const outgoing = tree.querySelector<HTMLElement>(':scope > .children');
+        outgoing?.classList.add('outgoing');
+        if (direction === 'callees-left' && outgoing) {
+          outgoing.classList.add('left-branches'); tree.prepend(outgoing);
+        }
         if (state.graph.callers.length) {
           const incoming = el('div', 'children incoming');
-          state.graph.callers.forEach(node => incoming.append(drawNode(node))); tree.prepend(incoming);
+          state.graph.callers.forEach(node => incoming.append(drawNode(node)));
+          if (direction === 'callees-left') tree.append(incoming);
+          else { incoming.classList.add('left-branches'); tree.prepend(incoming); }
         }
       }
       graph.append(tree);
@@ -405,10 +392,6 @@ function render(state: ViewState) {
     else graph.append(el('div', 'empty', state.candidates.length ? 'Select a definition above to show its references.' : 'Click a function or variable name in C source to show its references.'));
     positionGraph();
     if (rootChanged || directionChanged) resetGraphPosition();
-    else if (previousCenter !== undefined) {
-      const center = graph.querySelector<HTMLElement>('.dual-root > .node');
-      if (center) graph.scrollLeft += center.getBoundingClientRect().left - previousCenter;
-    }
     if (key) Array.from(graph.querySelectorAll<HTMLButtonElement>('.node-title')).find(b => b.dataset.key === key)?.focus({ preventScroll: true });
   }
   const preview = state.context;

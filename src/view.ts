@@ -8,7 +8,7 @@ import { highlightC, SyntaxToken } from './syntax';
 export class RelationView implements vscode.Disposable {
   state: ViewState = { candidates: [], status: 'Open a C file and click a symbol name.', fileCount: 0,
     issues: [], mode: 'references', accessFilter: 'all', depth: 1, locked: false, skipInactive: true,
-    calleeSort: 'name', contextLayout: 'combined' };
+    calleeSort: 'name', contextLayout: 'combined', callGraphDirection: 'callers-left' };
   private webview?: vscode.WebviewView;
   private contextView?: vscode.WebviewView;
   private root?: { id: string; name: string; uri: string };
@@ -27,7 +27,13 @@ export class RelationView implements vscode.Disposable {
     this.readPreferences();
     this.preferences = vscode.workspace.onDidChangeConfiguration(event => {
       if (event.affectsConfiguration('cRelation.calleeSort') || event.affectsConfiguration('cRelation.contextLayout')) {
+        const previousLayout = this.state.contextLayout;
         this.readPreferences(); this.refresh();
+        if (previousLayout !== 'separate' && this.state.contextLayout === 'separate') {
+          void vscode.commands.executeCommand('cRelation.context.focus', { preserveFocus: true });
+        }
+      } else if (event.affectsConfiguration('cRelation.callGraphDirection')) {
+        this.readPreferences(); this.publish();
       }
     });
     this.listener = workspace.changed.event(() => {
@@ -41,6 +47,7 @@ export class RelationView implements vscode.Disposable {
     const config = vscode.workspace.getConfiguration('cRelation');
     this.state.calleeSort = config.get('calleeSort') === 'source' ? 'source' : 'name';
     this.state.contextLayout = config.get('contextLayout') === 'separate' ? 'separate' : 'combined';
+    this.state.callGraphDirection = config.get('callGraphDirection') === 'callees-left' ? 'callees-left' : 'callers-left';
   }
   resolveWebviewView(view: vscode.WebviewView, contextOnly = false) {
     if (contextOnly) this.contextView = view; else this.webview = view;
@@ -141,14 +148,6 @@ export class RelationView implements vscode.Disposable {
     switch (m.type) {
       case 'ready': this.refresh(); this.track(vscode.window.activeTextEditor); break;
       case 'readyContext': void this.contextView?.webview.postMessage({ type: 'context', context: this.state.context }); break;
-      case 'calleeSort': case 'contextLayout': {
-        if (m.type === 'calleeSort' ? m.value !== 'name' && m.value !== 'source' : m.value !== 'combined' && m.value !== 'separate') return;
-        await vscode.workspace.getConfiguration('cRelation').update(m.type, m.value,
-          vscode.workspace.workspaceFolders?.length ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global);
-        if (this.state[m.type] !== m.value) { this.readPreferences(); this.refresh(); }
-        if (m.type === 'contextLayout' && m.value === 'separate') await vscode.commands.executeCommand('cRelation.context.focus');
-        break;
-      }
       case 'settings': await vscode.commands.executeCommand('cRelation.openSettings'); break;
       case 'help': await vscode.commands.executeCommand('cRelation.help'); break;
       case 'preview': if (typeof m.id === 'string' && this.locations.has(m.id)) { this.preview(m.id); this.publish(); } break;
