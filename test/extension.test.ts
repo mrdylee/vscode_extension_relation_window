@@ -660,6 +660,24 @@ export async function run() {
   await api.workspace.reindex(); await api.workspace.whenIdle();
   assert.notEqual(api.workspace.worker, limitedWorker, 'rebuilding a memory-limited index releases the old Worker');
   assert.equal(api.workspace.status, 'Index ready');
+  assert.ok((await vscode.commands.getCommands()).includes('cRelation.reportIssue'), 'issue report command registered');
+  const reportGraph = api.view.state.graph, reportRequest = api.workspace.request;
+  const savedClipboard = await vscode.env.clipboard.readText();
+  api.workspace.request = () => { throw new Error('Reporting must not request Worker analysis'); };
+  api.workspace.workerError = new Error('ERR_WORKER_OUT_OF_MEMORY PRIVATE_ERROR_PATH');
+  let reportDocument: vscode.TextDocument | undefined;
+  try { reportDocument = await vscode.commands.executeCommand<vscode.TextDocument>('cRelation.reportIssue'); }
+  finally { api.workspace.request = reportRequest; api.workspace.workerError = undefined; }
+  assert.ok(reportDocument);
+  assert.equal(reportDocument.languageId, 'markdown');
+  assert.equal(reportDocument.isUntitled, true);
+  const report = reportDocument.getText();
+  assert.match(report, /worker-out-of-memory/);
+  assert.match(report, /Reproduction steps/);
+  assert.ok(report.includes(ext.packageJSON.version));
+  assert.doesNotMatch(report, /PRIVATE_ERROR_PATH|check_fault|control\.c|Polyspace/);
+  assert.equal(api.view.state.graph, reportGraph, 'report preview preserves the relation graph');
+  assert.equal(await vscode.env.clipboard.readText(), savedClipboard, 'preview does not touch the clipboard');
   const output = process.env.C_RELATION_TEST_OUTPUT!;
   await mkdir(path.dirname(output), { recursive: true });
   await writeFile(output, JSON.stringify({ passed: true, functionArguments: true, memberSyntax: true, boundedIncludeTraversal: true, partialFunctionArguments: true, workerRecovery: true, checks: ['cast, returned, anonymous and initialized member navigation', 'workspace-persistent sorting, layout and direction preferences', 'native Settings entry point, separate Context registration and shared navigation', 'dual-direction call-site preview and index reuse', 'Context source navigation and relation reroot', 'Context cross-file variable navigation', 'Context lock and stale-message checks', 'selected identifier tracking', 'selection retry after indexing', 'unlock follows latest editor', 'same-symbol graph reuse', 'variable selection and access filters', 'variable actual-site preview preserves editor', 'variable access filter validation', 'variable uses continue into caller tree', 'activation', '93-file index completion', 'indexing does not open documents', 'WASM worker', 'click tracking', 'variable icon data', 'call sites', 'Context preserves editor', 'mode/depth/expand/collapse', 'locked root', 'explicit source open', 'invalid message target', '#if0 setting reindex', 'unsaved buffer', 'file create/delete', 'ambiguous symbol clears stale graph and Context', 'candidate selection'] }, null, 2));

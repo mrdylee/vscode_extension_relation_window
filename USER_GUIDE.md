@@ -275,6 +275,34 @@ It does not determine build-specific `#ifdef`, `#ifndef`, `defined(...)` or macr
 
 ## If results are missing or slow
 
+### Report a problem (v0.1.40)
+
+1. Before **Rebuild index** or **Reload Window**, open **Diagnostics → Report issue**.
+   If the Relation panel is unavailable, use **C Relations: Report Issue** in the
+   Command Palette. Reporting uses the last received measurements without waiting
+   for a busy or stopped Worker.
+2. An editable Markdown draft opens in VS Code. Fill in the problem, reproduction
+   steps and expected/actual behavior. Review the diagnostic snapshot and anything
+   you add: the GitHub issue will be public.
+3. In the notification choose **Copy & Open GitHub**, paste the report into the
+   issue body, give it a descriptive title and submit. GitHub sign-in is required.
+   The extension does not submit it for you. The browser URL contains generic
+   instructions only; the reviewed report is copied to your clipboard.
+4. **Copy report** copies without opening a browser. You can also save the draft
+   with **Save As** or manually copy it after dismissing the notification. If you
+   cannot use GitHub, share the saved draft through an agreed support channel.
+
+The generated report includes versions, OS/remote kind, view options, analysis
+status, file counts, categorized notice counts and timestamped memory samples.
+It excludes source, function names, paths, raw error messages and actual
+Include/Exclude/macro-folder patterns (only their counts/modes are included).
+Review screenshots separately: they may show private code or paths. A small,
+shareable C example helps investigate missing or incorrect relationships.
+Report generation is local, adds no background logging and does not rebuild the
+index. Reopen the command after dismissing the notification for a new snapshot.
+
+[Browse existing issues or open one manually](https://github.com/mrdylee/vscode_extension_relation_window/issues).
+
 ### Photograph a memory diagnostic (v0.1.38)
 
 Click **Diagnostics** in the Relation footer. A new memory-limit incident or

@@ -239,6 +239,25 @@ void run(struct Motor *m, struct Sensor *s) {
 
 ## 정확도와 범위
 
+### 문제 신고하기 (v0.1.40)
+
+**Diagnostics → Report issue** 또는 명령 팔레트의 **C Relations: Report Issue**를
+실행하면 VS Code에서 수정 가능한 진단 보고서가 열립니다. 증상·재현 순서·예상/실제
+동작을 작성한 뒤 알림의 **Copy & Open GitHub**를 누르고, 열린 Issue 본문에
+붙여넣어 직접 제출하세요. GitHub 계정이 필요하며 Issue는 공개됩니다.
+
+버전·운영환경·메모리·분석 상태·오류 분류와 개수가 자동으로 포함됩니다. 소스,
+함수명, 파일 경로, 오류 원문, Include/Exclude/매크로 폴더 패턴은 자동 보고서에서
+제외합니다. 직접 추가하는 사진과 예제 코드에도 기밀이 없는지 확인하세요.
+Worker가 멈춰도 마지막 측정으로 작성하므로 **재색인/재시작 전에** 보고서를
+만드는 것이 좋습니다. 보고서 생성은 분석을 다시 실행하지 않습니다.
+
+**Copy report**는 복사만 합니다. 인터넷이나 GitHub 계정을 사용할 수 없다면
+보고서를 **Save As**로 저장하거나 수동 복사해 합의된 지원 경로로 공유하세요.
+자동 업로드·자동 Issue 제출은 없습니다. 기존 문제는
+[GitHub Issues](https://github.com/mrdylee/vscode_extension_relation_window/issues)에서
+확인할 수 있으며, 유지보수자는 [접수·분석 절차](https://github.com/mrdylee/vscode_extension_relation_window/blob/v0.1.40/docs/ISSUE_TRIAGE.md)를 참고하세요.
+
 ### 메모리 문제를 사진으로 공유하기 (v0.1.38)
 
 Relation 하단 **Diagnostics**를 누르면 사진 한 장에 담을 수 있는 진단 요약이

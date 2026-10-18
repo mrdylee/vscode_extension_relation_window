@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.40 — 2026-10-18
+
+- Add Diagnostics → Report issue and a Command Palette entry. Prepare a local,
+  editable report with versions, view/scope counts, categorized notices and the
+  latest memory samples, even when the Worker has stopped.
+- Omit source, symbol names, paths, raw errors and scope patterns. Users review
+  and copy the draft before opening GitHub, then paste and submit it themselves.
+  No automatic uploads or background logging. Include offline Help and triage docs.
+
 ## 0.1.39 — 2026-10-18
 
 - Release macro and callback caches when rebuilding the index. Keep only the

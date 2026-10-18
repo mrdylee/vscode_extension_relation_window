@@ -164,6 +164,7 @@ export class RelationView implements vscode.Disposable {
     const m = message as Record<string, unknown>;
     switch (m.type) {
       case 'diagnostics': this.workspace.refreshDiagnostics(); break;
+      case 'reportIssue': await vscode.commands.executeCommand('cRelation.reportIssue'); break;
       case 'ready': this.refresh(); this.track(vscode.window.activeTextEditor); break;
       case 'readyContext': void this.contextView?.webview.postMessage({ type: 'context', context: this.state.context }); break;
       case 'settings': await vscode.commands.executeCommand('cRelation.openSettings'); break;

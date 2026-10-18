@@ -3,11 +3,13 @@ import { WorkspaceIndex } from './workspace';
 import { RelationView } from './view';
 import { registerUpdates } from './update-service';
 import { selectMacroExpansionFolders } from './macro-folders';
+import { registerIssueReporting } from './issue-report-service';
 
 export function activate(context: vscode.ExtensionContext) {
   registerUpdates(context);
   const workspace = new WorkspaceIndex(context.extensionPath);
   const view = new RelationView(workspace, context.extensionUri);
+  registerIssueReporting(context, workspace, view);
   let timer: ReturnType<typeof setTimeout> | undefined;
   context.subscriptions.push(workspace, view,
     vscode.window.registerWebviewViewProvider('cRelation.explorer', { resolveWebviewView: webview => view.resolveWebviewView(webview) }),

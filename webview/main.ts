@@ -8,7 +8,7 @@ const api = acquireVsCodeApi();
 const send = (type: string, rest = {}) => api.postMessage({ type, ...rest });
 const app = document.getElementById('app')!;
 const contextOnly = document.body.dataset.view === 'context';
-const diagnostics = contextOnly ? undefined : createDiagnostics(__EXTENSION_VERSION__, () => send('diagnostics'));
+const diagnostics = contextOnly ? undefined : createDiagnostics(__EXTENSION_VERSION__, () => send('diagnostics'), () => send('reportIssue'));
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text = '') {
   const node = document.createElement(tag); node.className = className; node.textContent = text; return node;
 }

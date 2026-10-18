@@ -10,15 +10,17 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, text = '', className 
   const node = document.createElement(tag); node.textContent = text; node.className = className; return node;
 }
 
-export function createDiagnostics(version: string, refresh: () => void) {
+export function createDiagnostics(version: string, refresh: () => void, reportIssue: () => void) {
   const dialog = el('dialog', '', 'memory-diagnostics');
   dialog.setAttribute('aria-label', 'Memory diagnostics');
   const header = el('div', '', 'diagnostics-heading');
   header.append(el('strong', `C Relations v${version} · Diagnostics`));
-  const refreshButton = el('button', 'Refresh'), close = el('button', 'Close');
-  refreshButton.type = close.type = 'button';
+  const report = el('button', 'Report issue'), refreshButton = el('button', 'Refresh'), close = el('button', 'Close');
+  report.type = refreshButton.type = close.type = 'button';
+  report.title = 'Prepare a local report to review before sharing on GitHub';
+  report.onclick = reportIssue;
   refreshButton.onclick = refresh; close.onclick = () => dialog.close();
-  header.append(refreshButton, close);
+  header.append(report, refreshButton, close);
   const body = el('div'); dialog.append(header, body); document.body.append(dialog);
   let data: Diagnostics | undefined, state: ViewState | undefined, lastIncident = '';
   function render() {

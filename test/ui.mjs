@@ -520,6 +520,8 @@ try {
   assert.ok(await diagnosticDialog.isVisible());
   assert.match(await diagnosticDialog.textContent(), /900\.0 MiB/);
   assert.match(await diagnosticDialog.textContent(), /1228\.8 MiB/);
+  await diagnosticDialog.getByRole('button', { name: 'Report issue', exact: true }).click();
+  assert.ok(await page.evaluate(() => window.sent.some(m => m.type === 'reportIssue' && Object.keys(m).length === 1)), 'report action sends no source or diagnostic payload');
   await diagnosticDialog.getByRole('button', { name: 'Refresh' }).click();
   assert.ok(await page.evaluate(() => window.sent.some(m => m.type === 'diagnostics')));
   await page.keyboard.press('Escape');
