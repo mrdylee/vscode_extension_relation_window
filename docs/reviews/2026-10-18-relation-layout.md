@@ -84,3 +84,25 @@ claim to resolve every callback. Final verification and packaging are recorded b
 
 No remaining blocking findings from this local review. Remote publication is outside
 this local implementation step; keep the feature branch and checkpoint tag.
+
+## Publication audit — 2026-10-18
+
+User subsequently requested release publication. Published release:
+https://github.com/mrdylee/vscode_extension_relation_window/releases/tag/v0.1.29
+
+- Reviewed source and release tag: 96ebfb93fe9fb5ec05f8c87ac7c6c340f12f398f.
+  The feature branch and checkpoint/relation-layout-reviewed-20261018 tag were pushed
+  alongside v0.1.29. Existing tags and main were preserved.
+- Fresh local typecheck and 138 unit tests passed before pushing.
+- GitHub Actions run 39083533317 completed successfully: test (windows-latest),
+  test (macos-latest), test (ubuntu-latest), and release. Run URL:
+  https://github.com/mrdylee/vscode_extension_relation_window/actions/runs/39083533317
+- Release API confirms v0.1.29 is latest, public, not draft and not prerelease.
+- Downloaded the common, windows, macos and wsl VSIX assets plus SHA256SUMS.txt.
+  All four VSIX files are 503,557 bytes and have SHA-256
+  5e20c433965d51f938a06e8e393267ed3904ed4499ccba20b2d3ce122e14eb65.
+- All digests match both the published checksum list and GitHub asset metadata.
+  Each manifest reports 0.1.29; bundled scripts, CSS and WASM match the reviewed
+  local runtime byte-for-byte. The new view, defaults, menu and offline Help exist.
+- Evidence downloaded to /tmp/c-rel-029-published/verification.json. The published
+  ZIP checksum differs from the local ZIP above, while their runtime payloads match.
