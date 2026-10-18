@@ -13,7 +13,7 @@ export class WorkspaceIndex implements vscode.Disposable {
   readonly ready: Promise<void>;
   status = 'Preparing C index…';
   failures = new Map<string, string>();
-  private worker: Worker;
+  private worker!: Worker;
   private requests = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
   private rawVersions = new Map<string, number>();
   private appliedDerived = new Map<string, number>();
@@ -31,21 +31,32 @@ export class WorkspaceIndex implements vscode.Disposable {
   private workerError?: Error;
   private scopes = new Map<string, { include: string[]; exclude: string[]; included: Minimatch[]; excluded: Minimatch[] }>();
   get skipInactive() { return vscode.workspace.getConfiguration('cRelation').get<boolean>('skipInactive', true); }
-  constructor(extensionPath: string) {
-    const assets = path.join(extensionPath, 'dist');
-    this.worker = new Worker(path.join(assets, 'analysis-worker.cjs'), { workerData: { assets } });
-    this.worker.on('message', ({ id, result, error }) => {
+  private startWorker() {
+    const assets = path.join(this.extensionPath, 'dist');
+    const worker = new Worker(path.join(assets, 'analysis-worker.cjs'), { workerData: { assets } });
+    this.worker = worker; this.workerError = undefined;
+    worker.on('message', ({ id, result, error }) => {
+      if (this.disposed || this.worker !== worker) return;
       const request = this.requests.get(id);
       this.requests.delete(id);
       if (error) request?.reject(new Error(error)); else request?.resolve(result);
     });
-    this.worker.on('error', error => {
+    const failed = (error: Error) => {
+      if (this.disposed || this.worker !== worker || this.workerError) return;
       this.workerError = error;
       for (const request of this.requests.values()) request.reject(error);
       this.requests.clear();
-      this.status = `Analysis unavailable: ${error.message}`;
+      this.status = (error as NodeJS.ErrnoException).code === 'ERR_WORKER_OUT_OF_MEMORY'
+        ? 'Analysis stopped: Worker ran out of memory. Narrow Include/Exclude, then Rebuild index.'
+        : `Analysis unavailable: ${error.message}`;
+      this.failures.set('worker', this.status);
       this.changed.fire();
-    });
+    };
+    worker.on('error', failed);
+    worker.on('exit', code => failed(new Error(`Analysis Worker exited unexpectedly (${code}). Rebuild index to retry.`)));
+  }
+  constructor(private extensionPath: string) {
+    this.startWorker();
     const watch = vscode.workspace.createFileSystemWatcher('**/*.{c,h}');
     this.disposables.push(watch, watch.onDidCreate(uri => this.schedule(uri)), watch.onDidChange(uri => this.schedule(uri)),
       watch.onDidDelete(uri => this.remove(uri)),
@@ -130,6 +141,14 @@ export class WorkspaceIndex implements vscode.Disposable {
     });
     return { id, promise };
   }
+  private completedStatus(fileLimit = false) {
+    if (this.workerError) return this.status;
+    if (this.failures.has('derived')) return 'Partial index: call analysis failed. See Analysis notices.';
+    if ([...this.failures.values()].some(error => error.includes('memory budget')) ||
+      [...this.index.files.values()].some(file => file.issues.some(issue => issue.includes('memory budget'))))
+      return 'Partial index: memory budget reached. Narrow Include/Exclude, then Rebuild index.';
+    return fileLimit ? 'Partial index: 10,000 file limit reached' : 'Index ready';
+  }
   private derive(): Promise<void> {
     if (this.deriving) return this.deriving;
     if (this.disposed || this.workerError || this.indexing || this.jobs.size || this.timers.size || this.derivedRevision === this.revision) return Promise.resolve();
@@ -142,16 +161,30 @@ export class WorkspaceIndex implements vscode.Disposable {
         if (result.stale) break;
         for (const file of result.files) this.index.update(file);
         for (const [uri, stamp] of result.versions) this.appliedDerived.set(uri, stamp);
-        this.derivedRevision = revision; this.failures.delete('derived'); this.changed.fire();
+        this.derivedRevision = revision; this.failures.delete('derived');
+        this.status = this.completedStatus(this.status.includes('10,000 file limit'));
+        this.changed.fire();
       }
     })().catch(error => {
-      if (!this.disposed) { this.failures.set('derived', `Call analysis: ${String(error)}`); this.changed.fire(); }
+      if (!this.disposed) {
+        this.failures.set('derived', `Call analysis: ${String(error)}`);
+        this.status = this.completedStatus(); this.changed.fire();
+      }
     }).finally(() => { this.deriving = undefined; });
     return this.deriving;
   }
   async reindex() {
     const epoch = ++this.epoch;
-    this.indexing = true; this.rawVersions.clear(); this.appliedDerived.clear(); this.revision++;
+    this.indexing = true;
+    if (this.workerError || this.status.includes('memory budget')) {
+      await this.deriving;
+      if (this.disposed || epoch !== this.epoch) return;
+      for (const request of this.requests.values()) request.reject(new Error('Analysis restarted'));
+      this.requests.clear();
+      const previous = this.worker; this.startWorker(); await previous.terminate();
+      if (this.disposed || epoch !== this.epoch) return;
+    }
+    this.rawVersions.clear(); this.appliedDerived.clear(); this.revision++;
     this.worker.postMessage({ type: 'reset' });
     this.scopes.clear();
     this.index.clear(); this.failures.clear();
@@ -177,13 +210,15 @@ export class WorkspaceIndex implements vscode.Disposable {
       for (const uri of uris.slice(0, 10000)) {
         if (this.disposed || epoch !== this.epoch) return;
         await this.enqueue(uri);
+        if (this.workerError && epoch === this.epoch) { this.indexing = false; return; }
       }
       if (epoch === this.epoch) {
         this.indexing = false;
         this.status = 'Resolving calls and callbacks…'; this.changed.fire();
         await this.derive();
         if (epoch !== this.epoch) return;
-        this.status = uris.length > 10000 ? 'Partial index: 10,000 file limit reached' : 'Index ready';
+        if (this.workerError) return;
+        this.status = this.completedStatus(uris.length > 10000);
         this.changed.fire();
       }
     } catch (error) {

@@ -3,6 +3,7 @@ import { CToken, identifier, tokenizeC } from './c-tokens';
 
 export interface ExpansionVariant { tokens: CToken[]; changed: boolean; conditions: string[] }
 interface Arguments { values: CToken[][]; end: number }
+export const macroMemoryLimit = 'Macro analysis memory budget reached; results may be incomplete. Narrow Include/Exclude scope.';
 export function macroArguments(tokens: CToken[], open: number): Arguments | undefined {
   if (tokens[open]?.text !== '(') return undefined;
   const values: CToken[][] = [[]]; let depth = 0;
@@ -19,8 +20,11 @@ export function macroArguments(tokens: CToken[], open: number): Arguments | unde
 export class MacroExpander {
   readonly issues = new Set<string>();
   private operations = 0;
-  constructor(private lookup: (name: string, offset: number) => (MacroDefinition | undefined)[]) {}
+  constructor(private lookup: (name: string, offset: number) => (MacroDefinition | undefined)[], private memoryPressure?: () => boolean) {}
   expand(input: CToken[], nesting = 0): ExpansionVariant[] {
+    if (this.memoryPressure?.()) {
+      this.issues.add(macroMemoryLimit); return [{ tokens: input, changed: false, conditions: [] }];
+    }
     if (nesting >= 32 || input.length > 40_000) {
       this.issues.add('Macro expansion limit: 32 nested expansions or 40,000 tokens');
       return [{ tokens: input.map(token => ({ ...token, unexpanded: true })), changed: false, conditions: [] }];
@@ -34,6 +38,9 @@ export class MacroExpander {
         if (++this.operations > 80_000 || variant.tokens.length > 40_000) {
           this.issues.add('Macro expansion work/token limit reached; some calls remain unexpanded');
           variant.tokens = variant.tokens.map((token, i) => i >= variant.index ? { ...token, unexpanded: true } : token); break;
+        }
+        if ((this.operations & 255) === 0 && this.memoryPressure?.()) {
+          this.issues.add(macroMemoryLimit); return [{ tokens: input, changed: false, conditions: [] }];
         }
         const token = variant.tokens[variant.index];
         if (!identifier.test(token.text) || token.hidden?.includes(token.text)) { variant.index++; continue; }

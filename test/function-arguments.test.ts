@@ -17,6 +17,55 @@ const args = (files: FileAnalysis[]) => files.flatMap(file => file.functionArgum
 const symbol = (index: RelationIndex, name: string) => index.symbols().find(s => s.name === name && s.definition && s.kind === 'function')!;
 const relations = (index: RelationIndex, name: string, mode: 'callers' | 'callees' | 'references', enabled = true) => index.relations(symbol(index, name).id, mode, 'all', 'source', enabled);
 
+function limitedProject(text: string, extra: FileAnalysis[] = []) {
+  const raw = [analyzer.analyze(uri, '#include "h18.h"\n' + text), analyzer.analyze('file:///demo/h0.h', ''), ...extra];
+  for (let n = 1; n <= 18; n++) raw.push(analyzer.analyze(`file:///demo/h${n}.h`, `#include "h${n-1}.h"\n#include "h${n-1}.h"\n`));
+  const files = analyzer.derive(raw), index = new RelationIndex(); files.forEach(file => index.update(file));
+  assert.ok(files[0].issues.some(issue => /Macro include traversal limit/.test(issue)));
+  return { raw, files, index };
+}
+
+test('limited macro traversal retains literal send_event arguments as partial source candidates', () => {
+  const text = `typedef void (*CB)(void); typedef unsigned long svc_param_t;
+static void priv_mode_change(void){}
+int svc_send_event(void *ctx, svc_param_t rack, svc_param_t state, int a, int b, CB cb){cb();return 0;}
+int origin(void *ctx, unsigned char rack, unsigned char state){
+  int ret=svc_send_event(ctx, (svc_param_t)rack, (svc_param_t)state, 0, 0, priv_mode_change);
+  CB copy=priv_mode_change;svc_send_event(ctx, rack, state, 0, 0, copy);return ret;
+}`;
+  const { files, index } = limitedProject(text), sites = args(files);
+  assert.equal(sites.length, 1, 'retain the literal argument without inferring its alias');
+  assert.equal(sites[0].name, 'priv_mode_change');
+  assert.equal(sites[0].argument!.position, 6); assert.equal(sites[0].argument!.callee, 'svc_send_event');
+  assert.equal(sites[0].location.start, files[0].text.indexOf('priv_mode_change);'));
+  assert.equal(sites[0].argument!.inferred, undefined);
+  assert.equal(sites[0].inference!.incomplete, true);
+  assert.ok(sites[0].inference!.reasons.some(reason => /Macro include traversal limit/.test(reason)));
+  const callees = relations(index, 'origin', 'callees');
+  assert.ok(callees.find(group => group.name === 'priv_mode_change')!.sites.every(site => site.ambiguous));
+  assert.equal(relations(index, 'origin', 'callees', false).some(group => group.name === 'priv_mode_change'), false);
+  assert.deepEqual(relations(index, 'priv_mode_change', 'callers').map(group => group.name), ['origin']);
+  assert.equal(files.some(file => file.references.some(ref => ref.name === 'priv_mode_change' && ref.callKind === 'inferred')), false);
+});
+
+test('partial direct arguments preserve unevaluated and local-shadow filtering', () => {
+  const { files } = limitedProject(prefix + 'void origin(void){svc(&target);(void)sizeof(svc(other));int other=0;svc(other);}');
+  assert.deepEqual(args(files).map(site => site.name), ['target']);
+  assert.equal(files[0].text.slice(args(files)[0].location.start, args(files)[0].location.end), '&target');
+});
+
+test('partial argument candidates reuse cached identity and recover after dependency changes', () => {
+  const target = analyzer.analyze('file:///demo/target.c', 'void target(void){}');
+  const { raw, files } = limitedProject('void svc(void (*)(void));void origin(void){svc(target);}', [target]);
+  assert.equal(args(files).length, 1);
+  assert.equal(analyzer.derive(raw)[0], files[0]);
+  const removed = analyzer.derive(raw.filter(file => file !== target));
+  assert.deepEqual(args(removed), [], 'deleting the target removes the partial argument candidate');
+  const repaired = analyzer.derive(raw.map(file => file.uri === 'file:///demo/h18.h' ? analyzer.analyze(file.uri, '') : file));
+  assert.equal(args(repaired).length, 1);
+  assert.equal(args(repaired)[0].inference?.incomplete, undefined, 'a repaired environment clears partial markers');
+});
+
 test('direct/address arguments retain exact locations and opaque receiver metadata', () => {
   const text = prefix + 'void origin(void){svc(target);svc(&target);}';
   const { files, index } = project(text), sites = args(files);

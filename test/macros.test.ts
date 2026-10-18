@@ -14,6 +14,18 @@ function project(sources: Record<string, string>) {
 }
 const calls = (index: RelationIndex, name = 'run') => index.relations(index.symbols().find(s => s.name === name && s.kind === 'function' && s.definition)!.id, 'callees');
 
+test('memory-limited preprocessing retains source arguments and retries when pressure clears', () => {
+  const raw = [analyzer.analyze('file:///demo/memory.c', '#define SUBMIT(cb) svc(cb)\nvoid target(void){}void svc(void (*)(void));void run(void){SUBMIT(target);}')];
+  const partial = analyzer.derive(raw, () => true);
+  assert.ok(partial[0].issues.some(issue => /memory budget/.test(issue)));
+  assert.ok(partial[0].functionArguments?.some(ref => ref.name === 'target' && ref.inference?.incomplete));
+  assert.equal(partial[0].references.some(ref => ref.expansion), false);
+  assert.equal(analyzer.derive(raw, () => true)[0], partial[0], 'unchanged limited results reuse identity');
+  const recovered = analyzer.derive(raw, () => false);
+  assert.equal(recovered[0].issues.some(issue => /memory budget/.test(issue)), false);
+  assert.ok(recovered[0].references.some(ref => ref.name === 'svc' && ref.expansion));
+});
+
 test('include traversal is bounded even when repeated headers produce no macro events', () => {
   const sources: Record<string, string> = { 'main.c': '#include "h18.h"\nvoid target(void){} void run(void){target();}', 'h0.h': '' };
   for (let n = 1; n <= 18; n++) sources[`h${n}.h`] = `#include "h${n-1}.h"\n#include "h${n-1}.h"\n`;

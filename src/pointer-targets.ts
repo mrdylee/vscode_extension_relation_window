@@ -13,7 +13,8 @@ interface State { memory: Map<string, Value>; effects: Map<string, Effect>; aliv
 interface Context { program: FlowProgram; locals: Map<string, FlowLocal>; exits: State[]; returned: Value }
 interface Observation { value: Value; expression: string; kind: 'variable' | 'unknown' }
 interface ArgumentObservation { call: Extract<Expr, { kind: 'call' }>; values: Map<number, Value> }
-const projectCache = new WeakMap<FileAnalysis, { inputs: FileAnalysis[]; results: FileAnalysis[] }>();
+const projectCache = new WeakMap<FileAnalysis, { inputs: FileAnalysis[]; results: FileAnalysis[]; memoryLimited?: boolean }>();
+const callbackMemoryLimit = 'Callback analysis memory budget reached; targets may be incomplete. Narrow Include/Exclude scope.';
 const fileCache = new WeakMap<FileAnalysis, { fingerprint: string; result: FileAnalysis }>();
 const arrayIndices = new WeakMap<Map<string, Value>, Map<string, Set<string>>>();
 const objectSlots = new WeakMap<Map<string, Value>, Map<string, Set<string>>>();
@@ -114,26 +115,30 @@ function uniqueCalls(refs: ReferenceRecord[]): ReferenceRecord[] {
 }
 
 // Static may-target propagation. Every produced edge is labelled as inferred.
-export function inferPointerCalls(files: FileAnalysis[]): FileAnalysis[] {
+export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => boolean): FileAnalysis[] {
   if (!files.length) return files;
   const cached = projectCache.get(files[0]);
-  if (cached && cached.inputs.length === files.length && files.every((file, n) => file === cached.inputs[n])) return cached.results;
+  if (cached && cached.inputs.length === files.length && files.every((file, n) => file === cached.inputs[n]) &&
+    (!cached.memoryLimited || memoryPressure?.())) return cached.results;
   const index = new RelationIndex(); files.forEach(file => index.update(file));
   const functionArguments = new FunctionArguments(files, index);
   const programs = files.flatMap(file => file.programs ?? []), byFunction = new Map<string, FlowProgram[]>();
   for (const program of programs) { const list = byFunction.get(program.id) ?? []; list.push(program); byFunction.set(program.id, list); }
   const references = files.flatMap(file => file.references.filter(ref => ref.kind === 'call' && ref.flowKey));
   const localNames = new Set(programs.flatMap(program => program.locals.map(local => local.name)));
-  if (!references.some(ref => ref.indirect || localNames.has(ref.name) || index.resolveReference(ref).some(s => s.kind === 'variable'))) {
+  const memoryLimited = memoryPressure?.() === true;
+  if (memoryLimited || !references.some(ref => ref.indirect || localNames.has(ref.name) || index.resolveReference(ref).some(s => s.kind === 'variable'))) {
     const results = files.map(file => {
       const references = uniqueCalls(file.references), argumentsFound = functionArguments.forFile(file.uri);
-      if (references === file.references && !argumentsFound.length) return file;
-      const fingerprint = JSON.stringify(['direct-sites', argumentsFound]);
+      const warnings = memoryLimited && file === files[0] ? [callbackMemoryLimit] : [];
+      if (references === file.references && !argumentsFound.length && !warnings.length) return file;
+      const fingerprint = JSON.stringify(['direct-sites', argumentsFound, warnings]);
       const previous = fileCache.get(file); if (previous?.fingerprint === fingerprint) return previous.result;
-      const result = { ...file, references, functionArguments: argumentsFound.length ? argumentsFound : undefined };
+      const result = { ...file, references, issues: warnings.length ? [...file.issues, ...warnings] : file.issues,
+        functionArguments: argumentsFound.length ? argumentsFound : undefined };
       fileCache.set(file, { fingerprint, result }); return result;
     });
-    projectCache.set(files[0], { inputs: files, results }); return results;
+    projectCache.set(files[0], { inputs: files, results, memoryLimited }); return results;
   }
   const heap = new Map<string, Value>(), summaries = new Map<string, Summary>();
   const deadline = performance.now() + 10_000;
@@ -153,8 +158,11 @@ export function inferPointerCalls(files: FileAnalysis[]): FileAnalysis[] {
   let changed = false, steps = 0;
   let timedOut = false, checks = 0;
   function expired() {
-    if (!timedOut && (++checks & 255) === 0 && performance.now() >= deadline) {
-      timedOut = true; notices.add('Callback analysis budget: 10 seconds; targets may be incomplete. Narrow Include/Exclude scope.');
+    if (!timedOut && (++checks & 255) === 0) {
+      if (memoryPressure?.()) { timedOut = true; notices.add(callbackMemoryLimit); }
+      else if (performance.now() >= deadline) {
+        timedOut = true; notices.add('Callback analysis budget: 10 seconds; targets may be incomplete. Narrow Include/Exclude scope.');
+      }
     }
     return timedOut;
   }
@@ -398,7 +406,7 @@ export function inferPointerCalls(files: FileAnalysis[]): FileAnalysis[] {
     return { ...blank(), numbers: value.numbers, nil: value.nil, unknown: true, reasons: ['Callback/storage addresses converted to scalar values are not tracked'] };
   }
   function evaluate(expr: Expr, state: State, ctx: Context): Value {
-    if (expired()) return unknown('Callback analysis time budget reached');
+    if (expired()) return unknown(notices.has(callbackMemoryLimit) ? callbackMemoryLimit : 'Callback analysis time budget reached');
     if (++steps > 2_000_000) { notices.add('Callback analysis work limit reached'); return unknown('Callback analysis work limit'); }
     if (expr.kind === 'number') {
       const text = expr.value.replace(/[uUlL]+$/, ''), n = /^0[0-7]+$/.test(text) ? parseInt(text, 8) : Number(text);
@@ -639,5 +647,5 @@ export function inferPointerCalls(files: FileAnalysis[]): FileAnalysis[] {
     const result = { ...file, references: unique, issues: [...file.issues, ...warnings], functionArguments: argumentsFound.length ? argumentsFound : undefined };
     fileCache.set(file, { fingerprint, result }); return result;
   });
-  projectCache.set(files[0], { inputs: files, results }); return results;
+  projectCache.set(files[0], { inputs: files, results, memoryLimited: notices.has(callbackMemoryLimit) }); return results;
 }

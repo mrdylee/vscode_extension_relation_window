@@ -407,7 +407,7 @@ export async function run() {
   const includeRoot = vscode.Uri.joinPath(root, 'repeated-includes');
   await vscode.workspace.fs.createDirectory(includeRoot);
   const includeUri = vscode.Uri.joinPath(includeRoot, 'main.c');
-  const includeSource = '#include "h27.h"\nvoid include_target(void){}void include_other(void){}void include_task(void){include_target();}\n';
+  const includeSource = '#include "h27.h"\nvoid include_target(void){}void include_other(void){}void include_argument(void){}void include_zsend(void (*)(void));void include_task(void){include_target();include_zsend(include_argument);}\n';
   await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(includeRoot, 'h0.h'), Buffer.from(''));
   for (let n = 1; n <= 27; n++) await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(includeRoot, `h${n}.h`), Buffer.from(`#include "h${n-1}.h"\n#include "h${n-1}.h"\n`));
   await vscode.workspace.fs.writeFile(includeUri, Buffer.from(includeSource));
@@ -430,9 +430,26 @@ export async function run() {
   assert.equal(api.view.state.graph.root.name, 'include_task');
   assert.equal(api.view.state.graph.root.children[0].name, 'include_target');
   assert.equal(api.view.state.graph.root.children[0].sites[0].ambiguous, true);
+  await vscode.workspace.getConfiguration('cRelation').update('includeFunctionArguments', true, vscode.ConfigurationTarget.Workspace);
+  const partialArgument = api.view.state.graph.root.children.find((node: any) => node.name === 'include_argument');
+  assert.ok(partialArgument); assert.ok(partialArgument.sites[0].argument);
+  assert.ok(partialArgument.sites[0].ambiguous && partialArgument.sites[0].inference.incomplete);
+  await api.view.handleMessage({ type: 'selectNode', key: partialArgument.key });
+  assert.equal(api.view.state.context.location.start, includeSource.indexOf('include_argument);'), 'partial argument previews its original location');
+  const includeArgumentPosition = includeDocument.positionAt(includeSource.indexOf('include_argument(void)'));
+  includeEditor.selection = new vscode.Selection(includeArgumentPosition, includeArgumentPosition);
+  api.view.track(includeEditor, true);
+  await api.view.handleMessage({ type: 'mode', value: 'callers' });
+  assert.deepEqual(api.view.state.graph.root.children.map((node: any) => node.name), ['include_task']);
+  includeEditor.selection = new vscode.Selection(includePosition, includePosition);
+  api.view.track(includeEditor, true);
+  await api.view.handleMessage({ type: 'mode', value: 'callees' });
   await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(includeRoot, 'h27.h'), Buffer.from(''));
   await includeIdle();
   assert.equal(api.workspace.index.files.get(includeUri.toString()).issues.some((issue: string) => /Macro include.*limit/.test(issue)), false);
+  assert.equal(api.view.state.graph.root.children.find((node: any) => node.name === 'include_argument').sites[0].inference?.incomplete, undefined);
+  await vscode.workspace.getConfiguration('cRelation').update('includeFunctionArguments', false, vscode.ConfigurationTarget.Workspace);
+  assert.equal(api.view.state.graph.root.children.some((node: any) => node.name === 'include_argument'), false);
   await vscode.workspace.fs.writeFile(includeUri, Buffer.from(includeSource.replace('include_target();', 'include_other();')));
   await includeIdle();
   assert.equal(api.view.state.graph.root.children[0].name, 'include_other', 'later source edits still update Relation');
@@ -568,8 +585,46 @@ export async function run() {
   await vscode.workspace.fs.delete(argumentsUri);
   await new Promise(resolve => setTimeout(resolve, 500)); await api.workspace.whenIdle();
   assert.equal(api.workspace.index.files.has(argumentsUri.toString()), false);
+  const failedWorker = api.workspace.worker, originalRequest = api.workspace.request;
+  let injectedWorkerFailure = false;
+  api.workspace.request = function(message: any) {
+    const request = originalRequest.call(this, message);
+    if (message.type === 'derive' && !injectedWorkerFailure) {
+      injectedWorkerFailure = true;
+      const error = Object.assign(new Error('Worker terminated due to reaching memory limit: JS heap out of memory'), { code: 'ERR_WORKER_OUT_OF_MEMORY' });
+      failedWorker.emit('error', error);
+      void failedWorker.terminate();
+    }
+    return request;
+  };
+  try { await api.workspace.reindex(); } finally { api.workspace.request = originalRequest; }
+  assert.ok(injectedWorkerFailure);
+  assert.match(api.workspace.status, /memory/i, 'a fatal Worker failure must not be overwritten with Index ready');
+  assert.ok(api.workspace.failures.has('worker'), 'the fatal Worker failure remains visible in Analysis notices');
+  await api.workspace.reindex(); await api.workspace.whenIdle();
+  assert.notEqual(api.workspace.worker, failedWorker, 'Rebuild index replaces a failed Worker');
+  assert.equal(api.workspace.status, 'Index ready');
+  assert.equal(api.workspace.failures.has('worker'), false);
+  assert.ok(api.workspace.index.files.size > 90, 'rebuilding after Worker failure restores the index');
+  const limitedWorker = api.workspace.worker;
+  let injectedMemoryNotice = false;
+  api.workspace.request = function(message: any) {
+    const request = originalRequest.call(this, message);
+    if (message.type !== 'derive' || injectedMemoryNotice) return request;
+    injectedMemoryNotice = true;
+    return { ...request, promise: request.promise.then((result: any) => {
+      result.files[0].issues.push('Macro analysis memory budget reached; results may be incomplete.');
+      return result;
+    }) };
+  };
+  try { await api.workspace.reindex(); } finally { api.workspace.request = originalRequest; }
+  assert.ok(injectedMemoryNotice);
+  assert.match(api.workspace.status, /^Partial index: memory budget/);
+  await api.workspace.reindex(); await api.workspace.whenIdle();
+  assert.notEqual(api.workspace.worker, limitedWorker, 'rebuilding a memory-limited index releases the old Worker');
+  assert.equal(api.workspace.status, 'Index ready');
   const output = process.env.C_RELATION_TEST_OUTPUT!;
   await mkdir(path.dirname(output), { recursive: true });
-  await writeFile(output, JSON.stringify({ passed: true, functionArguments: true, memberSyntax: true, boundedIncludeTraversal: true, checks: ['cast, returned, anonymous and initialized member navigation', 'workspace-persistent sorting, layout and direction preferences', 'native Settings entry point, separate Context registration and shared navigation', 'dual-direction call-site preview and index reuse', 'Context source navigation and relation reroot', 'Context cross-file variable navigation', 'Context lock and stale-message checks', 'selected identifier tracking', 'selection retry after indexing', 'unlock follows latest editor', 'same-symbol graph reuse', 'variable selection and access filters', 'variable actual-site preview preserves editor', 'variable access filter validation', 'variable uses continue into caller tree', 'activation', '93-file index completion', 'indexing does not open documents', 'WASM worker', 'click tracking', 'variable icon data', 'call sites', 'Context preserves editor', 'mode/depth/expand/collapse', 'locked root', 'explicit source open', 'invalid message target', '#if0 setting reindex', 'unsaved buffer', 'file create/delete', 'ambiguous symbol clears stale graph and Context', 'candidate selection'] }, null, 2));
+  await writeFile(output, JSON.stringify({ passed: true, functionArguments: true, memberSyntax: true, boundedIncludeTraversal: true, partialFunctionArguments: true, workerRecovery: true, checks: ['cast, returned, anonymous and initialized member navigation', 'workspace-persistent sorting, layout and direction preferences', 'native Settings entry point, separate Context registration and shared navigation', 'dual-direction call-site preview and index reuse', 'Context source navigation and relation reroot', 'Context cross-file variable navigation', 'Context lock and stale-message checks', 'selected identifier tracking', 'selection retry after indexing', 'unlock follows latest editor', 'same-symbol graph reuse', 'variable selection and access filters', 'variable actual-site preview preserves editor', 'variable access filter validation', 'variable uses continue into caller tree', 'activation', '93-file index completion', 'indexing does not open documents', 'WASM worker', 'click tracking', 'variable icon data', 'call sites', 'Context preserves editor', 'mode/depth/expand/collapse', 'locked root', 'explicit source open', 'invalid message target', '#if0 setting reindex', 'unsaved buffer', 'file create/delete', 'ambiguous symbol clears stale graph and Context', 'candidate selection'] }, null, 2));
   console.log('C Relation extension integration checks passed');
 }

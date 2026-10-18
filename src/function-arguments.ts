@@ -44,11 +44,13 @@ export class FunctionArguments {
       }
       for (const key of Object.keys(node)) if (key !== 'location' && key !== 'type' && key !== 'path') visit(node[key]);
     };
-    for (const file of files) for (const program of file.programs ?? []) visit(program.body);
+    for (const file of files) for (const program of [...(file.programs ?? []), ...(file.argumentPrograms ?? [])]) visit(program.body);
   }
   add(call: Call, n: number, targets: Map<string, Evidence[]>, inferred: boolean, incomplete: boolean, reasons: string[] = []) {
     const source = this.calls.get(call.key);
     if (!source) return;
+    incomplete ||= !!source.inference?.incomplete;
+    reasons = [...reasons, ...(source.inference?.reasons ?? [])];
     const location = call.args[n].location, callee = expression(call.callee);
     let rows = this.records.get(source.location.uri);
     if (!rows) this.records.set(source.location.uri, rows = new Map());

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { createAnalyzer } from '../src/analyzer';
 import { RelationIndex } from '../src/relations';
+import { inferPointerCalls } from '../src/pointer-targets';
 
 let analyzer: Awaited<ReturnType<typeof createAnalyzer>>;
 before(async () => { analyzer = await createAnalyzer(path.resolve('node_modules/web-tree-sitter/web-tree-sitter.wasm'), path.resolve('node_modules/tree-sitter-c/tree-sitter-c.wasm')); });
@@ -14,6 +15,18 @@ function project(sources: Record<string,string>) {
 const prelude = 'typedef void (*CB)(void); void foo(void){} void bar(void){}\n';
 const calls = (index: RelationIndex, name = 'run') => index.relations(index.symbols().find(s => s.name === name && s.kind === 'function' && s.definition)!.id, 'callees');
 const inferred = (index: RelationIndex, name = 'run') => calls(index,name).filter(g => g.callKind === 'inferred');
+
+test('callback memory pressure preserves literal arguments and retries propagation after recovery', () => {
+  const raw = [analyzer.analyze('file:///demo/memory.c', prelude + 'void svc(CB);void run(void){CB fp=foo;svc(foo);fp();}')];
+  const partial = inferPointerCalls(raw, () => true);
+  assert.ok(partial[0].issues.some(issue => /Callback analysis memory budget/.test(issue)));
+  assert.deepEqual(partial[0].functionArguments?.map(ref => ref.name), ['foo']);
+  assert.equal(partial[0].references.some(ref => ref.callKind === 'inferred'), false);
+  assert.equal(inferPointerCalls(raw, () => true)[0], partial[0]);
+  const recovered = inferPointerCalls(raw, () => false);
+  assert.ok(recovered[0].references.some(ref => ref.name === 'foo' && ref.callKind === 'inferred'));
+  assert.equal(recovered[0].issues.some(issue => /memory budget/.test(issue)), false);
+});
 
 test('local pointer assignments are flow sensitive and retain original call sites', () => {
   const source = prelude + 'void run(void){CB fp=foo;fp();fp=bar;fp();}';

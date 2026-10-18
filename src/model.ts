@@ -75,6 +75,7 @@ export interface FileAnalysis {
   guard?: { name: string; condition: string };
   projectScoped?: boolean;
   programs?: FlowProgram[]; initializers?: GlobalInitializer[];
+  argumentPrograms?: FlowProgram[];
   functionArguments?: ReferenceRecord[];
   statementConditions?: { start: number; conditions: string[] }[];
 }

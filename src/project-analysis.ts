@@ -1,19 +1,21 @@
 import { FileAnalysis, FlowExpression, FlowProgram, GlobalInitializer, Location, MacroDefinition, PreprocessorEvent, ReferenceRecord } from './model';
 import { joinTokens, locationIn, tokenizeC } from './c-tokens';
-import { MacroExpander } from './macro-expansion';
+import { MacroExpander, macroMemoryLimit } from './macro-expansion';
 
 type Analyze = (uri: string, text: string, skip?: boolean) => FileAnalysis;
 interface Event { offset: number; value: PreprocessorEvent }
 interface Cached { raw: FileAnalysis; paths: string; dependencies: Set<FileAnalysis>; result: FileAnalysis }
 const caches = new WeakMap<Analyze, Map<string, Cached>>();
 const includeLimit = 'Macro include traversal limit reached; call relationships may be incomplete';
-function timeline(file: FileAnalysis, files: Map<string, FileAnalysis>, issues: Set<string>, dependencies: Set<FileAnalysis>): Event[] {
+function timeline(file: FileAnalysis, files: Map<string, FileAnalysis>, issues: Set<string>, dependencies: Set<FileAnalysis>, memoryPressure?: () => boolean): Event[] {
   const result: Event[] = [];
   const defined = new Set<string>();
   let visits = 0;
   const byName = new Map<string, string[]>();
   for (const uri of files.keys()) { const name = uri.split('/').pop()!; const list = byName.get(name) ?? []; list.push(uri); byName.set(name, list); }
   function visit(current: FileAnalysis, offset: number | undefined, stack: Set<string>, inherited: string[]) {
+    if (issues.has(macroMemoryLimit)) return;
+    if ((visits & 255) === 0 && memoryPressure?.()) { issues.add(macroMemoryLimit); return; }
     if (visits > 40_000) return;
     dependencies.add(current);
     if (++visits > 40_000) { issues.add(includeLimit); return; }
@@ -22,6 +24,8 @@ function timeline(file: FileAnalysis, files: Map<string, FileAnalysis>, issues: 
     if (stack.size >= 64 || result.length >= 40_000) { issues.add('Macro include/event limit reached'); return; }
     const next = new Set(stack).add(current.uri);
     for (const event of current.preprocessor ?? []) {
+      if (issues.has(macroMemoryLimit)) break;
+      if ((result.length & 255) === 0 && memoryPressure?.()) { issues.add(macroMemoryLimit); break; }
       if (visits > 40_000) break;
       if (result.length >= 40_000) { issues.add('Macro include/event limit reached'); break; }
       const conditions = [...inherited, ...event.conditions.filter(condition => condition !== current.guard?.condition)];
@@ -75,7 +79,7 @@ function activeText(file: FileAnalysis, start: number, end: number) {
 
 // The analyzer callback uses the already initialized C parser, in the Worker.
 export function deriveMacroCalls(raw: FileAnalysis[], analyze: Analyze, parseCalls: (uri: string, text: string, original?: (start: number, end: number) => Location, namespace?: string, context?: (location: Location) => string[]) => { references: ReferenceRecord[]; issues: string[]; programs: FlowProgram[]; initializers: GlobalInitializer[] },
-  parseInitializer: (uri: string, text: string, original: (start: number, end: number) => Location) => { value: FlowExpression; issues: string[] }): FileAnalysis[] {
+  parseInitializer: (uri: string, text: string, original: (start: number, end: number) => Location) => { value: FlowExpression; issues: string[] }, memoryPressure?: () => boolean): FileAnalysis[] {
   const files = new Map(raw.map(file => [file.uri, file]));
   let cache = caches.get(analyze); if (!cache) caches.set(analyze, cache = new Map());
   for (const uri of cache.keys()) if (!files.has(uri)) cache.delete(uri);
@@ -83,18 +87,24 @@ export function deriveMacroCalls(raw: FileAnalysis[], analyze: Analyze, parseCal
   return raw.map(file => {
     if (!file.functions?.length && !file.initializers?.length) return file;
     const previous = cache!.get(file.uri);
-    if (previous?.raw === file && previous.paths === paths && [...previous.dependencies].every(dep => files.get(dep.uri) === dep)) return previous.result;
+    if (previous?.raw === file && previous.paths === paths && [...previous.dependencies].every(dep => files.get(dep.uri) === dep) &&
+      (!previous.result.issues.includes(macroMemoryLimit) || memoryPressure?.())) return previous.result;
     const dependencies = new Set<FileAnalysis>();
-    const issues = new Set<string>(); const events = timeline(file, files, issues, dependencies);
-    if (issues.has(includeLimit)) {
+    const issues = new Set<string>();
+    const partial = (reason: string) => {
+      issues.add(reason);
       // A prefix cannot establish the active macro environment. Retain source
-      // calls as partial candidates and avoid deriving targets from raw flow.
-      const result: FileAnalysis = { ...file, programs: [], initializers: [],
+      // calls as partial candidates. Raw flow is only for literal arguments.
+      const result: FileAnalysis = { ...file, programs: [], initializers: [], argumentPrograms: file.programs,
         references: file.references.map(ref => ref.kind === 'call' ? { ...ref,
-          inference: { expression: ref.name, evidence: [], incomplete: true, reasons: [includeLimit] } } : ref),
+          inference: { expression: ref.name, evidence: [], incomplete: true, reasons: [reason] } } : ref),
         issues: [...file.issues, ...issues] };
       cache!.set(file.uri, { raw: file, paths, dependencies, result }); return result;
-    }
+    };
+    if (memoryPressure?.()) return partial(macroMemoryLimit);
+    const events = timeline(file, files, issues, dependencies, memoryPressure);
+    if (issues.has(macroMemoryLimit)) return partial(macroMemoryLimit);
+    if (issues.has(includeLimit)) return partial(includeLimit);
     const lookup = environment(events);
     const sourceLocation = locationIn(file.text, file.uri);
     const macroIds = (name: string, offset: number) => lookup(name, offset).filter((m): m is MacroDefinition => !!m).map(m => `${m.location.uri}#${m.location.start}`);
@@ -107,11 +117,14 @@ export function deriveMacroCalls(raw: FileAnalysis[], analyze: Analyze, parseCal
       cache!.set(file.uri, { raw: file, paths, dependencies, result }); return result;
     }
     let initializers = (file.initializers ?? []).map(init => {
+      if (memoryPressure?.()) { issues.add(macroMemoryLimit); return init; }
       const tokens = tokenizeC(file.text.slice(init.location.start, init.location.end), (start, end) => sourceLocation(init.location.start + start, init.location.start + end));
-      const expander = new MacroExpander(lookup), variants = expander.expand(tokens);
+      const expander = new MacroExpander(lookup, memoryPressure), variants = expander.expand(tokens);
       expander.issues.forEach(issue => issues.add(issue));
+      if (issues.has(macroMemoryLimit)) return init;
       if (!variants.some(variant => variant.changed)) return init;
       const values = variants.map(variant => {
+        if (memoryPressure?.()) { issues.add(macroMemoryLimit); return init.value; }
         const offsets: number[] = []; let length = 0;
         for (const token of variant.tokens) { offsets.push(length); length += token.text.length + 1; }
         const original = (start: number, end: number): Location => {
@@ -126,19 +139,23 @@ export function deriveMacroCalls(raw: FileAnalysis[], analyze: Analyze, parseCal
       const value: FlowExpression = values.length === 1 ? values[0] : { kind: 'choice', values, location: init.location };
       return { ...init, value };
     });
+    if (issues.has(macroMemoryLimit)) return partial(macroMemoryLimit);
     const sourceConditions = new Map([...file.symbols.map(symbol => [symbol.location.start, symbol.conditions] as const), ...file.references.map(ref => [ref.location.start, ref.conditions] as const),
       ...(file.statementConditions ?? []).map(statement => [statement.start, statement.conditions] as const)]);
     let programs = file.programs ?? [];
     for (const fn of file.functions ?? []) {
+      if (memoryPressure?.()) return partial(macroMemoryLimit);
       const tokens = tokenizeC(activeText(file, fn.body.start, fn.body.end), (start, end) => sourceLocation(fn.body.start + start, fn.body.start + end));
-      const expander = new MacroExpander(lookup), variants = expander.expand(tokens);
+      const expander = new MacroExpander(lookup, memoryPressure), variants = expander.expand(tokens);
       expander.issues.forEach(issue => issues.add(issue));
+      if (issues.has(macroMemoryLimit)) return partial(macroMemoryLimit);
       if (!variants.some(variant => variant.changed)) continue;
       const calls: ReferenceRecord[] = [], seen = new Set<string>();
       const generatedPrograms: FlowProgram[] = [];
       const generatedInitializers: GlobalInitializer[] = [];
       const parsedVariants = new Map<string, ReturnType<typeof parseCalls>>();
       for (const [variantIndex, variant] of variants.entries()) {
+        if (memoryPressure?.()) return partial(macroMemoryLimit);
         const prefix = file.text.slice(fn.location.start, fn.body.start);
         const offsets: number[] = []; let length = prefix.length;
         for (const token of variant.tokens) { offsets.push(length); length += token.text.length + 1; }

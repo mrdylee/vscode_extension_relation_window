@@ -219,6 +219,14 @@ void run(struct Motor *m, struct Sensor *s) {
 
 ## 정확도와 범위
 
+v0.1.34부터 분석 Worker의 메모리 여유가 부족해지면 매크로·콜백 추가 분석을
+중단하고 **Partial index: memory budget reached**로 표시합니다. 이미 분석된
+소스 호출과 직접 함수 인자는 후보로 남습니다. 분석하지 못한 파일은 알림에
+표시됩니다. 실제 `ERR_WORKER_OUT_OF_MEMORY` 종료는 **Analysis stopped**로
+표시하며, Include/Exclude 범위를 줄이고 **Rebuild index**를 누르면 새 Worker로
+재시작합니다. 이전 버전에서 이미 종료됐다면 **Developer: Reload Window**가
+필요합니다. 모든 단일 대형 할당이나 시스템 메모리 부족을 막는 보장은 아닙니다.
+
 v0.1.33부터 매크로가 없는 헤더의 반복 방문도 제한합니다. 중첩 include가
 폭증하면 `Macro include traversal limit reached` 알림을 남기고 후속
 파일 갱신을 계속 처리합니다. 해당 파일은 원본 호출을 미확정 후보로 유지하며,

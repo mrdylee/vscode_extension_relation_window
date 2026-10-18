@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.34 — 2026-10-18
+
+- Reserve Worker heap headroom during macro expansion and callback propagation;
+  report partial results instead of letting optional analysis exhaust the heap.
+- Retain literal function-argument candidates and original Context locations when
+  preprocessing stops at a memory or repeated-include limit.
+- Preserve fatal Worker errors instead of displaying Index ready. Rebuild after
+  memory pressure or Worker termination starts a fresh analysis Worker.
+- Reject additional source parses already under memory pressure with visible
+  per-file notices. Keep Include/Exclude scope and heap limits user-independent.
+
 ## 0.1.33 — 2026-10-18
 
 - Bound repeated macro include traversal even when headers emit no define/undef

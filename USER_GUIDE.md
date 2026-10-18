@@ -132,6 +132,11 @@ notices apply. References and variable R/W filters retain their original meaning
 
 JSON setting: `"cRelation.includeFunctionArguments": true`.
 
+If macro include traversal reaches its limit, directly written function names
+and addresses can still appear as partial argument candidates. Their popup shows
+the incomplete-analysis reason; this does not confirm macro expansion or actual
+execution. Alias and function-pointer inference stays disabled for those files.
+
 Functions, variables, types and macros have distinct icons. Context and detail popups use syntax colors; these are not full compiler-based semantic highlighting.
 
 ## Symbol icons and badges
@@ -232,11 +237,26 @@ It does not determine build-specific `#ifdef`, `#ifndef`, `defined(...)` or macr
 
 ## If results are missing or slow
 
+From **v0.1.34**, the Worker reserves heap headroom before it exhausts its memory
+limit. Macro expansion and callback propagation can stop with **Partial index:
+memory budget reached**, while available source calls and literal function
+arguments remain usable. Files that cannot be parsed within the remaining budget
+are reported individually in **Analysis notices**. This is a best-effort safeguard;
+a very large single allocation or system/WASM memory pressure can still fail.
+
+An actual **ERR_WORKER_OUT_OF_MEMORY** now shows **Analysis stopped**, rather than
+**Index ready**. Narrow **Settings → Include / Exclude**, then click **Rebuild
+index** to create a fresh Worker after either memory condition. On older versions,
+use **Developer: Reload Window** to replace a terminated Worker. Increasing graph
+depth or toggling **Include Function Arguments** does not restart the analyzer.
+
 From **v0.1.33**, macro include processing also bounds repeated header visits,
 including headers with no macro definitions. A pathological include graph stops
 with **Macro include traversal limit reached** instead of blocking later
 source updates. Affected files retain source-call candidates marked incomplete;
-macro expansion and callback inference for those files are skipped. Narrow the
+with **Include Function Arguments** enabled, literal function arguments also
+remain as incomplete candidates. Macro expansion and callback execution inference
+for those files are skipped. Narrow the
 analysis scope or correct the include graph to obtain fuller results. Editing a
 relevant header automatically retries analysis. This limit does not exclude
 the entire source file from ordinary symbol navigation.

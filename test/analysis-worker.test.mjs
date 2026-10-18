@@ -3,6 +3,40 @@ import assert from 'node:assert/strict';
 import { Worker } from 'node:worker_threads';
 import path from 'node:path';
 
+test('macro growth yields partial function arguments without exhausting a small Worker heap', async () => {
+  const worker = new Worker(path.resolve('dist/analysis-worker.cjs'), { workerData: { assets: path.resolve('dist') }, resourceLimits: { maxOldGenerationSizeMb: 128 } });
+  let serial = 0; const pending = new Map();
+  worker.on('message', message => {
+    const request = pending.get(message.id); pending.delete(message.id);
+    if (message.error) request?.reject(new Error(message.error)); else request?.resolve(message.result);
+  });
+  worker.on('error', error => { for (const request of pending.values()) request.reject(error); pending.clear(); });
+  const request = data => {
+    const id = ++serial;
+    return { id, promise: new Promise((resolve, reject) => { pending.set(id, { resolve, reject }); worker.postMessage({ ...data, id }); }) };
+  };
+  let timer;
+  try {
+    const sources = [['file:///api.h', '#if BOARD\n#define M(x) foo(x)\n#else\n#define M(x) bar(x)\n#endif\nvoid foo(int);void bar(int);void svc(void (*)(void));\n']];
+    for (let n = 0; n < 20; n++) sources.push([`file:///source${n}.c`, `#include "api.h"\nvoid cb${n}(void){}void run${n}(void){${'M(0);'.repeat(500)}svc(cb${n});}`]);
+    const versions = [];
+    for (const [uri, text] of sources) {
+      const job = request({ uri, text, skip: true }); await job.promise;
+      versions.push([uri, job.id, -job.id]);
+    }
+    const result = await Promise.race([
+      request({ type: 'derive', versions }).promise,
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Memory-limited analysis did not finish')), 20000); })
+    ]);
+    assert.ok(result.files.some(file => file.issues.some(issue => /memory budget/.test(issue))));
+    for (let n = 0; n < 20; n++) assert.ok(result.files.find(file => file.uri === `file:///source${n}.c`).functionArguments?.some(ref => ref.name === `cb${n}`), 'literal callback arguments survive partial analysis');
+    assert.ok(result.files.some(file => file.functionArguments?.some(ref => ref.inference?.incomplete)));
+    assert.ok(result.files.every(file => !file.argumentPrograms));
+    const next = await request({ uri: 'file:///next.c', text: 'void next(void){}', skip: true }).promise;
+    assert.ok(next.symbols.some(symbol => symbol.name === 'next'), 'the Worker still accepts source changes');
+  } finally { clearTimeout(timer); await worker.terminate(); }
+});
+
 test('repeated empty includes cannot block following source analysis in the Worker', async () => {
   const worker = new Worker(path.resolve('dist/analysis-worker.cjs'), { workerData: { assets: path.resolve('dist') } });
   let serial = 0;
@@ -18,7 +52,7 @@ test('repeated empty includes cannot block following source analysis in the Work
   };
   let timer;
   try {
-    const versions = [], sources = [['file:///main.c', '#include "h27.h"\nvoid run(void){target();}'], ['file:///h0.h', '']];
+    const versions = [], sources = [['file:///main.c', '#include "h27.h"\nvoid target(void){}void svc(void (*)(void));void run(void){target();svc(target);}'], ['file:///h0.h', '']];
     for (let n = 1; n <= 27; n++) sources.push([`file:///h${n}.h`, `#include "h${n-1}.h"\n#include "h${n-1}.h"\n`]);
     for (const [uri, text] of sources) {
       const job = request({ uri, text, skip: true }); await job.promise;
@@ -30,8 +64,16 @@ test('repeated empty includes cannot block following source analysis in the Work
       Promise.all([deriving.promise, next.promise]),
       new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Include traversal blocked the following Worker request')), 3000); })
     ]);
-    assert.ok(result.files.find(file => file.uri === 'file:///main.c').issues.some(issue => /Macro include.*limit/.test(issue)));
+    const partial = result.files.find(file => file.uri === 'file:///main.c');
+    assert.ok(partial.issues.some(issue => /Macro include.*limit/.test(issue)));
+    assert.deepEqual(partial.functionArguments.map(ref => ref.name), ['target']);
+    assert.equal(partial.functionArguments[0].inference.incomplete, true);
+    assert.ok(result.files.every(file => !file.programs && !file.initializers && !file.argumentPrograms), 'argument-only flow stays in the Worker');
     assert.ok(parsed.symbols.some(symbol => symbol.name === 'next'));
+    const replay = await request({ type: 'derive', versions }).promise;
+    assert.deepEqual(replay.versions, result.versions, 'partial argument results retain identity until acknowledged');
+    for (const [uri, stamp] of result.versions) versions.find(entry => entry[0] === uri)[2] = stamp;
+    assert.equal((await request({ type: 'derive', versions }).promise).files.length, 0);
   } finally { clearTimeout(timer); await worker.terminate(); }
 });
 
