@@ -62,6 +62,20 @@ test('both-direction graphs share the 300-node budget and retain both sides', ()
   assert.ok(graph.root.children.length >= 149 && graph.callers!.length >= 149);
   assert.equal(graph.truncated, true);
 });
+test('ambiguous Callees graphs keep all displayed call sites without duplicating candidate lists in the view payload', () => {
+  const sources: Record<string, string> = {};
+  for (let n = 0; n < 150; n++) sources[`board-${n}.c`] = 'void send_event(void){}';
+  sources['app.c'] = 'void task(void){' + 'send_event();'.repeat(20) + '}';
+  const value = index(sources), task = value.symbols().find(s => s.name === 'task')!;
+  const relations = value.relations(task.id, 'callees');
+  assert.equal(relations.length, 150);
+  assert.ok(relations.every(group => group.sites.length === 20 && group.sites.every(site => site.candidates.length === 150 && site.ambiguous)));
+  const graph = value.graph(task.id, 'callees', 1)!;
+  assert.equal(graph.root.children.length, 150);
+  assert.ok(graph.root.children.every(node => node.ambiguous && node.sites.length === 20));
+  assert.equal(graph.root.children[0].sites[0].location.start, sources['app.c'].indexOf('send_event();'));
+  assert.ok(Buffer.byteLength(JSON.stringify(graph)) < 2_000_000, 'serialized navigation must not multiply all candidate IDs across candidate nodes and sites');
+});
 test('Callees resolves static scope and retains conditional candidates', () => {
   const value = index({ 'a.c': 'static void helper(void){} void task(void){helper();}', 'b.c': 'static void helper(void){}',
     'c.c': '#if BOARD\nvoid target(void){}\n#endif', 'd.c': 'void target(void){}', 'use.c': 'void use(void){target();}' });

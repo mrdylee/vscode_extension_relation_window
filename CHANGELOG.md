@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.37 — 2026-10-18
+
+- Prevent quadratic memory growth when Callees has many same-name target
+  candidates. Share resolver candidate lists within each call and omit this
+  internal metadata from displayed graph sites. Keep every displayed call site,
+  ambiguity markers and navigation; preserve complete resolver results.
+
 ## 0.1.36 — 2026-10-18
 
 - Add a compact ↩ Pin button beside Pinned · Follow paused. Reveal the pinned

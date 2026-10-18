@@ -90,7 +90,7 @@ export interface GraphNode {
   callKind?: CallKind;
   direction?: 'callers' | 'callees';
   containerName?: string;
-  conditions: string[]; sites: RelationSite[]; children: GraphNode[];
+  conditions: string[]; sites: Omit<RelationSite, 'candidates'>[]; children: GraphNode[];
   cycle: boolean; expanded: boolean; ambiguous: boolean;
 }
 export interface GraphData { root: GraphNode; callers?: GraphNode[]; truncated: boolean }

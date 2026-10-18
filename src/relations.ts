@@ -218,6 +218,8 @@ export class RelationIndex {
       .sort((a, b) => a.location.start - b.location.start);
     for (const ref of calls) {
       const candidates = this.resolve(ref);
+      const candidateIds = candidates.map(s => s.id);
+      const ambiguous = ref.callKind === 'inferred' || !!ref.argument?.inferred || !!ref.inference?.incomplete || candidates.length > 1 || candidates.some(s => s.conditions.length > 0) || ref.conditions.length > 0;
       for (const symbol of candidates.length ? candidates : [undefined]) {
         const callKind = ref.argument ? undefined : ref.indirect || symbol?.kind === 'variable' ? 'indirect'
           : symbol?.kind === 'function' ? ref.callKind ?? 'direct' : symbol?.kind === 'macro' ? 'macro' : 'unresolved';
@@ -225,8 +227,7 @@ export class RelationIndex {
         const group: RelationGroup = groups.get(key) ?? { key, symbol, name: symbol?.name ?? ref.name,
           kind: symbol?.kind ?? ref.unresolvedKind ?? 'unknown', sites: [], callKind };
         group.callKind ??= callKind;
-        group.sites.push({ ...ref, access: undefined, candidates: candidates.map(s => s.id),
-          ambiguous: ref.callKind === 'inferred' || !!ref.argument?.inferred || !!ref.inference?.incomplete || candidates.length > 1 || candidates.some(s => s.conditions.length > 0) || ref.conditions.length > 0 });
+        group.sites.push({ ...ref, access: undefined, candidates: candidateIds, ambiguous });
         groups.set(key, group);
       }
     }
@@ -278,7 +279,8 @@ export class RelationIndex {
         callKind: group?.callKind,
         direction: both && key !== 'root' ? direction as 'callers' | 'callees' : undefined,
         containerName: symbol?.containerName,
-        conditions: symbol?.conditions ?? [], sites: group?.sites ?? [], children: [], cycle,
+        // Candidate IDs are resolver metadata; the view only needs ambiguity and actual sites.
+        conditions: symbol?.conditions ?? [], sites: group?.sites.map(({ candidates, ...site }) => site) ?? [], children: [], cycle,
         expanded: false, ambiguous: group?.sites.some(s => s.ambiguous) ?? false };
       count++;
       const levels = key in expanded ? expanded[key] : remaining;
