@@ -2,7 +2,7 @@ import type { AnalysisPhase, Diagnostics, MemorySample } from './diagnostics';
 import type { ViewState } from './view-state';
 
 export const ISSUE_URL = 'https://github.com/mrdylee/vscode_extension_relation_window/issues/new?' + new URLSearchParams({
-  title: '[Bug] ', body: 'Paste the report copied from C Relations here. Describe the problem and reproduction steps. Review screenshots and code before posting: this issue is public.'
+  title: '[Bug] ', body: 'Paste the report copied from Dynsight here. Describe the problem and reproduction steps. Review screenshots and code before posting: this issue is public.'
 }).toString();
 export interface IssueReportInput {
   now: number; version: string; vscodeVersion: string; platform: string; arch: string; remoteName?: string;
@@ -76,7 +76,7 @@ export function createIssueReport(input: IssueReportInput): string {
     } : 'unavailable',
     sharedExtensionHost: memory(diagnostics.host)
   };
-  return `# C Relations problem report
+  return `# Dynsight problem report
 
 This GitHub issue will be public. Review this draft and any attachments before submitting.
 The generated summary omits source, symbols, paths, raw errors and Include/Exclude patterns.

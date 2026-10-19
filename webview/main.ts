@@ -283,7 +283,7 @@ function drawNode(node: GraphNode): HTMLElement {
   return branch;
 }
 // Keep native selects mounted while background index/preview messages arrive.
-const brand = el('strong', 'brand', `C Relations v${__EXTENSION_VERSION__}`);
+const brand = el('strong', 'brand', `Dynsight v${__EXTENSION_VERSION__}`);
 const mode = el('select');
 const depth = el('select'); depth.setAttribute('aria-label', 'Depth');
 for (let n = 1; n <= 8; n++) { const option = el('option', '', `${n} ${n === 1 ? 'level' : 'levels'}`); option.value = String(n); depth.append(option); }

@@ -1,4 +1,6 @@
-# C Relation Explorer
+# Dynsight — C Code Explorer
+
+기존 **C Relation Explorer**의 새 이름입니다. 기존 확장 ID와 `cRelation.*` 설정 키를 유지하므로 업데이트 후에도 설정과 단축키를 그대로 사용합니다.
 
 C 소스 폴더만 열어 함수의 호출·참조 관계, 변수의 읽기·쓰기 위치와 해당 코드를 함께 보는 VS Code 확장입니다. Source Insight의 Relation/Context 작업 흐름을 참고한 독립 구현입니다.
 
@@ -6,12 +8,12 @@ C 소스 폴더만 열어 함수의 호출·참조 관계, 변수의 읽기·쓰
 
 1. [GitHub Releases](https://github.com/mrdylee/vscode_extension_relation_window/releases/latest)에서 Windows / macOS / WSL용 VSIX를 받고, VS Code 명령 팔레트의 **Extensions: Install from VSIX…**로 설치합니다. 세 파일은 동일한 범용 패키지이며 이름만 구분합니다.
 2. C 소스가 있는 폴더를 엽니다. 빌드, SDK, clangd, `compile_commands.json`은 필요하지 않습니다.
-3. **C Relations: Open Relation and Context**를 실행합니다.
+3. **Dynsight: Open Relation and Context**를 실행합니다.
 4. 메인 편집기에서 함수나 변수 이름을 클릭합니다. 하단에 Context(왼쪽)와 Relation(오른쪽)이 표시됩니다.
 
 VS Code 데스크톱 1.95 이상이 필요합니다. 분석은 로컬 WASM으로 수행하며 소스 코드를 외부로 전송하지 않습니다. 업데이트 확인을 켜면 GitHub에 릴리스 정보를 요청합니다. 릴리스 게시 전에 Windows/macOS/Ubuntu에서 단위 테스트와 Extension Host 통합 테스트를 실행합니다. WSL 원격 연결 및 원격 자동 설치는 실환경 미검증입니다. 웹 전용 VS Code는 지원하지 않습니다.
 
-**WSL 설치:** Windows의 VS Code에서 Microsoft WSL 확장을 설치한 뒤 **WSL: Reopen Folder in WSL**로 C 소스 폴더를 엽니다. 그 창에서 VSIX를 설치하고 확장 목록의 **WSL: 배포판 이름**에 C Relation Explorer가 있는지 확인합니다. 필요하면 **Install in WSL**을 선택합니다. [VS Code WSL 안내](https://code.visualstudio.com/docs/remote/wsl#_managing-extensions)
+**WSL 설치:** Windows의 VS Code에서 Microsoft WSL 확장을 설치한 뒤 **WSL: Reopen Folder in WSL**로 C 소스 폴더를 엽니다. 그 창에서 VSIX를 설치하고 확장 목록의 **WSL: 배포판 이름**에 Dynsight — C Code Explorer가 있는지 확인합니다. 필요하면 **Install in WSL**을 선택합니다. [VS Code WSL 안내](https://code.visualstudio.com/docs/remote/wsl#_managing-extensions)
 
 ## 함수 아이콘 (v0.1.24 이상)
 
@@ -19,12 +21,12 @@ VS Code 데스크톱 1.95 이상이 필요합니다. 분석은 로컬 WASM으로
 
 ## 확장 안에서 설정과 사용법 열기 (v0.1.20 이상)
 
-GitHub를 방문하지 않아도 C Relations 상단의 두 버튼으로 사용할 수 있습니다.
+GitHub를 방문하지 않아도 Dynsight 상단의 두 버튼으로 사용할 수 있습니다.
 
 - **Settings**: 정렬·Context 레이아웃·Callers/Callees 좌우 배치와 Include/Exclude 등 확장의 모든 설정을 엽니다. 폴더를 열지 않은 경우 사용자 설정을 엽니다. 다중 폴더 워크스페이스에서는 설정 화면의 폴더 탭에서 개별 분석 범위를 지정할 수 있습니다.
 - **Help**: VSIX에 포함된 [사용 안내](USER_GUIDE.md)를 VS Code 문서 미리보기로 엽니다. 인터넷 연결 없이도 탐색 방법, 설정 예제, 비활성 코드 처리와 문제 해결을 읽을 수 있습니다. 현재 Relation은 유지됩니다.
 
-명령 팔레트에서도 **C Relations: Open Settings**, **C Relations: Open User Guide**를 실행할 수 있습니다. 버튼과 내장 안내는 영어로 표시합니다.
+명령 팔레트에서도 **Dynsight: Open Settings**, **Dynsight: Open User Guide**를 실행할 수 있습니다. 버튼과 내장 안내는 영어로 표시합니다.
 
 ## 분석 범위 설정: Include / Exclude
 
@@ -82,7 +84,7 @@ Settings 화면에서는 `@id:cRelation.include` 또는 `@id:cRelation.exclude`�
 
 Include/Exclude는 기본 분석에 포함할 파일을 정하고, **Macro Expansion Folders**는 그중 매크로 확장까지 수행할 소스를 정합니다. SDK 전체의 심볼은 필요하지만 상세한 매크로 분석은 App에만 필요한 경우에 사용할 수 있습니다.
 
-1. Relation의 **Settings → Macro Expansion Folders → Select folders…**를 누릅니다. 명령 팔레트의 **C Relations: Select Macro Expansion Folders**로도 열 수 있습니다.
+1. Relation의 **Settings → Macro Expansion Folders → Select folders…**를 누릅니다. 명령 팔레트의 **Dynsight: Select Macro Expansion Folders**로도 열 수 있습니다.
 2. 매크로를 확장할 항목만 체크하고 **OK**를 누릅니다. Include를 지정했다면 해당 패턴을, Include가 비어 있다면 최상위 폴더를 보여줍니다. 다중 폴더 워크스페이스에서는 먼저 대상 워크스페이스 폴더를 선택합니다.
 3. 자동 재분석 후 **Index ready**를 확인합니다. 전체 선택은 전체 확장, 전체 해제는 매크로 확장 끄기입니다. 취소하면 설정을 유지합니다.
 
@@ -103,7 +105,7 @@ Include/Exclude는 기본 분석에 포함할 파일을 정하고, **Macro Expan
 
 새 버전이 있으면 현재/새 버전과 변경 내역을 보여줍니다. **Update**를 선택한 경우에만 VSIX를 다운로드하고 설치합니다. **Later** 또는 창 닫기는 설치하지 않습니다. 설치 후에도 **Reload Window**를 선택해야 다시 로드합니다.
 
-- 수동 검사: 명령 팔레트 → **C Relations: Check for Updates**.
+- 수동 검사: 명령 팔레트 → **Dynsight: Check for Updates**.
 - 새 릴리스가 게시돼도 즉시 알림이 오는 방식은 아닙니다. 바로 확인하려면 수동 검사를 실행하세요. 수동 검사는 24시간 제한을 건너뛰며, 현재 버전이 최신이면 안내만 표시합니다.
 - 자동 검사 끄기: VS Code 사용자 설정의 **C Relation: Automatic Updates** 해제 (`cRelation.automaticUpdates`).
 - 업데이트 소스: [GitHub Releases](https://github.com/mrdylee/vscode_extension_relation_window/releases). 커밋만 푸시한 버전과 시험판은 설치하지 않습니다.
@@ -131,7 +133,7 @@ Include/Exclude는 기본 분석에 포함할 파일을 정하고, **Macro Expan
 - **Settings → Callee Sort**: 기본 이름순과 소스의 첫 호출 위치순을 선택합니다. 반복 호출은 한 노드로 묶으며 팝업의 위치 목록은 소스순입니다. 소스순은 실제 실행 순서를 의미하지 않습니다. 선택은 프로젝트별로 저장됩니다.
 - **Relation 배경을 왼쪽 버튼으로 드래그**하면 그래프를 이동합니다. 우클릭의 **Reset graph position**으로 되돌립니다. 심볼 클릭·더블클릭과 Context 텍스트 선택은 그대로 사용할 수 있습니다.
 - 고정 중에는 **Pinned · Follow paused** 옆의 **↩ Pin** 버튼으로 고정한 심볼 위치로 돌아갈 수 있습니다. 메인 편집기와 Context가 해당 심볼을 표시하고 Relation에서도 핀이 꽂힌 루트가 보이도록 이동합니다. 고정 상태와 펼친 가지는 유지됩니다.
-- **Settings → Context Layout → Combined / Combined · Full width / Separate**: Combined는 Context와 Relation을 함께 표시합니다. **Combined · Full width**는 두 창을 왼쪽·오른쪽 사이드바 아래까지 하단 전체 너비로 표시합니다. VS Code의 패널 정렬을 바꾸므로 Terminal 등 다른 하단 패널도 같은 너비를 사용하며, Combined나 Separate로 바꾸면 기본 편집기 너비로 돌아옵니다. Separate는 **C Relations Context**를 Explorer의 독립 뷰로 엽니다. 제목줄 드래그 또는 **View: Move View**로 왼쪽 파일 트리 아래 등 원하는 위치에 배치합니다. 세 방식 모두 분석 인덱스·미리보기·코드 이동·고정 상태를 공유합니다. Settings 버튼은 Include/Exclude를 포함한 확장의 모든 설정을 한곳에서 엽니다.
+- **Settings → Context Layout → Combined / Combined · Full width / Separate**: Combined는 Context와 Relation을 함께 표시합니다. **Combined · Full width**는 두 창을 왼쪽·오른쪽 사이드바 아래까지 하단 전체 너비로 표시합니다. VS Code의 패널 정렬을 바꾸므로 Terminal 등 다른 하단 패널도 같은 너비를 사용하며, Combined나 Separate로 바꾸면 기본 편집기 너비로 돌아옵니다. Separate는 **Dynsight Context**를 Explorer의 독립 뷰로 엽니다. 제목줄 드래그 또는 **View: Move View**로 왼쪽 파일 트리 아래 등 원하는 위치에 배치합니다. 세 방식 모두 분석 인덱스·미리보기·코드 이동·고정 상태를 공유합니다. Settings 버튼은 Include/Exclude를 포함한 확장의 모든 설정을 한곳에서 엽니다.
 - **Macro-expanded call**은 매크로 확장으로 찾은 호출입니다. **Inferred call**은 정적 분석으로 찾은 함수 포인터·콜백 후보이며 점선 아이콘과 근거 위치를 표시합니다. **Macro invocation**은 확장하지 못한 호출, **Indirect call**은 아직 모르는 간접 대상, **Unresolved call**은 분석 범위에 정의가 없는 호출입니다. 미확정 대상은 말단 노드로 남깁니다.
 - 함수 이름 선택: 해당 정의를 Context에서 미리 봅니다.
 - Relation 노드는 **아이콘 + 심볼 이름 한 줄**로 표시합니다. 마우스를 같은 노드 위에서 500ms 동안 멈추거나 노드에 포커스를 두고 Space를 누르면 상세 팝업이 열립니다. Escape로 닫습니다.
@@ -241,7 +243,7 @@ void run(struct Motor *m, struct Sensor *s) {
 
 ### 문제 신고하기 (v0.1.40)
 
-**Diagnostics → Report issue** 또는 명령 팔레트의 **C Relations: Report Issue**를
+**Diagnostics → Report issue** 또는 명령 팔레트의 **Dynsight: Report Issue**를
 실행하면 VS Code에서 수정 가능한 진단 보고서가 열립니다. 증상·재현 순서·예상/실제
 동작을 작성한 뒤 알림의 **Copy & Open GitHub**를 누르고, 열린 Issue 본문에
 붙여넣어 직접 제출하세요. GitHub 계정이 필요하며 Issue는 공개됩니다.

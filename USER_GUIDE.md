@@ -1,15 +1,20 @@
-# C Relations — User Guide
+# Dynsight — User Guide
 
-This guide is included with the extension and works offline. You do not need Git or a GitHub account to use C Relations.
+Dynsight — C Code Explorer is the new name of C Relation Explorer. The extension
+ID and `cRelation.*` settings/command IDs stay the same, preserving existing
+settings, keybindings and the update path. Some generated Settings labels still
+use **C Relation** because the setting keys are unchanged.
+
+This guide is included with the extension and works offline. You do not need Git or a GitHub account to use Dynsight.
 
 ## Start here
 
 1. Open a folder containing your C source files in VS Code. A build, SDK or compilation database is not required.
-2. Run **C Relations: Open Relation and Context** from the Command Palette.
+2. Run **Dynsight: Open Relation and Context** from the Command Palette.
 3. Click a function or variable name in the main editor. Relation shows its relationships; Context shows the selected code.
 4. Check the file count and index status at the bottom. Relationships may be incomplete while **Indexing C sources…** is shown.
 
-Use **Settings** in the C Relations toolbar to configure sorting, Context layout, call graph direction and Include/Exclude together for the current workspace. With no folder open, it opens user settings instead. In a multi-folder workspace, use folder settings for folder-specific Include/Exclude overrides; layout preferences apply to the whole window. **Help** opens this guide again. Both actions are also available in the Command Palette as **C Relations: Open Settings** and **C Relations: Open User Guide**.
+Use **Settings** in the Dynsight toolbar to configure sorting, Context layout, call graph direction and Include/Exclude together for the current workspace. With no folder open, it opens user settings instead. In a multi-folder workspace, use folder settings for folder-specific Include/Exclude overrides; layout preferences apply to the whole window. **Help** opens this guide again. Both actions are also available in the Command Palette as **Dynsight: Open Settings** and **Dynsight: Open User Guide**.
 
 The index stays in memory for the current window. Navigating or closing unchanged
 files reuses existing results. Edits (including unsaved edits), discarded edits,
@@ -63,7 +68,7 @@ Include/Exclude choose the files to index. **Macro Expansion Folders** chooses
 which indexed source bodies and initializers receive macro expansion.
 
 1. Click **Settings → Macro Expansion Folders → Select folders…**, or run
-   **C Relations: Select Macro Expansion Folders** from the Command Palette.
+   **Dynsight: Select Macro Expansion Folders** from the Command Palette.
 2. Check the entries that need expansion, then click **OK**. The list uses your
    Include patterns, or top-level folders when Include is empty. Saved custom
    patterns remain available. In multi-folder workspaces, choose a workspace
@@ -109,10 +114,10 @@ It does not guarantee that every project fits the Worker memory budget.
 
 ## Settings and moving Context (v0.1.30)
 
-Click **Settings** in Relation to open all C Relations settings in one place. Sorting and layout choices are configured here:
+Click **Settings** in Relation to open all Dynsight settings in one place. Sorting and layout choices are configured here:
 
 - **Callees sorting → Name order / Source order**: the default is name order. Source order groups each target at its first original call location, including macro-expanded and inferred calls. Repeated calls stay in one node, with popup locations in source order. Tied locations retain discovery order. This is the order written in source, not runtime evaluation order. Callers/References keep name order.
-- **Context layout → Combined / Combined · Full width / Separate**: Combined keeps Context and Relation together. **Combined · Full width** places them together across the bottom, beneath both sidebars, using VS Code's Justify panel alignment. Terminal and other bottom-panel views share that width. Selecting Combined or Separate after Full width restores Center alignment (editor width). Separate gives Relation the panel's available width and opens **C Relations Context** as an independent Explorer view. Drag that view's **header**, or use **View: Move View**, to move it below the file tree or to another supported VS Code location. VS Code remembers docking positions. Its width follows the destination area; long code lines may require horizontal scrolling. Syntax colors, code clicks, pinning and shared selection remain available in all three choices.
+- **Context layout → Combined / Combined · Full width / Separate**: Combined keeps Context and Relation together. **Combined · Full width** places them together across the bottom, beneath both sidebars, using VS Code's Justify panel alignment. Terminal and other bottom-panel views share that width. Selecting Combined or Separate after Full width restores Center alignment (editor width). Separate gives Relation the panel's available width and opens **Dynsight Context** as an independent Explorer view. Drag that view's **header**, or use **View: Move View**, to move it below the file tree or to another supported VS Code location. VS Code remembers docking positions. Its width follows the destination area; long code lines may require horizontal scrolling. Syntax colors, code clicks, pinning and shared selection remain available in all three choices.
 - **Call Graph Direction → Callers left / Callees right**, or **Callees left / Callers right**: applies to Callers & Callees mode. Changing sides preserves expanded branches, selection and the Callees sorting rule. The graph remains left aligned and left-side branches are visible initially; it does not center the selected function or reanalyze sources. Single-direction modes keep their existing orientation.
 
 Right-click inside Relation (or focus a node and press **Shift+F10**) for **Settings…** and **Reset graph position**. Reset returns the whole graph to its initial left-aligned position.
@@ -185,7 +190,7 @@ Functions, variables, types and macros have distinct icons. Context and detail p
 
 ## Symbol icons and badges
 
-![All C Relations symbol icons: outlined and filled functions, variables, types, macros, unknown symbols, dashed states and variable-use badges](media/symbol-icons.png)
+![All Dynsight symbol icons: outlined and filled functions, variables, types, macros, unknown symbols, dashed states and variable-use badges](media/symbol-icons.png)
 
 All icons remain **16×16**. Function icons retain the original rounded `ƒ` shape; fill distinguishes declarations from implementations.
 
@@ -284,7 +289,7 @@ It does not determine build-specific `#ifdef`, `#ifndef`, `defined(...)` or macr
 ### Report a problem (v0.1.40)
 
 1. Before **Rebuild index** or **Reload Window**, open **Diagnostics → Report issue**.
-   If the Relation panel is unavailable, use **C Relations: Report Issue** in the
+   If the Relation panel is unavailable, use **Dynsight: Report Issue** in the
    Command Palette. Reporting uses the last received measurements without waiting
    for a busy or stopped Worker.
 2. An editable Markdown draft opens in VS Code. Fill in the problem, reproduction
@@ -372,8 +377,8 @@ The graph displays at most 300 nodes. Recursion stops expansion along that path.
 
 ## WSL and updates
 
-In a WSL-connected VS Code window, install the VSIX into the WSL environment. Check that C Relation Explorer appears under the WSL extension list. Configure workspace scope from that same window and match Linux path casing.
+In a WSL-connected VS Code window, install the VSIX into the WSL environment. Check that Dynsight — C Code Explorer appears under the WSL extension list. Configure workspace scope from that same window and match Linux path casing.
 
-Use **C Relations: Check for Updates** to check for a newer release. Updates require internet access and your approval; analysis and this guide work offline. After installing an update, run **Developer: Reload Window** and verify the version shown next to **Context**.
+Use **Dynsight: Check for Updates** to check for a newer release. Updates require internet access and your approval; analysis and this guide work offline. After installing an update, run **Developer: Reload Window** and verify the version shown next to **Context**.
 
 Automatic checks are enabled by default and run when the production extension activates, then when due. Successful checks are limited to once per 24 hours; an hourly timer checks whether one is due. New releases do not trigger an immediate notification. From v0.1.22, failed network/metadata checks retry on the next hourly tick while the extension remains active. Manual checks bypass the daily interval and report failures. Automatic checks stay quiet on network errors and are disabled in development/test mode. Use the user setting **C Relation: Automatic Updates** to enable or disable them.

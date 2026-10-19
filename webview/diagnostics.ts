@@ -14,7 +14,7 @@ export function createDiagnostics(version: string, refresh: () => void, reportIs
   const dialog = el('dialog', '', 'memory-diagnostics');
   dialog.setAttribute('aria-label', 'Memory diagnostics');
   const header = el('div', '', 'diagnostics-heading');
-  header.append(el('strong', `C Relations v${version} · Diagnostics`));
+  header.append(el('strong', `Dynsight v${version} · Diagnostics`));
   const report = el('button', 'Report issue'), refreshButton = el('button', 'Refresh'), close = el('button', 'Close');
   report.type = refreshButton.type = close.type = 'button';
   report.title = 'Prepare a local report to review before sharing on GitHub';

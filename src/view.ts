@@ -63,7 +63,7 @@ export class RelationView implements vscode.Disposable {
         await vscode.commands.executeCommand('workbench.action.positionPanelBottom');
         if (this.state.contextLayout === 'combined-full-width') await vscode.commands.executeCommand('workbench.action.alignPanelJustify');
       } else if (previousLayout === 'combined-full-width') await vscode.commands.executeCommand('workbench.action.alignPanelCenter');
-    } catch (error) { void vscode.window.showErrorMessage(`C Relations: Could not change panel layout: ${String(error)}`); }
+    } catch (error) { void vscode.window.showErrorMessage(`Dynsight: Could not change panel layout: ${String(error)}`); }
   }
   resolveWebviewView(view: vscode.WebviewView, contextOnly = false) {
     if (contextOnly) this.contextView = view; else this.webview = view;
@@ -74,8 +74,8 @@ export class RelationView implements vscode.Disposable {
     const nonce = randomBytes(18).toString('hex');
     view.webview.html = `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
       <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${view.webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
-      <link rel="stylesheet" href="${css}"><title>C Relations</title></head><body data-view="${contextOnly ? 'context' : 'relation'}"><div id="app"></div><script nonce="${nonce}" src="${js}"></script></body></html>`;
-    view.webview.onDidReceiveMessage(message => { void this.handleMessage(message).catch(error => vscode.window.showErrorMessage(`C Relations: ${String(error)}`)); });
+      <link rel="stylesheet" href="${css}"><title>Dynsight</title></head><body data-view="${contextOnly ? 'context' : 'relation'}"><div id="app"></div><script nonce="${nonce}" src="${js}"></script></body></html>`;
+    view.webview.onDidReceiveMessage(message => { void this.handleMessage(message).catch(error => vscode.window.showErrorMessage(`Dynsight: ${String(error)}`)); });
     view.onDidDispose(() => {
       if (contextOnly && this.contextView === view) this.contextView = undefined;
       if (!contextOnly && this.webview === view) this.webview = undefined;

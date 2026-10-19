@@ -5,7 +5,7 @@ import path from 'node:path';
 import { downloadRelease, fetchLatestRelease, Release, UpdateChecker } from './updates';
 
 async function installRelease(release: Release) {
-  await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `Installing C Relations v${release.version}` }, async () => {
+  await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `Installing Dynsight v${release.version}` }, async () => {
     const bytes = await downloadRelease(release);
     const directory = await mkdtemp(path.join(tmpdir(), 'c-relation-update-'));
     try {
@@ -14,7 +14,7 @@ async function installRelease(release: Release) {
       await vscode.commands.executeCommand('workbench.extensions.installExtension', vscode.Uri.file(filename));
     } finally { await rm(directory, { recursive: true, force: true }); }
   });
-  const choice = await vscode.window.showInformationMessage(`C Relations v${release.version} installed. Reload the window to apply the update.`, 'Reload Window', 'Later');
+  const choice = await vscode.window.showInformationMessage(`Dynsight v${release.version} installed. Reload the window to apply the update.`, 'Reload Window', 'Later');
   if (choice === 'Reload Window') await vscode.commands.executeCommand('workbench.action.reloadWindow');
 }
 export function registerUpdates(context: vscode.ExtensionContext) {
@@ -24,15 +24,15 @@ export function registerUpdates(context: vscode.ExtensionContext) {
     saveCheck: async time => { await context.globalState.update('updates.lastCheck', time); },
     latest: fetchLatestRelease,
     confirm: async release => {
-      const choice = await vscode.window.showInformationMessage(`C Relations update: v${context.extension.packageJSON.version} → v${release.version}`, {
+      const choice = await vscode.window.showInformationMessage(`Dynsight update: v${context.extension.packageJSON.version} → v${release.version}`, {
         modal: true, detail: `${release.notes.slice(0, 4000) || 'No release notes available.'}\n\nRelease: ${release.url}\n\nSelect Update to download and install the extension.`
       }, 'Update', 'Later');
       return choice === 'Update';
     },
     install: installRelease,
     inform: async (message, error) => {
-      if (error) await vscode.window.showErrorMessage(`C Relations: ${message}`);
-      else await vscode.window.showInformationMessage(`C Relations: ${message}`);
+      if (error) await vscode.window.showErrorMessage(`Dynsight: ${message}`);
+      else await vscode.window.showInformationMessage(`Dynsight: ${message}`);
     }
   });
   const automatic = () => {

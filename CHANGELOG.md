@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.43 — 2026-10-19
+
+- Rename the visible product to **Dynsight — C Code Explorer**. Use **Dynsight**
+  in panels, commands, diagnostics, update prompts and issue reports.
+- Update README, offline Help and future release titles. Preserve the extension
+  identity, setting/command/view IDs, repository and VSIX naming for compatibility.
+
 ## 0.1.42 — 2026-10-19
 
 - Reuse existing source and callback results when unchanged documents close or
