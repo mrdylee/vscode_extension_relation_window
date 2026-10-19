@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { selectRelease, UpdateChecker, CHECK_INTERVAL, REPOSITORY_URL, type UpdateHost } from '../src/updates';
 
 const latest = (version = '0.2.0') => ({ tag_name: `v${version}`, body: '변수 분석 개선', draft: false, prerelease: false,
-  assets: [{ name: `c-relation-explorer-${version}.vsix`, size: 200,
-    browser_download_url: `${REPOSITORY_URL}/releases/download/v${version}/c-relation-explorer-${version}.vsix` }] });
+  assets: [{ name: `dynsight-${version}.vsix`, size: 200,
+    browser_download_url: `${REPOSITORY_URL}/releases/download/v${version}/dynsight-${version}.vsix` }] });
 function fixture() {
   const calls: string[] = []; let last = 0;
   const host: UpdateHost = {

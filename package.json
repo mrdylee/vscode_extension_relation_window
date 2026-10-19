@@ -1,9 +1,10 @@
 {
-  "name": "c-relation-explorer",
+  "name": "dynsight",
   "displayName": "Dynsight — C Code Explorer",
   "description": "Build-free C references, caller/callee graphs and a linked Context preview.",
-  "version": "0.1.43",
-  "publisher": "local-james-black",
+  "version": "0.1.44",
+  "publisher": "dylee",
+  "author": "dylee",
   "license": "MIT",
   "engines": {
     "vscode": "^1.95.0"
@@ -22,38 +23,38 @@
   "contributes": {
     "commands": [
       {
-        "command": "cRelation.reportIssue",
+        "command": "dynsight.reportIssue",
         "title": "Dynsight: Report Issue"
       },
       {
-        "command": "cRelation.open",
+        "command": "dynsight.open",
         "title": "Dynsight: Open Relation and Context"
       },
       {
-        "command": "cRelation.reindex",
+        "command": "dynsight.reindex",
         "title": "Dynsight: Rebuild Index"
       },
       {
-        "command": "cRelation.checkForUpdates",
+        "command": "dynsight.checkForUpdates",
         "title": "Dynsight: Check for Updates"
       },
       {
-        "command": "cRelation.openSettings",
+        "command": "dynsight.openSettings",
         "title": "Dynsight: Open Settings"
       },
       {
-        "command": "cRelation.selectMacroExpansionFolders",
+        "command": "dynsight.selectMacroExpansionFolders",
         "title": "Dynsight: Select Macro Expansion Folders"
       },
       {
-        "command": "cRelation.help",
+        "command": "dynsight.help",
         "title": "Dynsight: Open User Guide"
       }
     ],
     "viewsContainers": {
       "panel": [
         {
-          "id": "cRelations",
+          "id": "dynsight",
           "title": "Dynsight",
           "icon": "media/relation.svg"
         }
@@ -63,15 +64,15 @@
       "explorer": [
         {
           "type": "webview",
-          "id": "cRelation.context",
+          "id": "dynsight.context",
           "name": "Dynsight Context",
-          "when": "config.cRelation.contextLayout == separate"
+          "when": "config.dynsight.contextLayout == separate"
         }
       ],
-      "cRelations": [
+      "dynsight": [
         {
           "type": "webview",
-          "id": "cRelation.explorer",
+          "id": "dynsight.explorer",
           "name": "Relation + Context"
         }
       ]
@@ -79,13 +80,13 @@
     "configuration": {
       "title": "Dynsight",
       "properties": {
-        "cRelation.includeFunctionArguments": {
+        "dynsight.includeFunctionArguments": {
           "type": "boolean",
           "default": false,
           "scope": "window",
           "description": "Include functions passed as arguments in Callers, Callees and Callers & Callees. Dotted connectors mean argument passing, not proof of invocation. Changes reuse the existing index."
         },
-        "cRelation.callGraphDirection": {
+        "dynsight.callGraphDirection": {
           "type": "string",
           "enum": ["callers-left", "callees-left"],
           "enumItemLabels": ["Callers left / Callees right", "Callees left / Callers right"],
@@ -93,7 +94,7 @@
           "scope": "window",
           "description": "Left/right branch placement in Callers & Callees mode. Changes presentation immediately without reindexing or resetting expanded branches."
         },
-        "cRelation.calleeSort": {
+        "dynsight.calleeSort": {
           "type": "string",
           "enum": ["name", "source"],
           "enumDescriptions": ["Sort Callees by symbol name.", "Sort Callees by their first call location in source, not runtime execution order."],
@@ -101,7 +102,7 @@
           "scope": "window",
           "description": "Callees sorting. Open with the Relation Settings button. Callers and References keep name order."
         },
-        "cRelation.contextLayout": {
+        "dynsight.contextLayout": {
           "type": "string",
           "enum": ["combined", "combined-full-width", "separate"],
           "enumItemLabels": ["Combined", "Combined · Full width", "Separate"],
@@ -110,33 +111,33 @@
           "scope": "window",
           "description": "Choose Combined, Combined · Full width (beneath both sidebars), or Separate Context. Full width also changes Terminal and other bottom-panel views. All layouts share the same analysis and selection."
         },
-        "cRelation.include": {
+        "dynsight.include": {
           "type": "array",
           "items": { "type": "string", "minLength": 1 },
           "default": [],
           "scope": "resource",
           "description": "Workspace-relative glob patterns to include in C/H analysis, for example App/** or Drivers/**. Empty includes all C/H files. Exclude always takes priority. Uses forward slashes. Changes automatically rebuild the index."
         },
-        "cRelation.exclude": {
+        "dynsight.exclude": {
           "type": "array",
           "items": { "type": "string", "minLength": 1 },
           "default": [],
           "scope": "resource",
           "description": "Workspace-relative glob patterns excluded from indexing and file watching, for example **/Tools/Polyspace/**. Exclude takes priority over Include. Uses forward slashes. Changes automatically rebuild the index. Independent of files.exclude, search.exclude and C_Cpp.files.exclude."
         },
-        "cRelation.macroExpansionFolders": {
+        "dynsight.macroExpansionFolders": {
           "type": "array",
           "items": { "type": "string", "minLength": 1 },
           "default": ["**"],
           "scope": "resource",
-          "markdownDescription": "[Select folders…](command:cRelation.selectMacroExpansionFolders) with checkboxes, or enter workspace-relative glob patterns such as `App/**`. Default `[\"**\"]` expands all indexed sources; an empty list disables macro expansion. Unchecked sources keep basic analysis and header definitions remain available to checked sources. Include/Exclude still control which files are indexed. Changes automatically rebuild the index."
+          "markdownDescription": "[Select folders…](command:dynsight.selectMacroExpansionFolders) with checkboxes, or enter workspace-relative glob patterns such as `App/**`. Default `[\"**\"]` expands all indexed sources; an empty list disables macro expansion. Unchecked sources keep basic analysis and header definitions remain available to checked sources. Include/Exclude still control which files are indexed. Changes automatically rebuild the index."
         },
-        "cRelation.skipInactive": {
+        "dynsight.skipInactive": {
           "type": "boolean",
           "default": true,
           "description": "Exclude provably inactive #if 0/1 branches. Unknown conditions remain visible."
         },
-        "cRelation.automaticUpdates": {
+        "dynsight.automaticUpdates": {
           "type": "boolean",
           "default": true,
           "scope": "application",
@@ -148,7 +149,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test test/core.test.ts test/macros.test.ts test/pointer-calls.test.ts test/function-arguments.test.ts test/members.test.ts test/syntax.test.ts test/updates.test.ts test/issue-report.test.ts test/issue-report-service.test.ts",
+    "test": "tsx --test test/core.test.ts test/macros.test.ts test/pointer-calls.test.ts test/function-arguments.test.ts test/members.test.ts test/syntax.test.ts test/updates.test.ts test/issue-report.test.ts test/issue-report-service.test.ts test/branding-migration.test.ts",
     "test:extension": "npm run build && node scripts/test-extension.mjs",
     "test:worker": "npm run build && node --test test/analysis-worker.test.mjs test/workspace.test.mjs",
     "test:memory": "node --expose-gc --import tsx --test test/analysis-memory.test.ts",
@@ -157,7 +158,7 @@
     "test:freertos": "npm run build && node scripts/test-freertos.mjs",
     "test:ui": "npm run build && tsx test/create-ui-fixture.ts && node test/ui.mjs",
     "vscode:prepublish": "npm run build",
-    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license --out artifacts/c-relation-explorer-0.1.43.vsix"
+    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license --out artifacts/dynsight-0.1.44.vsix"
   },
   "dependencies": {
     "minimatch": "10.2.6",

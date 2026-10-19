@@ -7,7 +7,7 @@ export async function run() {
   const opened: string[] = [];
   const listener = vscode.workspace.onDidOpenTextDocument(document => { if (document.uri.scheme === 'file' && /\.[ch]$/i.test(document.uri.path)) opened.push(document.uri.toString()); });
   const start = Date.now();
-  const api = await vscode.extensions.getExtension('local-james-black.c-relation-explorer')!.activate();
+  const api = await vscode.extensions.getExtension('dylee.dynsight')!.activate();
   let timeout: ReturnType<typeof setTimeout>;
   try {
     await Promise.race([api.workspace.ready.then(() => api.workspace.whenIdle()), new Promise((_, reject) => {
@@ -80,7 +80,7 @@ export async function run() {
     return result;
   };
   try {
-    await vscode.commands.executeCommand('cRelation.open');
+    await vscode.commands.executeCommand('dynsight.open');
     const deadline = Date.now() + 5000;
     while (!webviewReady && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
     assert.ok(webviewReady, 'webview ready before tracking measurement');

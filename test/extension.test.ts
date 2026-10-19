@@ -4,14 +4,14 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 export async function run() {
-  const ext = vscode.extensions.getExtension('local-james-black.c-relation-explorer');
+  const ext = vscode.extensions.getExtension('dylee.dynsight');
   assert.ok(ext, 'extension registered');
   const root = vscode.workspace.workspaceFolders![0].uri;
   const excludedUri = vscode.Uri.joinPath(root, 'Tools', 'Polyspace', 'generated.c');
   const excludedPatterns = ['**/Tools/Polyspace/**', '**/{generated,vendor}/**'];
   await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(root, 'Tools', 'Polyspace'));
   await vscode.workspace.fs.writeFile(excludedUri, Buffer.from('void excluded(void){check_fault(1);}'));
-  await vscode.workspace.getConfiguration('cRelation').update('exclude', excludedPatterns, vscode.ConfigurationTarget.Workspace);
+  await vscode.workspace.getConfiguration('dynsight').update('exclude', excludedPatterns, vscode.ConfigurationTarget.Workspace);
   const originalFetch = globalThis.fetch;
   let automaticReleaseChecks = 0;
   globalThis.fetch = async (input, init) => {
@@ -23,6 +23,14 @@ export async function run() {
   };
   const api = await ext.activate();
   assert.ok(api.workspace, 'workspace analysis service exported');
+  assert.equal(ext.packageJSON.publisher, 'dylee');
+  assert.equal(ext.packageJSON.name, 'dynsight');
+  assert.ok(Object.keys(ext.packageJSON.contributes.configuration.properties).every(key => key.startsWith('dynsight.')));
+  assert.equal(vscode.workspace.getConfiguration('dynsight').inspect('calleeSort')!.workspaceValue, 'source', 'legacy workspace preference migrated');
+  assert.equal(vscode.workspace.getConfiguration('cRelation').inspect('calleeSort')?.workspaceValue, undefined, 'legacy workspace key removed after migration');
+  assert.deepEqual(vscode.workspace.getConfiguration('dynsight', root).get('include'), ['**/*.{c,h}'], 'legacy include scope migrated');
+  await vscode.workspace.getConfiguration('dynsight').update('calleeSort', 'name', vscode.ConfigurationTarget.Workspace);
+  assert.ok((await vscode.commands.getCommands()).includes('cRelation.open'), 'legacy keybinding command remains available');
   let indexTimeout: ReturnType<typeof setTimeout>;
   try {
     await Promise.race([api.workspace.ready.then(() => api.workspace.whenIdle()), new Promise((_, reject) => { indexTimeout = setTimeout(() => reject(new Error('Initial indexing did not finish within 15 seconds')), 15000); })]);
@@ -30,9 +38,9 @@ export async function run() {
   await api.workspace.whenIdle();
   globalThis.fetch = originalFetch;
   assert.equal(automaticReleaseChecks, 0, 'test-mode activation never checks GitHub automatically');
-  assert.ok((await vscode.commands.getCommands()).includes('cRelation.checkForUpdates'));
-  assert.ok((await vscode.commands.getCommands()).includes('cRelation.openSettings'), 'scope settings command registered');
-  assert.ok((await vscode.commands.getCommands()).includes('cRelation.help'), 'offline help command registered');
+  assert.ok((await vscode.commands.getCommands()).includes('dynsight.checkForUpdates'));
+  assert.ok((await vscode.commands.getCommands()).includes('dynsight.openSettings'), 'scope settings command registered');
+  assert.ok((await vscode.commands.getCommands()).includes('dynsight.help'), 'offline help command registered');
   assert.equal(api.workspace.index.files.size, 93, 'all files indexed beyond the document cache limit');
   let openedByReindex = 0;
   const opening = vscode.workspace.onDidOpenTextDocument(() => openedByReindex++);
@@ -59,7 +67,7 @@ export async function run() {
   assert.equal(api.workspace.revision, navigationRevision, 'unchanged editor navigation reuses the index');
   const document = await vscode.workspace.openTextDocument(vscode.Uri.joinPath(root, 'control.c'));
   const editor = await vscode.window.showTextDocument(document);
-  await vscode.commands.executeCommand('cRelation.open');
+  await vscode.commands.executeCommand('dynsight.open');
   const offset = document.getText().indexOf('check_fault(1)');
   editor.selection = new vscode.Selection(document.positionAt(offset), document.positionAt(offset));
   await new Promise(resolve => setTimeout(resolve, 500));
@@ -149,7 +157,7 @@ export async function run() {
   assert.equal(api.view.state.graph.root.name, 'check_fault', 'unknown message targets ignored');
   const disabledOn = api.workspace.index.relations(selected.graph.root.symbolId, 'callers').find((g: any) => g.name === 'background_task').sites.length;
   assert.equal(disabledOn, 1);
-  await vscode.workspace.getConfiguration('cRelation').update('skipInactive', false, vscode.ConfigurationTarget.Workspace);
+  await vscode.workspace.getConfiguration('dynsight').update('skipInactive', false, vscode.ConfigurationTarget.Workspace);
   await new Promise(resolve => setTimeout(resolve, 200));
   await api.workspace.whenIdle();
   const disabledOff = api.workspace.index.relations(selected.graph.root.symbolId, 'callers').find((g: any) => g.name === 'background_task').sites.length;
@@ -284,16 +292,16 @@ export async function run() {
   assert.equal(api.workspace.index.files.has(excludedUri.toString()), false, `editing excluded files does not add them: ${excludedUri} / ${excludedDocument.uri}`);
   assert.equal(api.workspace.index.files.has(excludedDocument.uri.toString()), false, 'normalized editor URI is also excluded');
   assert.equal(api.workspace.index.files.has(generatedUri.toString()), false, 'watchers honor glob exclusions');
-  await vscode.workspace.getConfiguration('cRelation').update('exclude', [], vscode.ConfigurationTarget.Workspace);
+  await vscode.workspace.getConfiguration('dynsight').update('exclude', [], vscode.ConfigurationTarget.Workspace);
   await new Promise(resolve => setTimeout(resolve, 500));
   await api.workspace.whenIdle();
   assert.ok(api.workspace.index.files.get(excludedUri.toString())?.text.includes('unsaved excluded edit'), 'removing exclusions reindexes unsaved buffers');
   assert.ok(api.workspace.index.files.has(generatedUri.toString()));
-  await vscode.workspace.getConfiguration('cRelation').update('exclude', excludedPatterns, vscode.ConfigurationTarget.Workspace);
+  await vscode.workspace.getConfiguration('dynsight').update('exclude', excludedPatterns, vscode.ConfigurationTarget.Workspace);
   await new Promise(resolve => setTimeout(resolve, 500));
   await api.workspace.whenIdle();
   assert.equal(api.workspace.index.files.has(excludedUri.toString()), false, 'adding exclusions removes old index entries');
-  const settings = vscode.workspace.getConfiguration('cRelation');
+  const settings = vscode.workspace.getConfiguration('dynsight');
   await settings.update('include', ['control.c', '*.h', 'Tools/**'], vscode.ConfigurationTarget.Workspace);
   await new Promise(resolve => setTimeout(resolve, 500));
   await api.workspace.whenIdle();
@@ -349,7 +357,7 @@ export async function run() {
   const rootBeforeHelp = api.view.state.graph?.root.symbolId;
   const guideUri = vscode.Uri.joinPath(ext.extensionUri, 'USER_GUIDE.md');
   const guide = Buffer.from(await vscode.workspace.fs.readFile(guideUri)).toString('utf8');
-  assert.ok(guide.includes('Exclude always wins.') && guide.includes('cRelation.include'), 'bundled guide explains scope precedence');
+  assert.ok(guide.includes('Exclude always wins.') && guide.includes('dynsight.include'), 'bundled guide explains scope precedence');
   assert.ok(guide.includes('media/symbol-icons.png'), 'offline Help links to the symbol legend');
   const legend = await vscode.workspace.fs.readFile(vscode.Uri.joinPath(ext.extensionUri, 'media', 'symbol-icons.png'));
   assert.deepEqual([...legend.slice(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10], 'bundled icon legend is an accessible PNG');
@@ -455,7 +463,7 @@ export async function run() {
   assert.equal(api.view.state.graph.root.name, 'include_task');
   assert.equal(api.view.state.graph.root.children[0].name, 'include_target');
   assert.equal(api.view.state.graph.root.children[0].sites[0].ambiguous, true);
-  await vscode.workspace.getConfiguration('cRelation').update('includeFunctionArguments', true, vscode.ConfigurationTarget.Workspace);
+  await vscode.workspace.getConfiguration('dynsight').update('includeFunctionArguments', true, vscode.ConfigurationTarget.Workspace);
   const partialArgument = api.view.state.graph.root.children.find((node: any) => node.name === 'include_argument');
   assert.ok(partialArgument); assert.ok(partialArgument.sites[0].argument);
   assert.ok(partialArgument.sites[0].ambiguous && partialArgument.sites[0].inference.incomplete);
@@ -473,7 +481,7 @@ export async function run() {
   await includeIdle();
   assert.equal(api.workspace.index.files.get(includeUri.toString()).issues.some((issue: string) => /Macro include.*limit/.test(issue)), false);
   assert.equal(api.view.state.graph.root.children.find((node: any) => node.name === 'include_argument').sites[0].inference?.incomplete, undefined);
-  await vscode.workspace.getConfiguration('cRelation').update('includeFunctionArguments', false, vscode.ConfigurationTarget.Workspace);
+  await vscode.workspace.getConfiguration('dynsight').update('includeFunctionArguments', false, vscode.ConfigurationTarget.Workspace);
   assert.equal(api.view.state.graph.root.children.some((node: any) => node.name === 'include_argument'), false);
   await vscode.workspace.fs.writeFile(includeUri, Buffer.from(includeSource.replace('include_target();', 'include_other();')));
   await includeIdle();
@@ -498,7 +506,7 @@ export async function run() {
   await vscode.workspace.fs.writeFile(macroHeader, Buffer.from('#define WRAP(x) changed_target(x)\n'));
   await new Promise(resolve => setTimeout(resolve, 500)); await api.workspace.whenIdle();
   assert.deepEqual(api.view.state.graph.root.children.map((node: any) => node.name), ['changed_target']);
-  const macroSettings = vscode.workspace.getConfiguration('cRelation');
+  const macroSettings = vscode.workspace.getConfiguration('dynsight');
   const indexedBeforePolicy = [...api.workspace.index.files.keys()].sort();
   await macroSettings.update('macroExpansionFolders', ['control.c'], vscode.ConfigurationTarget.Workspace);
   await new Promise(resolve => setTimeout(resolve, 500)); await api.workspace.whenIdle();
@@ -570,18 +578,18 @@ export async function run() {
   assert.equal(api.view.state.context.location.start, layoutSource.indexOf('layout_pivot();'));
   assert.equal(api.view.state.graph.root.name, 'layout_pivot');
   const originalAnalysis = api.workspace.index.files.get(layoutUri.toString());
-  await vscode.workspace.getConfiguration('cRelation').update('calleeSort', 'source', vscode.ConfigurationTarget.Workspace);
+  await vscode.workspace.getConfiguration('dynsight').update('calleeSort', 'source', vscode.ConfigurationTarget.Workspace);
   assert.deepEqual(api.view.state.graph.root.children.map((node: any) => node.name), ['layout_z', 'layout_a']);
-  assert.equal(vscode.workspace.getConfiguration('cRelation').inspect('calleeSort')!.workspaceValue, 'source');
+  assert.equal(vscode.workspace.getConfiguration('dynsight').inspect('calleeSort')!.workspaceValue, 'source');
   const originalGraph = api.view.state.graph, originalPreview = api.view.state.context;
-  await vscode.workspace.getConfiguration('cRelation').update('callGraphDirection', 'callees-left', vscode.ConfigurationTarget.Workspace);
+  await vscode.workspace.getConfiguration('dynsight').update('callGraphDirection', 'callees-left', vscode.ConfigurationTarget.Workspace);
   assert.equal(api.view.state.callGraphDirection, 'callees-left');
   assert.equal(api.view.state.graph, originalGraph, 'orientation does not query or rebuild graph data');
   assert.equal(api.view.state.context, originalPreview, 'orientation preserves preview selection');
-  assert.equal(vscode.workspace.getConfiguration('cRelation').inspect('callGraphDirection')!.workspaceValue, 'callees-left');
-  await vscode.workspace.getConfiguration('cRelation').update('contextLayout', 'separate', vscode.ConfigurationTarget.Workspace);
+  assert.equal(vscode.workspace.getConfiguration('dynsight').inspect('callGraphDirection')!.workspaceValue, 'callees-left');
+  await vscode.workspace.getConfiguration('dynsight').update('contextLayout', 'separate', vscode.ConfigurationTarget.Workspace);
   assert.equal(api.view.state.contextLayout, 'separate');
-  assert.equal(vscode.workspace.getConfiguration('cRelation').inspect('contextLayout')!.workspaceValue, 'separate');
+  assert.equal(vscode.workspace.getConfiguration('dynsight').inspect('contextLayout')!.workspaceValue, 'separate');
   for (let attempt = 0; attempt < 50 && !api.view.contextView; attempt++) await new Promise(resolve => setTimeout(resolve, 50));
   assert.ok(api.view.contextView, 'separate native Context view resolves in the Extension Host');
   assert.ok(api.view.contextView.webview.html.includes('data-view="context"'));
@@ -590,13 +598,13 @@ export async function run() {
     column: layoutSource.indexOf('layout_a(void)'), text: layoutSource });
   assert.equal(vscode.window.activeTextEditor!.selection.active.character, layoutSource.indexOf('layout_a(void)'));
   assert.equal(api.view.state.graph.root.name, 'layout_a', 'separate Context navigation follows the selected symbol');
-  await vscode.workspace.getConfiguration('cRelation').update('contextLayout', 'combined', vscode.ConfigurationTarget.Workspace);
-  await vscode.workspace.getConfiguration('cRelation').update('callGraphDirection', 'callers-left', vscode.ConfigurationTarget.Workspace);
+  await vscode.workspace.getConfiguration('dynsight').update('contextLayout', 'combined', vscode.ConfigurationTarget.Workspace);
+  await vscode.workspace.getConfiguration('dynsight').update('callGraphDirection', 'callers-left', vscode.ConfigurationTarget.Workspace);
   assert.equal(api.view.state.callGraphDirection, 'callers-left');
   assert.equal(api.view.state.contextLayout, 'combined');
-  await vscode.workspace.getConfiguration('cRelation').update('calleeSort', 'name', vscode.ConfigurationTarget.Workspace);
+  await vscode.workspace.getConfiguration('dynsight').update('calleeSort', 'name', vscode.ConfigurationTarget.Workspace);
   assert.equal(api.view.state.calleeSort, 'name', 'Settings changes synchronize the controller');
-  await vscode.commands.executeCommand('cRelation.openSettings');
+  await vscode.commands.executeCommand('dynsight.openSettings');
   await api.view.handleMessage({ type: 'mode', value: 'references' });
   await vscode.workspace.fs.delete(layoutUri);
   const argumentsUri = vscode.Uri.joinPath(root, 'function-arguments.c');
@@ -614,7 +622,7 @@ export async function run() {
   assert.equal(api.view.state.includeFunctionArguments, false);
   assert.deepEqual(api.view.state.graph.root.children, []);
   const argumentAnalysis = api.workspace.index.files.get(argumentsUri.toString());
-  await vscode.workspace.getConfiguration('cRelation').update('includeFunctionArguments', true, vscode.ConfigurationTarget.Workspace);
+  await vscode.workspace.getConfiguration('dynsight').update('includeFunctionArguments', true, vscode.ConfigurationTarget.Workspace);
   assert.equal(api.view.state.graph.root.name, 'arg_target');
   assert.equal(api.workspace.index.files.get(argumentsUri.toString()), argumentAnalysis, 'argument option reuses the index');
   const originArgument = api.view.state.graph.root.children.find((node: any) => node.name === 'arg_origin');
@@ -630,7 +638,7 @@ export async function run() {
   await api.view.handleMessage({ type: 'selectNode', key: outgoingArgument.key });
   assert.equal(api.view.state.context.location.start, argumentOffset);
   assert.deepEqual(api.view.state.graph.root.children.find((node: any) => node.name === 'arg_target').children.map((node: any) => node.name), ['arg_leaf']);
-  await vscode.workspace.getConfiguration('cRelation').update('includeFunctionArguments', false, vscode.ConfigurationTarget.Workspace);
+  await vscode.workspace.getConfiguration('dynsight').update('includeFunctionArguments', false, vscode.ConfigurationTarget.Workspace);
   assert.deepEqual(api.view.state.graph.root.children.map((node: any) => node.name), ['arg_svc']);
   assert.equal(api.workspace.index.files.get(argumentsUri.toString()), argumentAnalysis);
   await vscode.workspace.fs.delete(argumentsUri);
@@ -678,13 +686,13 @@ export async function run() {
   await api.workspace.reindex(); await api.workspace.whenIdle();
   assert.notEqual(api.workspace.worker, limitedWorker, 'rebuilding a memory-limited index releases the old Worker');
   assert.equal(api.workspace.status, 'Index ready');
-  assert.ok((await vscode.commands.getCommands()).includes('cRelation.reportIssue'), 'issue report command registered');
+  assert.ok((await vscode.commands.getCommands()).includes('dynsight.reportIssue'), 'issue report command registered');
   const reportGraph = api.view.state.graph, reportRequest = api.workspace.request;
   const savedClipboard = await vscode.env.clipboard.readText();
   api.workspace.request = () => { throw new Error('Reporting must not request Worker analysis'); };
   api.workspace.workerError = new Error('ERR_WORKER_OUT_OF_MEMORY PRIVATE_ERROR_PATH');
   let reportDocument: vscode.TextDocument | undefined;
-  try { reportDocument = await vscode.commands.executeCommand<vscode.TextDocument>('cRelation.reportIssue'); }
+  try { reportDocument = await vscode.commands.executeCommand<vscode.TextDocument>('dynsight.reportIssue'); }
   finally { api.workspace.request = reportRequest; api.workspace.workerError = undefined; }
   assert.ok(reportDocument);
   assert.equal(reportDocument.languageId, 'markdown');
@@ -699,5 +707,5 @@ export async function run() {
   const output = process.env.C_RELATION_TEST_OUTPUT!;
   await mkdir(path.dirname(output), { recursive: true });
   await writeFile(output, JSON.stringify({ passed: true, functionArguments: true, memberSyntax: true, boundedIncludeTraversal: true, partialFunctionArguments: true, workerRecovery: true, checks: ['cast, returned, anonymous and initialized member navigation', 'workspace-persistent sorting, layout and direction preferences', 'native Settings entry point, separate Context registration and shared navigation', 'dual-direction call-site preview and index reuse', 'Context source navigation and relation reroot', 'Context cross-file variable navigation', 'Context lock and stale-message checks', 'selected identifier tracking', 'selection retry after indexing', 'unlock follows latest editor', 'same-symbol graph reuse', 'variable selection and access filters', 'variable actual-site preview preserves editor', 'variable access filter validation', 'variable uses continue into caller tree', 'activation', '93-file index completion', 'indexing does not open documents', 'WASM worker', 'click tracking', 'variable icon data', 'call sites', 'Context preserves editor', 'mode/depth/expand/collapse', 'locked root', 'explicit source open', 'invalid message target', '#if0 setting reindex', 'unsaved buffer', 'file create/delete', 'ambiguous symbol clears stale graph and Context', 'candidate selection'] }, null, 2));
-  console.log('C Relation extension integration checks passed');
+  console.log('Dynsight extension integration checks passed');
 }

@@ -16,7 +16,7 @@ export function registerIssueReporting(context: vscode.ExtensionContext, workspa
     }
     const task = (async () => {
       const scopes = (vscode.workspace.workspaceFolders ?? []).map(folder => {
-        const config = vscode.workspace.getConfiguration('cRelation', folder.uri);
+        const config = vscode.workspace.getConfiguration('dynsight', folder.uri);
         const macros = config.get<string[]>('macroExpansionFolders', ['**']);
         return { include: config.get<string[]>('include', []).length, exclude: config.get<string[]>('exclude', []).length,
           macroMode: !macros.length ? 'none' as const : macros.includes('**') ? 'all' as const : 'selected' as const, macroPatterns: macros.length };
@@ -41,5 +41,5 @@ export function registerIssueReporting(context: vscode.ExtensionContext, workspa
     })().catch(async () => { if (active === task) active = undefined; await failed(); return undefined; });
     active = task; return task;
   };
-  context.subscriptions.push(vscode.commands.registerCommand('cRelation.reportIssue', openReport));
+  context.subscriptions.push(vscode.commands.registerCommand('dynsight.reportIssue', openReport));
 }

@@ -1,6 +1,6 @@
 # Dynsight — C Code Explorer
 
-기존 **C Relation Explorer**의 새 이름입니다. 기존 확장 ID와 `cRelation.*` 설정 키를 유지하므로 업데이트 후에도 설정과 단축키를 그대로 사용합니다.
+제작자 **dylee**, 확장 ID **`dylee.dynsight`**입니다. 설정과 명령은 `dynsight.*`를 사용합니다.
 
 C 소스 폴더만 열어 함수의 호출·참조 관계, 변수의 읽기·쓰기 위치와 해당 코드를 함께 보는 VS Code 확장입니다. Source Insight의 Relation/Context 작업 흐름을 참고한 독립 구현입니다.
 
@@ -14,6 +14,17 @@ C 소스 폴더만 열어 함수의 호출·참조 관계, 변수의 읽기·쓰
 VS Code 데스크톱 1.95 이상이 필요합니다. 분석은 로컬 WASM으로 수행하며 소스 코드를 외부로 전송하지 않습니다. 업데이트 확인을 켜면 GitHub에 릴리스 정보를 요청합니다. 릴리스 게시 전에 Windows/macOS/Ubuntu에서 단위 테스트와 Extension Host 통합 테스트를 실행합니다. WSL 원격 연결 및 원격 자동 설치는 실환경 미검증입니다. 웹 전용 VS Code는 지원하지 않습니다.
 
 **WSL 설치:** Windows의 VS Code에서 Microsoft WSL 확장을 설치한 뒤 **WSL: Reopen Folder in WSL**로 C 소스 폴더를 엽니다. 그 창에서 VSIX를 설치하고 확장 목록의 **WSL: 배포판 이름**에 Dynsight — C Code Explorer가 있는지 확인합니다. 필요하면 **Install in WSL**을 선택합니다. [VS Code WSL 안내](https://code.visualstudio.com/docs/remote/wsl#_managing-extensions)
+
+## v0.1.43 이하에서 업그레이드
+
+이전 확장(C Relation Explorer / James Black)은 `local-james-black.c-relation-explorer`라는 별도 ID입니다. v0.1.44부터 제작자와 설정 화면까지 새 이름으로 통일했습니다.
+
+1. 새 `dynsight-<version>.vsix`를 설치하고 C 파일을 엽니다.
+2. **Remove previous extension and reload** 안내를 선택합니다. 새 확장은 이전 확장이 활성화된 동안 분석을 시작하지 않습니다.
+3. 안내를 닫았다면 Extensions에서 이전 확장을 제거하고 **Developer: Reload Window**를 실행하세요. WSL은 프로젝트가 열린 WSL 쪽 확장 목록에서 확인하세요.
+4. 다시 활성화되면 기존 `cRelation.*` 설정을 사용자·현재 작업공간·현재 폴더 범위의 `dynsight.*`로 이전합니다. 새 키가 이미 있으면 새 값을 유지하며, 이전이 끝난 옛 키는 제거합니다. 나중에 연 다른 프로젝트는 그때 이전됩니다. 열린 작업공간에 기존 설정이 있는 폴더를 추가했다면 창을 다시 로드하세요.
+
+기존 사용자 단축키의 명령은 호환용으로 연결합니다. 패널 ID가 바뀌므로 위치는 다시 배치해야 할 수 있습니다. 비활성화된 이전 확장은 자동 감지되지 않을 수 있으니 남아 있으면 직접 제거하세요. 업데이트 목록의 `c-relation-explorer-<version>.vsix`는 이전 자동 업데이터를 위한 동일한 새 패키지입니다.
 
 ## 함수 아이콘 (v0.1.24 이상)
 
@@ -33,11 +44,11 @@ GitHub를 방문하지 않아도 Dynsight 상단의 두 버튼으로 사용할 �
 Include는 v0.1.18부터 구현되었으며, 여러 패턴을 함께 사용할 때의 누락 수정까지 포함한 **v0.1.19 이상**을 권장합니다. Exclude는 v0.1.16 이상에서 사용할 수 있습니다. 분석할 폴더가 적으면 **Include**로 포함할 범위를 지정하고, 불필요한 도구·생성 코드 폴더는 **Exclude**로 제외하세요. 예를 들어 Polyspace 설치 파일이나 분석 결과가 소스 폴더 안에 있다면 해당 경로를 제외할 수 있습니다. 기본 사용자 제외 목록은 비어 있으므로 Polyspace나 SDK 폴더가 자동으로 제외되지는 않습니다.
 
 1. C 소스 폴더를 연 VS Code 창에서 명령 팔레트의 **Preferences: Open Workspace Settings (JSON)**을 실행합니다. WSL 프로젝트라면 WSL에 연결된 창에서 설정합니다.
-2. 설정 객체에 `cRelation.include`와 `cRelation.exclude`를 필요에 맞게 추가하고 저장합니다. 기존 설정이 있다면 다른 항목을 지우지 말고 이 항목을 합칩니다. 일반적인 단일 폴더 프로젝트에서는 `.vscode/settings.json`에 저장됩니다.
+2. 설정 객체에 `dynsight.include`와 `dynsight.exclude`를 필요에 맞게 추가하고 저장합니다. 기존 설정이 있다면 다른 항목을 지우지 말고 이 항목을 합칩니다. 일반적인 단일 폴더 프로젝트에서는 `.vscode/settings.json`에 저장됩니다.
 
 ```json
 {
-  "cRelation.exclude": [
+  "dynsight.exclude": [
     "**/Tools/Polyspace/**",
     "**/build/**"
   ]
@@ -50,8 +61,8 @@ Include는 v0.1.18부터 구현되었으며, 여러 패턴을 함께 사용할 �
 
 ```json
 {
-  "cRelation.include": ["App/**", "Drivers/**"],
-  "cRelation.exclude": ["**/generated/**", "**/test/**"]
+  "dynsight.include": ["App/**", "Drivers/**"],
+  "dynsight.exclude": ["**/generated/**", "**/test/**"]
 }
 ```
 
@@ -64,7 +75,7 @@ Include는 v0.1.18부터 구현되었으며, 여러 패턴을 함께 사용할 �
 
 **Exclude가 최종 우선**입니다. Include는 패턴 중 하나에 일치하면 포함하며, 겹치는 패턴으로 같은 파일을 중복 분석하지 않습니다. v0.1.19부터는 `App/**/*.{c,h}`와 `Drivers/**`처럼 중괄호 패턴과 다른 패턴을 함께 써도 각각의 의미를 유지합니다. Include가 설정되어 있지만 일치하는 파일이 없으면 분석 결과는 0개입니다. 전체 범위로 돌아가려면 Include를 `[]`로 비우세요.
 
-Settings 화면에서는 `@id:cRelation.include` 또는 `@id:cRelation.exclude`를 검색하고 **Workspace** 범위에서 항목을 추가할 수 있습니다. 폴더 안의 모든 파일을 지정할 때는 `App` 대신 `App/**`처럼 작성하세요. 폴더 패턴에 다른 종류의 파일이 있어도 분석은 C/H 파일만 대상으로 합니다.
+Settings 화면에서는 `@id:dynsight.include` 또는 `@id:dynsight.exclude`를 검색하고 **Workspace** 범위에서 항목을 추가할 수 있습니다. 폴더 안의 모든 파일을 지정할 때는 `App` 대신 `App/**`처럼 작성하세요. 폴더 패턴에 다른 종류의 파일이 있어도 분석은 C/H 파일만 대상으로 합니다.
 
 | 패턴 예시 | 일치 범위 (Include/Exclude 공통) |
 | --- | --- |
@@ -77,7 +88,7 @@ Settings 화면에서는 `@id:cRelation.include` 또는 `@id:cRelation.exclude`�
 - 여러 폴더를 연 워크스페이스에서는 각 폴더를 기준으로 패턴을 적용하며, 폴더별 설정도 가능합니다.
 - Include 밖에 있거나 Exclude에 해당하는 파일의 **정의와 참조는 Relation에 나오지 않습니다**. 필요한 공통 헤더나 라이브러리까지 제외하면 관계가 누락될 수 있습니다. Include를 넓히거나 Exclude에서 패턴을 제거하면 자동 재분석으로 다시 포함할 수 있습니다.
 - Include/Exclude 설정은 초기 파일 수 제한 **이전**에 적용되며 이후 파일 생성·수정·미저장 편집에도 적용됩니다.
-- `files.exclude`, `search.exclude`, `C_Cpp.files.exclude`는 이 확장의 분석 범위에 적용되지 않습니다. `cRelation.include`와 `cRelation.exclude`를 사용하세요.
+- `files.exclude`, `search.exclude`, `C_Cpp.files.exclude`는 이 확장의 분석 범위에 적용되지 않습니다. `dynsight.include`와 `dynsight.exclude`를 사용하세요.
 - `node_modules`, `.git`, `.vscode-test`는 기본으로 제외합니다. 사용자 제외 후에도 초기 분석 대상이 10,000개를 넘으면 **Partial index**가 표시됩니다. 불필요한 경로를 더 제외하거나 필요한 소스 폴더를 별도로 여세요.
 
 ## 매크로를 확장할 폴더 선택 (v0.1.36)
@@ -90,8 +101,8 @@ Include/Exclude는 기본 분석에 포함할 파일을 정하고, **Macro Expan
 
 ```json
 {
-  "cRelation.include": ["App/**", "SDK/**"],
-  "cRelation.macroExpansionFolders": ["App/**"]
+  "dynsight.include": ["App/**", "SDK/**"],
+  "dynsight.macroExpansionFolders": ["App/**"]
 }
 ```
 
@@ -107,7 +118,7 @@ Include/Exclude는 기본 분석에 포함할 파일을 정하고, **Macro Expan
 
 - 수동 검사: 명령 팔레트 → **Dynsight: Check for Updates**.
 - 새 릴리스가 게시돼도 즉시 알림이 오는 방식은 아닙니다. 바로 확인하려면 수동 검사를 실행하세요. 수동 검사는 24시간 제한을 건너뛰며, 현재 버전이 최신이면 안내만 표시합니다.
-- 자동 검사 끄기: VS Code 사용자 설정의 **C Relation: Automatic Updates** 해제 (`cRelation.automaticUpdates`).
+- 자동 검사 끄기: VS Code 사용자 설정의 **Dynsight → Automatic Updates** 해제 (`dynsight.automaticUpdates`).
 - 업데이트 소스: [GitHub Releases](https://github.com/mrdylee/vscode_extension_relation_window/releases). 커밋만 푸시한 버전과 시험판은 설치하지 않습니다.
 - 릴리스가 없으면 수동 검사에서 안내합니다. 자동 검사 중 오프라인/요청 제한은 조용히 처리하며, 수동 검사 또는 동의 후 설치 실패는 오류를 표시합니다.
 - 버전·릴리스 파일·크기 및 제공된 SHA-256 체크섬을 확인합니다. 자동으로 코드를 보안 심사하는 기능은 아닙니다. 로컬 데스크톱 배포를 대상으로 하며 원격 환경의 자동 설치는 미검증입니다.
@@ -176,7 +187,7 @@ Callees에는 직접 호출한 `svc_call_nonblock`과 인자로 넘긴 `a_func`�
 무거운 전체 포인터 분석을 새로 강제하지 않으므로 일부 별칭은 표시되지 않을 수
 있습니다. References와 변수 R/W 필터에는 영향을 주지 않습니다.
 
-JSON 설정은 `"cRelation.includeFunctionArguments": true`입니다. VSIX에 포함된
+JSON 설정은 `"dynsight.includeFunctionArguments": true`입니다. VSIX에 포함된
 **Help → Function arguments**에서도 같은 사용법을 확인할 수 있습니다.
 
 ## 변수 읽기·쓰기 탐색
@@ -215,7 +226,7 @@ void run(struct Motor *m, struct Sensor *s) {
 
 ## 비활성 코드 처리
 
-**Skip inactive branches**는 기본으로 켜져 있습니다(`cRelation.skipInactive`). 리터럴 `0`/`1` 조건과 그 `#else`, `#elif`, 중첩을 처리합니다. 제외해도 Context의 원본 코드는 지우지 않습니다.
+**Skip inactive branches**는 기본으로 켜져 있습니다(`dynsight.skipInactive`). 리터럴 `0`/`1` 조건과 그 `#else`, `#elif`, 중첩을 처리합니다. 제외해도 Context의 원본 코드는 지우지 않습니다.
 
 `#if BOARD_PRO`, `#ifdef`, `#ifndef`, `defined(...)`, 계산식 등은 빌드 설정 없이 참/거짓을 확정하지 않습니다. 양쪽의 가능한 코드를 남기고 **Conditional**로 표시합니다. 매크로 호출 확장에는 순서에 따른 `#define`·`#undef`와 색인된 헤더를 사용하지만, 빌드 옵션까지 반영하는 전체 전처리기는 아닙니다. 옵션을 끄면 `#if 0` 영역도 관계 색인에 포함됩니다.
 
@@ -301,7 +312,7 @@ Tree-sitter C 구문 트리에서 심볼·위치를 수집하고 파일/지역 �
 - 함수 포인터는 소스에서 확인한 가능한 대상을 추정합니다. 모르는 대상은 간접 호출로 남깁니다.
 - 매크로 확장 호출은 원본 호출 위치와 확장 근거를 함께 표시합니다. 지원 범위와 한계는 위 설명을 참고하세요.
 - 헤더의 `static`, 간접 include, 복잡한 변수 선언, 컴파일러 전용 문법은 불완전할 수 있습니다. 파서 오류는 하단 **Analysis notices**로 표시하지만 모든 의미 오류를 감지하지는 못합니다.
-- `.c`, `.h` 파일을 대상으로 하며 `node_modules`, `.git`, `.vscode-test`와 `cRelation.exclude` 패턴에 맞는 파일을 제외합니다. `files.exclude`, `search.exclude`, `C_Cpp.files.exclude`는 이 확장의 분석 범위에 적용되지 않습니다.
+- `.c`, `.h` 파일을 대상으로 하며 `node_modules`, `.git`, `.vscode-test`와 `dynsight.exclude` 패턴에 맞는 파일을 제외합니다. `files.exclude`, `search.exclude`, `C_Cpp.files.exclude`는 이 확장의 분석 범위에 적용되지 않습니다.
 - 초기 분석은 Include/Exclude 적용 후 최대 10,000개 파일, 파일당 2,000,000 UTF-16 코드 단위, 화면당 300개 노드로 제한합니다. 제한·분석 실패는 알림으로 표시합니다. 원본 파일은 증분 갱신하고, 영향을 받는 매크로·콜백 관계는 다시 계산합니다.
 - Context는 선택 위치 앞 80줄, 뒤 120줄 범위를 읽기 전용으로 보여줍니다. 간단한 구문 색상은 제공하지만 전체 C 의미 강조는 아닙니다.
 

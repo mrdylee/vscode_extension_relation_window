@@ -13,7 +13,7 @@ export async function run() {
   let deadline: ReturnType<typeof setTimeout>;
   const withinDeadline = new Promise<never>((_, reject) => { deadline = setTimeout(() => reject(new Error('Large workspace indexing exceeded 120 seconds')), 120000); });
   try {
-    const api = await vscode.extensions.getExtension('local-james-black.c-relation-explorer')!.activate();
+    const api = await vscode.extensions.getExtension('dylee.dynsight')!.activate();
     const doc = await vscode.workspace.openTextDocument(vscode.Uri.joinPath(root, 'target.c'));
     const editor = await vscode.window.showTextDocument(doc);
     while (!api.workspace.index.files.has(doc.uri.toString())) await Promise.race([withinDeadline, new Promise(r => setTimeout(r, 20))]);
@@ -40,7 +40,7 @@ export async function run() {
     assert.equal(outgoing[0].sites.length, 20);
     await new Promise(r => setTimeout(r, 30)); // Include query stalls in the heartbeat measurement.
     const result = { passed: true, sourceFiles: 12551, indexedFiles: 2501, calls: 50000, elapsedMs: Date.now() - started, selectionMs, queryMs, outgoingQueryMs, filesAtSelection, ticks, maxTickGapMs };
-    const settings = vscode.workspace.getConfiguration('cRelation');
+    const settings = vscode.workspace.getConfiguration('dynsight');
     await settings.update('include', ['target.c', 'caller-*.c', 'caller-1*'], vscode.ConfigurationTarget.Workspace);
     await settings.update('exclude', [], vscode.ConfigurationTarget.Workspace);
     await new Promise(r => setTimeout(r, 500));

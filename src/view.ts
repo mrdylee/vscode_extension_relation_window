@@ -31,14 +31,14 @@ export class RelationView implements vscode.Disposable {
     });
     this.readPreferences();
     this.preferences = vscode.workspace.onDidChangeConfiguration(event => {
-      if (event.affectsConfiguration('cRelation.calleeSort') || event.affectsConfiguration('cRelation.contextLayout') || event.affectsConfiguration('cRelation.includeFunctionArguments')) {
+      if (event.affectsConfiguration('dynsight.calleeSort') || event.affectsConfiguration('dynsight.contextLayout') || event.affectsConfiguration('dynsight.includeFunctionArguments')) {
         const previousLayout = this.state.contextLayout;
         this.readPreferences(); this.refresh();
         if (previousLayout !== this.state.contextLayout) void this.applyPanelLayout(previousLayout);
         if (previousLayout !== 'separate' && this.state.contextLayout === 'separate') {
-          void vscode.commands.executeCommand('cRelation.context.focus', { preserveFocus: true });
+          void vscode.commands.executeCommand('dynsight.context.focus', { preserveFocus: true });
         }
-      } else if (event.affectsConfiguration('cRelation.callGraphDirection')) {
+      } else if (event.affectsConfiguration('dynsight.callGraphDirection')) {
         this.readPreferences(); this.publish();
       }
     });
@@ -50,7 +50,7 @@ export class RelationView implements vscode.Disposable {
     });
   }
   private readPreferences() {
-    const config = vscode.workspace.getConfiguration('cRelation');
+    const config = vscode.workspace.getConfiguration('dynsight');
     this.state.calleeSort = config.get('calleeSort') === 'source' ? 'source' : 'name';
     const layout = config.get('contextLayout');
     this.state.contextLayout = layout === 'separate' || layout === 'combined-full-width' ? layout : 'combined';
@@ -164,11 +164,11 @@ export class RelationView implements vscode.Disposable {
     const m = message as Record<string, unknown>;
     switch (m.type) {
       case 'diagnostics': this.workspace.refreshDiagnostics(); break;
-      case 'reportIssue': await vscode.commands.executeCommand('cRelation.reportIssue'); break;
+      case 'reportIssue': await vscode.commands.executeCommand('dynsight.reportIssue'); break;
       case 'ready': this.refresh(); this.track(vscode.window.activeTextEditor); break;
       case 'readyContext': void this.contextView?.webview.postMessage({ type: 'context', context: this.state.context }); break;
-      case 'settings': await vscode.commands.executeCommand('cRelation.openSettings'); break;
-      case 'help': await vscode.commands.executeCommand('cRelation.help'); break;
+      case 'settings': await vscode.commands.executeCommand('dynsight.openSettings'); break;
+      case 'help': await vscode.commands.executeCommand('dynsight.help'); break;
       case 'preview': if (typeof m.id === 'string' && this.locations.has(m.id)) { this.preview(m.id); this.publish(); } break;
       case 'selectNode': {
         const node = typeof m.key === 'string' ? this.nodes.get(m.key) : undefined;
@@ -211,7 +211,7 @@ export class RelationView implements vscode.Disposable {
       } break;
       case 'depth': if (Number.isInteger(m.value) && Number(m.value) >= 1 && Number(m.value) <= 8) { this.state.depth = Number(m.value); this.expanded = {}; this.refresh(); } break;
       case 'lock': this.state.locked = !this.state.locked; this.publish(); if (!this.state.locked) this.track(this.lastEditor); break;
-      case 'skip': if (typeof m.value === 'boolean') await vscode.workspace.getConfiguration('cRelation').update('skipInactive', m.value, vscode.workspace.workspaceFolders?.length ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global); break;
+      case 'skip': if (typeof m.value === 'boolean') await vscode.workspace.getConfiguration('dynsight').update('skipInactive', m.value, vscode.workspace.workspaceFolders?.length ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global); break;
       case 'refresh': await this.workspace.reindex(); this.track(vscode.window.activeTextEditor); this.refresh(); break;
       case 'expand': case 'collapse': case 'expandSpecial': {
         if (typeof m.key !== 'string' || !this.nodes.has(m.key)) return;

@@ -3,11 +3,11 @@ import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-const scratch = await mkdtemp(path.join(os.tmpdir(), 'c-relation-large-'));
+const scratch = await mkdtemp(path.join(os.tmpdir(), 'dynsight-large-'));
 const workspace = path.join(scratch, 'workspace');
 await mkdir(path.join(workspace, 'Tools', 'Polyspace'), { recursive: true });
 await mkdir(path.join(workspace, '.vscode'));
-await writeFile(path.join(workspace, '.vscode', 'settings.json'), JSON.stringify({ 'cRelation.exclude': ['**/Tools/Polyspace/**'] }));
+await writeFile(path.join(workspace, '.vscode', 'settings.json'), JSON.stringify({ 'dynsight.exclude': ['**/Tools/Polyspace/**'] }));
 await writeFile(path.join(workspace, 'target.c'), 'void target(void){}\nvoid other(void){}\n');
 // Excluded files alone exceed the initial index limit. Filtering must happen first.
 for (let start = 0; start < 10050; start += 100) await Promise.all(Array.from({ length: Math.min(100, 10050 - start) }, (_, i) =>

@@ -18,7 +18,7 @@ export function selectRelease(value: unknown, current: string): Release | undefi
   if (!next || !installed) return undefined;
   const different = next.findIndex((part, i) => part !== installed[i]);
   if (different < 0 || next[different] < installed[different]) return undefined;
-  const version = next.join('.'), filename = `c-relation-explorer-${version}.vsix`;
+  const version = next.join('.'), filename = `dynsight-${version}.vsix`;
   const downloadUrl = `${REPOSITORY_URL}/releases/download/${data.tag_name}/${filename}`;
   const asset = Array.isArray(data.assets) ? data.assets.find(a => a?.name === filename) : undefined;
   if (!asset || asset.browser_download_url !== downloadUrl || !Number.isSafeInteger(asset.size) || asset.size <= 0 || asset.size > MAX_VSIX_BYTES)
@@ -83,7 +83,7 @@ async function readResponse(response: Response, limit: number): Promise<Buffer> 
   return Buffer.concat(chunks);
 }
 export async function fetchLatestRelease(fetcher: typeof fetch = fetch) {
-  const response = await fetcher(RELEASE_API, { headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'C-Relation-Explorer' }, signal: AbortSignal.timeout(10000) });
+  const response = await fetcher(RELEASE_API, { headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'Dynsight' }, signal: AbortSignal.timeout(10000) });
   if (response.status === 404) return undefined;
   return JSON.parse((await readResponse(response, 2 * 1024 * 1024)).toString('utf8'));
 }

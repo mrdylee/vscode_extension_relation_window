@@ -48,7 +48,7 @@ export class WorkspaceIndex implements vscode.Disposable {
     if (!this.disposed && !this.workerError) this.worker.postMessage({ type: 'diagnostics' });
   }
   private scopes = new Map<string, { include: string[]; exclude: string[]; included: Minimatch[]; excluded: Minimatch[]; macros: Minimatch[] }>();
-  get skipInactive() { return vscode.workspace.getConfiguration('cRelation').get<boolean>('skipInactive', true); }
+  get skipInactive() { return vscode.workspace.getConfiguration('dynsight').get<boolean>('skipInactive', true); }
   private startWorker() {
     const assets = path.join(this.extensionPath, 'dist');
     const worker = new Worker(path.join(assets, 'analysis-worker.cjs'), { workerData: { assets } });
@@ -83,8 +83,8 @@ export class WorkspaceIndex implements vscode.Disposable {
       vscode.workspace.onDidChangeTextDocument(event => { if (event.contentChanges.length) this.schedule(event.document.uri); }),
       vscode.workspace.onDidCloseTextDocument(document => this.schedule(document.uri)),
       vscode.workspace.onDidChangeConfiguration(event => {
-        if (event.affectsConfiguration('cRelation.skipInactive') || event.affectsConfiguration('cRelation.include') || event.affectsConfiguration('cRelation.exclude') ||
-          event.affectsConfiguration('cRelation.macroExpansionFolders')) void this.reindex();
+        if (event.affectsConfiguration('dynsight.skipInactive') || event.affectsConfiguration('dynsight.include') || event.affectsConfiguration('dynsight.exclude') ||
+          event.affectsConfiguration('dynsight.macroExpansionFolders')) void this.reindex();
       }),
       vscode.workspace.onDidChangeWorkspaceFolders(() => void this.reindex()));
     this.ready = this.reindex();
@@ -93,7 +93,7 @@ export class WorkspaceIndex implements vscode.Disposable {
     const key = folder.uri.toString();
     let value = this.scopes.get(key);
     if (!value) {
-      const config = vscode.workspace.getConfiguration('cRelation', folder.uri);
+      const config = vscode.workspace.getConfiguration('dynsight', folder.uri);
       const include = config.get<string[]>('include', []), exclude = [...builtInExcludes, ...config.get<string[]>('exclude', [])];
       const match = (pattern: string) => new Minimatch(pattern, { dot: true, nonegate: true, nocomment: true, noext: true, nocase: process.platform === 'win32' });
       value = { include, exclude, included: include.map(match), excluded: exclude.map(match), macros: config.get<string[]>('macroExpansionFolders', ['**']).map(match) };

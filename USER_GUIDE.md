@@ -1,9 +1,25 @@
 # Dynsight — User Guide
 
-Dynsight — C Code Explorer is the new name of C Relation Explorer. The extension
-ID and `cRelation.*` settings/command IDs stay the same, preserving existing
-settings, keybindings and the update path. Some generated Settings labels still
-use **C Relation** because the setting keys are unchanged.
+Published as **dylee**, with extension ID **`dylee.dynsight`**.
+Settings and commands use the **`dynsight.*`** prefix.
+
+## Upgrade from v0.1.43 or earlier
+
+The previous extension (C Relation Explorer / James Black) has a different ID,
+`local-james-black.c-relation-explorer`. After installing the new VSIX and opening
+a C file, choose **Remove previous extension and reload**. Dynsight waits while
+the previous extension is active, preventing duplicate analysis. If you dismiss
+the prompt, uninstall the previous extension in Extensions and run
+**Developer: Reload Window**. For WSL, check the WSL extension list in that window.
+A disabled previous extension may not be detected; remove that entry manually.
+
+On activation, explicit `cRelation.*` preferences move to `dynsight.*` at the user,
+current workspace and current folder scopes. Existing new values win. Old keys
+are removed only after the new value is saved or already exists. Other projects
+migrate when you open them. Reload after adding a folder with legacy settings to
+an already open workspace. Old custom keybinding commands remain compatible.
+Panel IDs changed, so you may need to move the panels into place again.
+The legacy-named VSIX in Releases is an identical new package for older updaters.
 
 This guide is included with the extension and works offline. You do not need Git or a GitHub account to use Dynsight.
 
@@ -41,8 +57,8 @@ Analyze only App and Drivers, but omit generated code and tests:
 
 ```json
 {
-  "cRelation.include": ["App/**", "Drivers/**"],
-  "cRelation.exclude": ["**/generated/**", "**/test/**"]
+  "dynsight.include": ["App/**", "Drivers/**"],
+  "dynsight.exclude": ["**/generated/**", "**/test/**"]
 }
 ```
 
@@ -50,8 +66,8 @@ Analyze the full project except Polyspace and build output:
 
 ```json
 {
-  "cRelation.include": [],
-  "cRelation.exclude": ["**/Tools/Polyspace/**", "**/build/**"]
+  "dynsight.include": [],
+  "dynsight.exclude": ["**/Tools/Polyspace/**", "**/build/**"]
 }
 ```
 
@@ -78,8 +94,8 @@ which indexed source bodies and initializers receive macro expansion.
 
 ```json
 {
-  "cRelation.include": ["App/**", "SDK/**"],
-  "cRelation.macroExpansionFolders": ["App/**"]
+  "dynsight.include": ["App/**", "SDK/**"],
+  "dynsight.macroExpansionFolders": ["App/**"]
 }
 ```
 
@@ -132,9 +148,9 @@ Sorting, Context layout and call graph direction are saved in workspace settings
 
 ```json
 {
-  "cRelation.calleeSort": "source",
-  "cRelation.contextLayout": "separate",
-  "cRelation.callGraphDirection": "callees-left"
+  "dynsight.calleeSort": "source",
+  "dynsight.contextLayout": "separate",
+  "dynsight.callGraphDirection": "callees-left"
 }
 ```
 
@@ -179,7 +195,7 @@ analysis already runs. No additional full pointer analysis is forced solely for
 arguments, so unresolved aliases can remain absent. Candidate and partial-result
 notices apply. References and variable R/W filters retain their original meaning.
 
-JSON setting: `"cRelation.includeFunctionArguments": true`.
+JSON setting: `"dynsight.includeFunctionArguments": true`.
 
 If macro include traversal reaches its limit, directly written function names
 and addresses can still appear as partial argument candidates. Their popup shows
@@ -381,4 +397,4 @@ In a WSL-connected VS Code window, install the VSIX into the WSL environment. Ch
 
 Use **Dynsight: Check for Updates** to check for a newer release. Updates require internet access and your approval; analysis and this guide work offline. After installing an update, run **Developer: Reload Window** and verify the version shown next to **Context**.
 
-Automatic checks are enabled by default and run when the production extension activates, then when due. Successful checks are limited to once per 24 hours; an hourly timer checks whether one is due. New releases do not trigger an immediate notification. From v0.1.22, failed network/metadata checks retry on the next hourly tick while the extension remains active. Manual checks bypass the daily interval and report failures. Automatic checks stay quiet on network errors and are disabled in development/test mode. Use the user setting **C Relation: Automatic Updates** to enable or disable them.
+Automatic checks are enabled by default and run when the production extension activates, then when due. Successful checks are limited to once per 24 hours; an hourly timer checks whether one is due. New releases do not trigger an immediate notification. From v0.1.22, failed network/metadata checks retry on the next hourly tick while the extension remains active. Manual checks bypass the daily interval and report failures. Automatic checks stay quiet on network errors and are disabled in development/test mode. Use the user setting **Dynsight → Automatic Updates** to enable or disable them.

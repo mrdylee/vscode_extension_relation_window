@@ -6,7 +6,7 @@ export async function selectMacroExpansionFolders() {
   if (!folders?.length) { void vscode.window.showInformationMessage('Open a workspace folder to select macro expansion folders.'); return; }
   const folder = folders.length === 1 ? folders[0] : await vscode.window.showWorkspaceFolderPick({ placeHolder: 'Choose the workspace for macro expansion' });
   if (!folder) return;
-  const config = vscode.workspace.getConfiguration('cRelation', folder.uri);
+  const config = vscode.workspace.getConfiguration('dynsight', folder.uri);
   const current = config.get<string[]>('macroExpansionFolders', ['**']);
   const include = config.get<string[]>('include', []);
   let patterns = include;

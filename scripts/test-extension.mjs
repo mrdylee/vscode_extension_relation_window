@@ -3,10 +3,12 @@ import path from 'node:path';
 import { mkdtemp, mkdir, cp, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import { existsSync } from 'node:fs';
-const scratch = await mkdtemp(path.join(os.tmpdir(), 'c-relation-host-'));
+const scratch = await mkdtemp(path.join(os.tmpdir(), 'dynsight-host-'));
 const workspace = path.join(scratch, 'workspace');
 await mkdir(workspace);
 await cp('examples/demo', workspace, { recursive: true });
+await mkdir(path.join(workspace, '.vscode'), { recursive: true });
+await writeFile(path.join(workspace, '.vscode', 'settings.json'), JSON.stringify({ 'cRelation.calleeSort': 'source', 'cRelation.include': ['**/*.{c,h}'] }));
 // Exceed VS Code's unopened-document cache to catch close/reopen indexing loops.
 for (let n = 0; n < 90; n++) await writeFile(path.join(workspace, `index-${n}.h`), `#define INDEX_FIXTURE_${n} ${n}\n`);
 await runTests({

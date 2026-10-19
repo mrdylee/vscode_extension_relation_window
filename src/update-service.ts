@@ -7,9 +7,9 @@ import { downloadRelease, fetchLatestRelease, Release, UpdateChecker } from './u
 async function installRelease(release: Release) {
   await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `Installing Dynsight v${release.version}` }, async () => {
     const bytes = await downloadRelease(release);
-    const directory = await mkdtemp(path.join(tmpdir(), 'c-relation-update-'));
+    const directory = await mkdtemp(path.join(tmpdir(), 'dynsight-update-'));
     try {
-      const filename = path.join(directory, `c-relation-explorer-${release.version}.vsix`);
+      const filename = path.join(directory, `dynsight-${release.version}.vsix`);
       await writeFile(filename, bytes);
       await vscode.commands.executeCommand('workbench.extensions.installExtension', vscode.Uri.file(filename));
     } finally { await rm(directory, { recursive: true, force: true }); }
@@ -36,13 +36,13 @@ export function registerUpdates(context: vscode.ExtensionContext) {
     }
   });
   const automatic = () => {
-    if (context.extensionMode === vscode.ExtensionMode.Production && vscode.workspace.getConfiguration('cRelation').get('automaticUpdates', true)) void checker.check();
+    if (context.extensionMode === vscode.ExtensionMode.Production && vscode.workspace.getConfiguration('dynsight').get('automaticUpdates', true)) void checker.check();
   };
   // Poll hourly so failed requests retry and a restarted window checks when due.
   // UpdateChecker still limits successful automatic checks to once per day.
   const timer = setInterval(automatic, 60 * 60 * 1000);
-  context.subscriptions.push(vscode.commands.registerCommand('cRelation.checkForUpdates', () => checker.check(true)),
-    vscode.workspace.onDidChangeConfiguration(e => { if (e.affectsConfiguration('cRelation.automaticUpdates')) automatic(); }),
+  context.subscriptions.push(vscode.commands.registerCommand('dynsight.checkForUpdates', () => checker.check(true)),
+    vscode.workspace.onDidChangeConfiguration(e => { if (e.affectsConfiguration('dynsight.automaticUpdates')) automatic(); }),
     { dispose: () => clearInterval(timer) });
   automatic();
 }

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.44 — 2026-10-19
+
+- Complete the Dynsight rename in Settings, extension identity, publisher and VSIX
+  downloads: `dylee.dynsight`, publisher `dylee`, settings/commands `dynsight.*`.
+- Migrate explicit legacy settings at user/workspace/folder scopes while keeping
+  existing new values. Preserve old custom keybinding commands as hidden aliases.
+- Pause new activation while the previous extension is active; offer removal and
+  reload to avoid duplicate analysis. Panel placement may need to be restored.
+- Keep one legacy-named universal download for older update clients.
+
 ## 0.1.43 — 2026-10-19
 
 - Rename the visible product to **Dynsight — C Code Explorer**. Use **Dynsight**
