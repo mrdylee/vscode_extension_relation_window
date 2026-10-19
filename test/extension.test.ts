@@ -39,6 +39,24 @@ export async function run() {
   try { await api.workspace.reindex(); } finally { opening.dispose(); }
   assert.equal(openedByReindex, 0, 'background indexing must not open VS Code documents');
   assert.equal(api.workspace.index.files.has(excludedUri.toString()), false, 'initial indexing excludes configured folders');
+  // Real editor navigation must not restart analysis when documents are unchanged.
+  await api.workspace.whenIdle();
+  const navigationRevision = api.workspace.revision;
+  let navigationCloses = 0;
+  const closedDuringNavigation = vscode.workspace.onDidCloseTextDocument(doc => {
+    if (/\/index-\d+\.h$/.test(doc.uri.path)) navigationCloses++;
+  });
+  try {
+    for (let i = 0; i < 90; i++) {
+      const unchanged = await vscode.workspace.openTextDocument(vscode.Uri.joinPath(root, `index-${i}.h`));
+      await vscode.window.showTextDocument(unchanged, { preview: false });
+      await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+    }
+    await new Promise(resolve => setTimeout(resolve, 250));
+    await api.workspace.whenIdle();
+  } finally { closedDuringNavigation.dispose(); }
+  assert.ok(navigationCloses > 0, 'exercise actual VS Code document-close events');
+  assert.equal(api.workspace.revision, navigationRevision, 'unchanged editor navigation reuses the index');
   const document = await vscode.workspace.openTextDocument(vscode.Uri.joinPath(root, 'control.c'));
   const editor = await vscode.window.showTextDocument(document);
   await vscode.commands.executeCommand('cRelation.open');

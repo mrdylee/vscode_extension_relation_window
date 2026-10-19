@@ -27,14 +27,14 @@ async function bounded(promise) {
 }
 function fixture(t, files = []) {
   const folder = { uri: Uri.parse('file:///review'), name: 'review', index: 0 };
-  const created = new Emitter(), changed = new Emitter(), deleted = new Emitter();
+  const created = new Emitter(), changed = new Emitter(), deleted = new Emitter(), closed = new Emitter(), edited = new Emitter();
   const adapter = {
     workspaceFolders: [folder], textDocuments: [],
     getConfiguration: () => ({ get: (_key, fallback) => fallback }),
     getWorkspaceFolder: () => folder, asRelativePath: value => value.path.slice('/review/'.length),
     findFiles: async () => files,
     createFileSystemWatcher: () => ({ dispose() {}, onDidCreate: created.event, onDidChange: changed.event, onDidDelete: deleted.event }),
-    onDidChangeTextDocument: disposable, onDidCloseTextDocument: disposable,
+    onDidChangeTextDocument: edited.event, onDidCloseTextDocument: closed.event,
     onDidChangeConfiguration: disposable, onDidChangeWorkspaceFolders: disposable,
     fs: { readFile: async () => Buffer.from('') }
   };
@@ -43,7 +43,7 @@ function fixture(t, files = []) {
   runInNewContext(bundle, { module, exports: module.exports, process, Buffer, URL, setTimeout, clearTimeout, require: name => name === 'vscode' ? vscode : require(name) });
   const workspace = new module.exports.WorkspaceIndex(process.cwd());
   t.after(async () => { const worker = workspace.worker; workspace.dispose(); await worker.terminate(); });
-  return { workspace, adapter, created, changed, deleted };
+  return { workspace, adapter, created, changed, deleted, closed, edited };
 }
 
 const latest = 'typedef void(*CB)(void);void new_target(void){}void task(void){CB cb=new_target;cb();}';
@@ -165,4 +165,80 @@ test('in-flight new files reserve capacity and a failed read frees its slot', as
   await workspace.enqueue(second); await bounded(workspace.whenIdle());
   assert.equal(workspace.index.files.size, 10000);
   assert.ok(workspace.index.symbols().some(symbol => symbol.name === 'recovered'));
+});
+
+test('unchanged closes and watcher notifications reuse completed call analysis', async t => {
+  const { workspace, adapter, closed, changed } = fixture(t);
+  await workspace.ready;
+  const file = uri('unchanged.c');
+  adapter.fs.readFile = async () => Buffer.from(latest);
+  await workspace.enqueue(file); await bounded(workspace.whenIdle());
+  const revision = workspace.revision, indexed = workspace.index.files.get(file.toString());
+  const messages = [], request = workspace.request;
+  workspace.request = function (message) { messages.push(message); return request.call(this, message); };
+  for (let i = 0; i < 3; i++) {
+    closed.fire({ uri: file, isClosed: true });
+    await bounded(workspace.whenIdle());
+  }
+  changed.fire(file); await bounded(workspace.whenIdle());
+  assert.equal(messages.length, 0, 'unchanged source must not parse or derive again');
+  assert.equal(workspace.revision, revision);
+  assert.equal(workspace.index.files.get(file.toString()), indexed, 'retain derived callback results');
+  assert.equal(workspace.status, 'Index ready');
+});
+
+test('edits, discarded unsaved edits and external disk changes update callers', async t => {
+  const { workspace, adapter, closed, edited, changed } = fixture(t);
+  await workspace.ready;
+  const file = uri('discard.c');
+  const original = 'void disk_target(void){}void task(void){disk_target();}';
+  let disk = original;
+  adapter.fs.readFile = async () => Buffer.from(disk);
+  await workspace.enqueue(file); await bounded(workspace.whenIdle());
+  const document = { uri: file, isClosed: false, getText: () => latest };
+  adapter.textDocuments = [document];
+  edited.fire({ document, contentChanges: [{}] }); await bounded(workspace.whenIdle());
+  const callees = () => workspace.index.relations(workspace.index.symbols().find(s => s.name === 'task').id, 'callees').map(g => g.name);
+  assert.ok(callees().includes('new_target'));
+  document.isClosed = true; adapter.textDocuments = [];
+  closed.fire(document); await bounded(workspace.whenIdle());
+  assert.ok(callees().includes('disk_target'));
+  assert.equal(callees().includes('new_target'), false);
+  disk = original.replaceAll('disk_target', 'external_target');
+  changed.fire(file); await bounded(workspace.whenIdle());
+  assert.ok(callees().includes('external_target'));
+  assert.equal(workspace.status, 'Index ready');
+});
+
+test('returning to indexed text while a changed Worker response is pending restores raw input', async t => {
+  const { workspace, adapter } = fixture(t);
+  await workspace.ready;
+  const file = uri('pending-revert.c');
+  const original = 'void disk_target(void){}void task(void){disk_target();}';
+  adapter.fs.readFile = async () => Buffer.from(original);
+  await workspace.enqueue(file); await bounded(workspace.whenIdle());
+  const request = workspace.request, parsed = deferred(), release = deferred();
+  let delayed = false;
+  workspace.request = function (message) {
+    const result = request.call(this, message);
+    if (message.uri && !delayed) {
+      delayed = true;
+      return { ...result, promise: result.promise.then(async value => { parsed.resolve(); await release.promise; return value; }) };
+    }
+    return result;
+  };
+  adapter.textDocuments = [{ uri: file, isClosed: false, getText: () => latest }];
+  const old = workspace.enqueue(file); await bounded(parsed.promise);
+  adapter.textDocuments = [];
+  await workspace.enqueue(file);
+  release.resolve(); await old; await bounded(workspace.whenIdle());
+  // The host can look correct while the Worker still holds the superseded text.
+  // An unrelated update must also derive successfully with the restored input.
+  adapter.fs.readFile = async () => Buffer.from('void unrelated(void){}');
+  await workspace.enqueue(uri('unrelated.c')); await bounded(workspace.whenIdle());
+  assert.equal(workspace.index.files.get(file.toString()).text, original);
+  assert.equal(workspace.status, 'Index ready');
+  const task = workspace.index.symbols().find(s => s.name === 'task');
+  assert.ok(workspace.index.relations(task.id, 'callees').some(g => g.name === 'disk_target'));
+  assert.equal(workspace.failures.size, 0);
 });

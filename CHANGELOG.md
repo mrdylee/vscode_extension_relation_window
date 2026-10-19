@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.42 — 2026-10-19
+
+- Reuse existing source and callback results when unchanged documents close or
+  duplicate file-change notifications arrive. Avoid repeated project analysis
+  during navigation and VS Code document-cache eviction.
+- Preserve real edits, discarded unsaved edits and external disk changes. Restore
+  Worker input correctly when a pending edit is superseded by the original text.
+- Keep the existing memory guard. This prevents redundant analysis; it does not
+  guarantee that every project's initial callback analysis fits the memory budget.
+
 ## 0.1.41 — 2026-10-19
 
 - Discard obsolete disk reads before sending source to the analysis Worker.

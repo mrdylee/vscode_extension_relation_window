@@ -11,6 +11,12 @@ This guide is included with the extension and works offline. You do not need Git
 
 Use **Settings** in the C Relations toolbar to configure sorting, Context layout, call graph direction and Include/Exclude together for the current workspace. With no folder open, it opens user settings instead. In a multi-folder workspace, use folder settings for folder-specific Include/Exclude overrides; layout preferences apply to the whole window. **Help** opens this guide again. Both actions are also available in the Command Palette as **C Relations: Open Settings** and **C Relations: Open User Guide**.
 
+The index stays in memory for the current window. Navigating or closing unchanged
+files reuses existing results. Edits (including unsaved edits), discarded edits,
+and external file changes update the affected source and call relationships.
+**Rebuild index**, analysis-scope changes, or reloading the window starts a fresh
+analysis. This is not a persistent on-disk index cache.
+
 ## Choose which files to analyze
 
 Only C/H files are analyzed. Patterns are relative to each workspace folder; use `/` even on Windows. For a folder and everything inside it, write `App/**`, not just `App`.

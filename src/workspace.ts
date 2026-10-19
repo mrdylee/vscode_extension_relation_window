@@ -154,9 +154,15 @@ export class WorkspaceIndex implements vscode.Disposable {
       const text = doc ? doc.getText() : Buffer.from(await vscode.workspace.fs.readFile(uri)).toString('utf8');
       if (this.disposed || epoch !== this.epoch || version !== this.versions.get(key)) return;
       if (this.workerError) throw this.workerError;
+      // Closing an unchanged editor or receiving a duplicate watcher event must
+      // preserve the existing raw input and its derived callback results.
+      if (this.rawVersions.has(key) && this.index.files.get(key)?.text === text) return;
       if (text.length > 2_000_000) throw new Error('File exceeds the 2,000,000 character analysis limit');
       const folder = vscode.workspace.getWorkspaceFolder(uri)!;
       const expandMacros = this.scope(folder).macros.some(matcher => matcher.match(vscode.workspace.asRelativePath(uri, false).replace(/\\/g, '/')));
+      // Once dispatched, the Worker may hold this input even if its response is
+      // superseded. Do not reuse the old host text until a new result is accepted.
+      this.rawVersions.delete(key);
       const request = this.request<FileAnalysis>({ uri: key, text, skip: this.skipInactive, expandMacros });
       const result = await request.promise;
       if (this.disposed || epoch !== this.epoch || version !== this.versions.get(key)) return;
