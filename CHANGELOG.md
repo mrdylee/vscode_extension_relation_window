@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.46 — 2026-10-20
+
+- Enhance Report issue with bounded persistent diagnostic history across host restarts,
+  recent navigation action types and best-effort lifecycle/OOM host-log excerpts.
+- Add Save report for a reviewed Markdown file; preserve copy/manual GitHub flow.
+- Bound disk/queue/read sizes, report missing evidence and redact known paths/URLs.
+  No automatic upload, no complete anonymization or freeze fix claimed.
+
 ## 0.1.45 — 2026-10-20
 
 - Show the latest full-index trigger and extension-session start in Diagnostics,

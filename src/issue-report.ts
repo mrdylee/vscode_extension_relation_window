@@ -2,7 +2,7 @@ import type { AnalysisPhase, Diagnostics, MemorySample } from './diagnostics';
 import type { ViewState } from './view-state';
 
 export const ISSUE_URL = 'https://github.com/mrdylee/vscode_extension_relation_window/issues/new?' + new URLSearchParams({
-  title: '[Bug] ', body: 'Paste the report copied from Dynsight here. Describe the problem and reproduction steps. Review screenshots and code before posting: this issue is public.'
+  title: '[Bug] ', body: 'Paste the reviewed summary or attach the saved Dynsight report here. Describe the problem and reproduction steps. Review screenshots and code before posting: this issue is public.'
 }).toString();
 export interface IssueReportInput {
   now: number; version: string; vscodeVersion: string; platform: string; arch: string; remoteName?: string;
@@ -22,7 +22,7 @@ function noticeKind(text: string) {
   if (/2,000,000 character/i.test(text)) return 'file-size-limit';
   return 'other';
 }
-function statusKind(status: string) {
+export function statusKind(status: string) {
   if (status.includes('memory budget')) return 'partial-memory-budget';
   if (status === 'Index ready') return 'ready';
   if (status.startsWith('Indexing C sources')) return 'indexing';
@@ -92,7 +92,8 @@ export function createIssueReport(input: IssueReportInput): string {
   return `# Dynsight problem report
 
 This GitHub issue will be public. Review this draft and any attachments before submitting.
-The generated summary omits source, symbols, paths, raw errors and Include/Exclude patterns.
+The diagnostic snapshot omits source, symbols, paths, raw errors and Include/Exclude patterns.
+Host log excerpts, when appended, may contain private metadata: review before sharing.
 
 ## Problem
 Describe what stopped working and when it started.

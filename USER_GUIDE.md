@@ -302,31 +302,40 @@ It does not determine build-specific `#ifdef`, `#ifndef`, `defined(...)` or macr
 
 ## If results are missing or slow
 
-### Report a problem (v0.1.40)
+### Report a problem (v0.1.46)
 
-1. Before **Rebuild index** or **Reload Window**, open **Diagnostics → Report issue**.
-   If the Relation panel is unavailable, use **Dynsight: Report Issue** in the
-   Command Palette. Reporting uses the last received measurements without waiting
-   for a busy or stopped Worker.
-2. An editable Markdown draft opens in VS Code. Fill in the problem, reproduction
-   steps and expected/actual behavior. Review the diagnostic snapshot and anything
-   you add: the GitHub issue will be public.
-3. In the notification choose **Copy & Open GitHub**, paste the report into the
-   issue body, give it a descriptive title and submit. GitHub sign-in is required.
-   The extension does not submit it for you. The browser URL contains generic
-   instructions only; the reviewed report is copied to your clipboard.
-4. **Copy report** copies without opening a browser. You can also save the draft
-   with **Save As** or manually copy it after dismissing the notification. If you
-   cannot use GitHub, share the saved draft through an agreed support channel.
+1. Open **Diagnostics → Report issue**, or **Dynsight: Report Issue** in the Command
+   Palette. This collects a current snapshot, recent saved runs and available host
+   failure excerpts without requesting Worker analysis or rebuilding the index.
+2. Review the editable Markdown draft, add the incident time and reproduction steps.
+   **Host excerpts may contain private metadata**; review them before sharing.
+3. Choose **Save report** in the notification to save the reviewed `.md` file and
+   send it to the maintainer. Cancelling the save keeps the draft. You may also use
+   **Save As** after dismissing the notification.
+4. **Copy report** copies only. **Copy & Open GitHub** copies and opens a generic
+   issue page; submit manually. Attach a saved report if it is too long to paste.
+   No report or logs are uploaded automatically.
 
-The generated report includes versions, OS/remote kind, view options, analysis
-status, file counts, categorized notice counts and timestamped memory samples.
-It excludes source, function names, paths, raw error messages and actual
-Include/Exclude/macro-folder patterns (only their counts/modes are included).
-Review screenshots separately: they may show private code or paths. A small,
-shareable C example helps investigate missing or incorrect relationships.
-Report generation is local, adds no background logging and does not rebuild the
-index. Reopen the command after dismissing the notification for a new snapshot.
+Small diagnostic records are saved to workspace-specific extension storage every
+10 seconds, at analysis transitions and on navigation action types. They omit
+source, symbol names, paths and setting values. At most three sessions are kept,
+each with two 256 KiB segments. The write queue is bounded; overload can drop older
+pending records. Saved records survive a host restart, but pending writes can be
+lost and no samples are collected while the host is frozen. Worker values are the
+last received samples (`sampledAt`); process RSS includes the shared host and its
+Workers, not only Dynsight. This starts after installation, not retroactively.
+
+Report issue includes up to the last 16 KiB of each journal segment, without waiting for pending writes. Host collection
+reads only known `exthost.log` / `remoteagent.log` files near the extension log
+folder in the current and preceding VS Code log session, at most eight files and
+the last 64 KiB of each. It selects lifecycle/OOM lines, not complete logs. Missing,
+unreadable or unsupported locations are noted. Previous logs can belong to another
+window/workspace. WSL cannot collect the Windows-side Window log this way.
+Known home/workspace roots and URLs are redacted, but complete anonymization is not
+guaranteed. No sources or other extensions' private log folders are scanned.
+The in-memory Diagnostics view resets on reload; saved report history is separate.
+If logging is unavailable, the current report remains usable. Capturing before a
+manual reload/rebuild is still preferable.
 
 [Browse existing issues or open one manually](https://github.com/mrdylee/vscode_extension_relation_window/issues).
 

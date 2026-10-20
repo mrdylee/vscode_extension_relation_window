@@ -9,6 +9,7 @@ export class RelationView implements vscode.Disposable {
   state: ViewState = { candidates: [], status: 'Open a C file and click a symbol name.', fileCount: 0,
     issues: [], mode: 'references', accessFilter: 'all', depth: 1, locked: false, skipInactive: true,
     calleeSort: 'name', contextLayout: 'combined', callGraphDirection: 'callers-left', includeFunctionArguments: false };
+  readonly activity = new vscode.EventEmitter<string>();
   private webview?: vscode.WebviewView;
   private contextView?: vscode.WebviewView;
   private root?: { id: string; name: string; uri: string };
@@ -99,6 +100,7 @@ export class RelationView implements vscode.Disposable {
     }
     // Cursor movement inside an unchanged symbol must not resend a large graph to WSL.
     if (this.root?.id === candidates[0].id && this.state.graph) return false;
+    this.activity.fire('editor-selection');
     this.setRoot(candidates[0]);
     return true;
   }
@@ -162,6 +164,7 @@ export class RelationView implements vscode.Disposable {
   async handleMessage(message: unknown) {
     if (!message || typeof message !== 'object') return;
     const m = message as Record<string, unknown>;
+    if (typeof m.type === 'string' && ['selectNode', 'navigateContext', 'choose', 'mode', 'depth', 'lock', 'skip', 'refresh', 'expand', 'collapse', 'expandSpecial', 'open'].includes(m.type)) this.activity.fire(m.type);
     switch (m.type) {
       case 'diagnostics': this.workspace.refreshDiagnostics(); break;
       case 'reportIssue': await vscode.commands.executeCommand('dynsight.reportIssue'); break;
@@ -237,5 +240,5 @@ export class RelationView implements vscode.Disposable {
       }
     }
   }
-  dispose() { clearTimeout(this.refreshTimer); this.listener.dispose(); this.preferences.dispose(); this.diagnosticsListener.dispose(); }
+  dispose() { this.activity.dispose(); clearTimeout(this.refreshTimer); this.listener.dispose(); this.preferences.dispose(); this.diagnosticsListener.dispose(); }
 }
