@@ -85,3 +85,15 @@ test('report includes file-loss checkpoints without exporting discovered paths',
   });
   assert.doesNotMatch(report, /SECRET/);
 });
+
+test('callback limit report exposes safe cost counters without source identifiers', () => {
+  const value=input();
+  value.state.callbackDiagnostics=[{kind:'mutation',stage:'propagation',message:'SECRET_MESSAGE',symbol:'SECRET_FUNCTION',
+    location:{uri:'file:///SECRET_PATH',start:1,end:2,line:3,column:4,endLine:3,endColumn:5},
+    elapsedMs:350,scopeElapsedMs:12,evaluations:1000,scopeEvaluations:300,slots:256}];
+  const report=createIssueReport(value);
+  assert.match(report,/"callbackLimits"/);
+  assert.match(report,/"scopeEvaluations": 300/);
+  assert.match(report,/"stage": "propagation"/);
+  assert.doesNotMatch(report,/SECRET/);
+});

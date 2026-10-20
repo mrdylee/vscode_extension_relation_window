@@ -352,6 +352,26 @@ It does not determine build-specific `#ifdef`, `#ifndef`, `defined(...)` or macr
 
 ## If results are missing or slow
 
+### Locate callback limits (v0.1.52)
+
+**Analysis notices** shows callback/macro limits before syntax notices. Callback
+details include the observed file, line and function, followed by `stage`,
+`project` elapsed milliseconds, `scope` elapsed milliseconds and
+`evaluations=current scope/project total`. Scope means the current function visit
+or global initializer, not its accumulated cost across all propagation passes.
+Up to 64 distinct limit/location records are retained per inference run.
+
+The 10-second callback budget covers project inference. **Project budget observed
+at** identifies where a time/memory check stopped it; that function did not
+necessarily consume the whole budget. A setup or project-wide limit has no
+arbitrary file attribution. The 256-slot limit applies to function mutation
+summaries; global initializers no longer build that unused summary.
+
+Capture the expanded warning to share its location. **Report issue** includes
+`callbackLimits` categories and cost counters but omits function names and paths.
+Safety limits remain unchanged; these diagnostics do not by themselves resolve
+every missing callback target.
+
 ### Report a problem (v0.1.46)
 
 1. Open **Diagnostics → Report issue**, or **Dynsight: Report Issue** in the Command

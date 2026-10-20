@@ -1,4 +1,4 @@
-import { FileAnalysis, FlowExpression as Expr, FlowLocal, FlowProgram, FlowStatement, Location, ReferenceRecord, SymbolRecord } from './model';
+import { CallbackDiagnostic, FileAnalysis, FlowExpression as Expr, FlowLocal, FlowProgram, FlowStatement, Location, ReferenceRecord, SymbolRecord } from './model';
 import { RelationIndex } from './relations';
 import { FunctionArguments } from './function-arguments';
 
@@ -152,13 +152,33 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
       const fingerprint = JSON.stringify(['direct-sites', argumentsFound, warnings]);
       const previous = fileCache!.get(file); if (previous?.fingerprint === fingerprint) return previous.result;
       const result = { ...file, references, issues: warnings.length ? [...file.issues, ...warnings] : file.issues,
+        callbackDiagnostics: warnings.length ? [{ kind: 'memory' as const, stage: 'setup' as const, message: callbackMemoryLimit,
+          elapsedMs: 0, scopeElapsedMs: 0, evaluations: 0, scopeEvaluations: 0 }] : undefined,
         functionArguments: argumentsFound.length ? argumentsFound : undefined };
       fileCache!.set(file, { fingerprint, result }); return result;
     });
     projectCache.set(owner, { inputs: files, results, analyzeCallbacks, memoryLimited }); return results;
   }
   const heap = new Map<string, Value>(), summaries = new Map<string, Summary>();
-  const deadline = performance.now() + 10_000;
+  const started = performance.now(), deadline = started + 10_000;
+  let activeSymbol: SymbolRecord | undefined, currentLocation: Location | undefined;
+  let stage: CallbackDiagnostic['stage'] = 'setup', evaluations = 0, functionStart = started, functionStartEvaluations = 0;
+  const details = new Map<string, CallbackDiagnostic>();
+  const omitted = new Set<string>();
+  function notice(message: string, slots?: number) {
+    notices.add(message);
+    const key = `${message}:${stage}:${activeSymbol?.id ?? ''}`;
+    if (details.has(key)) return;
+    if (details.size >= 64) { omitted.add(message); return; }
+    const now = performance.now();
+    const kind: CallbackDiagnostic['kind'] = message.includes('memory') ? 'memory' : message.includes('10 seconds') ? 'time'
+      : message.includes('work limit') ? 'work' : message.includes('mutation') ? 'mutation' : message.includes('loop') ? 'loop'
+      : message.includes('array') ? 'array' : 'propagation';
+    details.set(key, { kind, stage, message, symbol: activeSymbol?.name,
+      location: currentLocation ?? activeSymbol?.location,
+      elapsedMs: Math.max(0, Math.round(now - started)), scopeElapsedMs: activeSymbol ? Math.max(0, Math.round(now - functionStart)) : 0,
+      evaluations, scopeEvaluations: activeSymbol ? evaluations - functionStartEvaluations : 0, slots });
+  }
   const parameterLayouts = new Map<string, ReturnType<RelationIndex['layout']>[]>();
   const returnStorage = new Map<string, boolean>();
   for (const [id, list] of byFunction) {
@@ -174,11 +194,11 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
   const argumentObservations = new Map<string, ArgumentObservation>();
   let changed = false, steps = 0;
   let timedOut = false, checks = 0;
-  function expired() {
-    if (!timedOut && (++checks & 255) === 0) {
-      if (memoryPressure?.()) { timedOut = true; notices.add(callbackMemoryLimit); }
+  function expired(force = false) {
+    if (!timedOut && (force || (++checks & 255) === 0)) {
+      if (memoryPressure?.()) { timedOut = true; notice(callbackMemoryLimit); }
       else if (performance.now() >= deadline) {
-        timedOut = true; notices.add('Callback analysis budget: 10 seconds; targets may be incomplete. Narrow Include/Exclude scope.');
+        timedOut = true; notice('Callback analysis budget: 10 seconds; targets may be incomplete. Narrow Include/Exclude scope.');
       }
     }
     return timedOut;
@@ -272,7 +292,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
       const start = slot.indexOf('#') + 1; patterns = [slot.slice(0, start)];
       for (const part of slot.slice(start).split(/(\[[^\]]+\])/g)) {
         patterns = [...new Set(patterns.flatMap(prefix => part.startsWith('[') ? [prefix + part, prefix + '[*]'] : [prefix + part]))];
-        if (patterns.length > 64) { patterns = patterns.slice(0, 64); notices.add('Callback array path limit: 64 wildcard combinations'); }
+        if (patterns.length > 64) { patterns = patterns.slice(0, 64); notice('Callback array path limit: 64 wildcard combinations'); }
       }
       patterns = patterns.filter(key => key !== slot); wildcardSlots.set(slot, patterns);
     }
@@ -286,8 +306,11 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     let local = false;
     for (const [root, declaration] of ctx.locals) if (!declaration.persistent && (slot === root || slot.startsWith(root + '.') || slot.startsWith(root + '['))) { local = true; break; }
     if (!local) {
-      if (state.effects.has(slot) || state.effects.size < 256) state.effects.set(slot, { value: state.memory.get(slot)!, definite: !weak });
-      else { state.incomplete = true; notices.add('Callback mutation limit: 256 slots per function; targets may be incomplete'); }
+      // Global initializer effects are never consumed as a function summary.
+      if (ctx.program.id !== 'global') {
+        if (state.effects.has(slot) || state.effects.size < 256) state.effects.set(slot, { value: state.memory.get(slot)!, definite: !weak });
+        else { state.incomplete = true; notice('Callback mutation limit: 256 slots per function; targets may be incomplete', 256); }
+      }
       if (!slot.startsWith('$arg:')) put(heap, slot, value);
     }
   }
@@ -297,7 +320,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     for (const key of new Set([...a.effects.keys(), ...b.effects.keys()])) {
       const x = a.effects.get(key), y = b.effects.get(key);
       if (result.effects.size < 256) result.effects.set(key, { value: union(...[x?.value, y?.value].filter((v): v is Value => !!v)), definite: !!x?.definite && !!y?.definite });
-      else { result.incomplete = true; notices.add('Callback mutation limit: 256 slots per function; targets may be incomplete'); }
+      else { result.incomplete = true; notice('Callback mutation limit: 256 slots per function; targets may be incomplete', 256); }
     }
     return result;
   }
@@ -434,8 +457,9 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     return { ...blank(), numbers: value.numbers, nil: value.nil, unknown: true, reasons: ['Callback/storage addresses converted to scalar values are not tracked'] };
   }
   function evaluate(expr: Expr, state: State, ctx: Context): Value {
+    currentLocation = expr.location; evaluations++;
     if (expired()) return unknown(notices.has(callbackMemoryLimit) ? callbackMemoryLimit : 'Callback analysis time budget reached');
-    if (++steps > 2_000_000) { notices.add('Callback analysis work limit reached'); return unknown('Callback analysis work limit'); }
+    if (++steps > 2_000_000) { notice('Callback analysis work limit reached'); return unknown('Callback analysis work limit'); }
     if (expr.kind === 'number') {
       const text = expr.value.replace(/[uUlL]+$/, ''), n = /^0[0-7]+$/.test(text) ? parseInt(text, 8) : Number(text);
       return Number.isFinite(n) ? { ...blank(), numbers: new Set([n]), nil: n === 0 } : unknown('Nonconstant numeric address');
@@ -547,7 +571,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
           const part = formal(key);
           const keys = part?.fn === fn ? [...(args[part.index]?.objects ?? [])].map(actual => actual + part.suffix) : [key];
           for (const key of keys) {
-            if (!effects.has(key) && effects.size >= 256) { opaque = true; state.incomplete = true; notices.add('Callback mutation limit: 256 slots per function; targets may be incomplete'); continue; }
+            if (!effects.has(key) && effects.size >= 256) { opaque = true; state.incomplete = true; notice('Callback mutation limit: 256 slots per function; targets may be incomplete', 256); continue; }
             const value = instantiate(effect.value, fn, args), old = effects.get(key);
             effects.set(key, { value: old ? union(old.value, value) : value, count: (old?.count ?? 0) + 1, definite: (old?.definite ?? true) && effect.definite && keys.length === 1 });
           }
@@ -585,7 +609,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
           stable = [...next.memory].every(([key, value]) => combined.memory.has(key) && signature(value) === signature(combined.memory.get(key)!));
           combined = next; if (stable) break;
         }
-        if (!stable) notices.add('Callback loop propagation limit: 4 passes; targets may be incomplete');
+        if (!stable) notice('Callback loop propagation limit: 4 passes; targets may be incomplete');
         state = combined;
       }
     }
@@ -594,15 +618,23 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
   const globalProgram: FlowProgram = { id: 'global', locals: [], params: [], body: [] };
   const persistent = new Map(programs.flatMap(program => program.locals.filter(local => local.persistent).map(local => [local.id, local] as const)));
   const globalContext: Context = { program: globalProgram, locals: persistent, exits: [], returned: blank() };
+  expired(true);
+  stage = 'initializers';
   for (const file of files) for (const init of file.initializers ?? []) {
+    if (timedOut) break;
     const local = persistent.get(init.id);
     const symbol = index.symbol(init.id) ?? (local && valueType({ kind: 'name', name: local.name, localId: local.id, location: local.location }, globalContext));
+    activeSymbol = symbol; currentLocation = init.location; functionStart = performance.now(); functionStartEvaluations = evaluations;
     if (symbol) initializer(init.id, init.value, index.layout(symbol), { memory: new Map(), effects: new Map(), alive: true }, globalContext);
   }
+  activeSymbol = undefined; currentLocation = undefined;
+  stage = 'propagation';
   let converged = false;
   for (let round = 0; round < 12; round++) {
     changed = false; observations.clear(); argumentObservations.clear(); steps = 0;
     for (const [id, list] of byFunction) {
+      activeSymbol = index.symbol(id); currentLocation = activeSymbol?.location;
+      functionStart = performance.now(); functionStartEvaluations = evaluations;
       if (expired()) break;
       const exits: State[] = [], target = summaries.get(id)!; let returned = blank();
       const previous = completed.get(id);
@@ -646,7 +678,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
       for (const [key, effect] of all?.effects ?? []) {
         if (!target.effects.has(key) && target.effects.size >= 256) {
           if (!target.incomplete) { target.incomplete = true; target.version++; changed = true; }
-          notices.add('Callback mutation limit: 256 slots per function; targets may be incomplete'); continue;
+          notice('Callback mutation limit: 256 slots per function; targets may be incomplete', 256); continue;
         }
         const old = target.effects.get(key), value = old ? joined(old.value, effect.value) : effect.value;
         if (!old || signature(old.value) !== signature(value) || old.definite !== effect.definite) { changed = true; target.version++; }
@@ -659,7 +691,8 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     if (timedOut) break;
     if (!changed) { converged = true; break; }
   }
-  if (!converged && !timedOut) notices.add('Callback propagation limit: 12 project passes; targets may be incomplete');
+  activeSymbol = undefined; currentLocation = undefined;
+  if (!converged && !timedOut) notice('Callback propagation limit: 12 project passes; targets may be incomplete');
   for (const observation of argumentObservations.values()) for (const [n, observed] of observation.values) {
     const value = materialize(observed);
     functionArguments.add(observation.call, n, new Map([...value.targets].map(([id, chain]) => [id, frames([...chain, ...value.evidence])])),
@@ -682,14 +715,15 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
       if (incomplete) refs.push({ ...ref, id: ref.id + ':unknown', targetId: undefined, indirect: true, callKind: 'indirect', unresolvedKind: observation.kind, inference });
     }
     const unique = uniqueCalls(refs);
-    const warnings = file.uri === warningFile ? [...notices] : [];
+    const diagnostics = [...details.values()].filter(detail => detail.location ? detail.location.uri === file.uri : file.uri === warningFile);
+    const warnings = [...new Set([...diagnostics.map(detail => detail.message), ...(file.uri === warningFile ? [...omitted].map(message => message + ' (additional locations omitted; 64 diagnostic records retained)') : [])])];
     modified ||= unique.length !== refs.length;
     const argumentsFound = functionArguments.forFile(file.uri);
     if (!modified && !warnings.length && !argumentsFound.length) return file;
-    const fingerprint = JSON.stringify([unique.filter(ref => ref.inference).map(ref => [ref.id, ref.name, ref.targetId, ref.callKind, ref.inference]), warnings, argumentsFound]);
+    const fingerprint = JSON.stringify([unique.filter(ref => ref.inference).map(ref => [ref.id, ref.name, ref.targetId, ref.callKind, ref.inference]), warnings, argumentsFound, diagnostics]);
     const previous = fileCache!.get(file);
     if (previous?.fingerprint === fingerprint) return previous.result;
-    const result = { ...file, references: unique, issues: [...file.issues, ...warnings], functionArguments: argumentsFound.length ? argumentsFound : undefined };
+    const result = { ...file, references: unique, issues: [...file.issues, ...warnings], callbackDiagnostics: diagnostics.length ? diagnostics : undefined, functionArguments: argumentsFound.length ? argumentsFound : undefined };
     fileCache!.set(file, { fingerprint, result }); return result;
   });
   projectCache.set(owner, { inputs: files, results, analyzeCallbacks, memoryLimited: notices.has(callbackMemoryLimit) }); return results;

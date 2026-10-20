@@ -2,7 +2,7 @@
   "name": "dynsight",
   "displayName": "Dynsight — C Code Explorer",
   "description": "Build-free C references, caller/callee graphs and a linked Context preview.",
-  "version": "0.1.51",
+  "version": "0.1.52",
   "publisher": "dylee",
   "author": "dylee",
   "license": "MIT",
@@ -155,7 +155,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test test/core.test.ts test/macros.test.ts test/pointer-calls.test.ts test/function-arguments.test.ts test/members.test.ts test/syntax.test.ts test/updates.test.ts test/issue-report.test.ts test/issue-report-service.test.ts test/diagnostic-history.test.ts test/branding-migration.test.ts",
+    "test": "tsx --test test/core.test.ts test/analysis-notices.test.ts test/macros.test.ts test/pointer-calls.test.ts test/function-arguments.test.ts test/members.test.ts test/syntax.test.ts test/updates.test.ts test/issue-report.test.ts test/issue-report-service.test.ts test/diagnostic-history.test.ts test/branding-migration.test.ts",
     "test:extension": "npm run build && node scripts/test-extension.mjs",
     "test:worker": "npm run build && node --test test/analysis-worker.test.mjs test/workspace.test.mjs",
     "test:memory": "node --expose-gc --import tsx --test test/analysis-memory.test.ts",
@@ -164,7 +164,7 @@
     "test:freertos": "npm run build && node scripts/test-freertos.mjs",
     "test:ui": "npm run build && tsx test/create-ui-fixture.ts && node test/ui.mjs",
     "vscode:prepublish": "npm run build",
-    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license --out artifacts/dynsight-0.1.51.vsix"
+    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license --out artifacts/dynsight-0.1.52.vsix"
   },
   "dependencies": {
     "minimatch": "10.2.6",

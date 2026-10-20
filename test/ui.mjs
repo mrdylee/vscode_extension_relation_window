@@ -539,6 +539,12 @@ try {
   assert.ok(await page.locator('.relation').isVisible());
   assert.equal(await divider.isVisible(), false);
   await page.setViewportSize({ width: 900, height: 500 });
+  await configure({issues:fixture.limitNotices});
+  await page.locator('footer summary').click();
+  assert.match(await page.locator('footer pre').textContent(), /update.*Callback mutation limit/);
+  assert.match(await page.locator('footer pre').textContent(), /stage=propagation.*evaluations=/s);
+  await page.screenshot({path:'output/playwright/callback-limit-locations.png',fullPage:true});
+  await configure({issues:[]});
   const MiB = 1024 * 1024, at = Date.now();
   const memory = used => ({ at, heapUsed: used * MiB, heapLimit: 2048 * MiB, external: 128 * MiB });
   const diagnostics = { environment: 'linux x64 · wsl · VS Code test', host: memory(180), worker: {

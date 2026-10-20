@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { WorkspaceIndex } from './workspace';
 import { GraphNode, Location, SymbolRecord } from './model';
 import { ViewState } from './view-state';
+import { analysisNotices } from './analysis-notices';
 import { highlightC, SyntaxToken } from './syntax';
 
 export class RelationView implements vscode.Disposable {
@@ -133,9 +134,10 @@ export class RelationView implements vscode.Disposable {
     this.state.skipInactive = this.workspace.skipInactive;
     this.state.status = this.workspace.status;
     this.state.fileCount = this.workspace.index.files.size;
+    this.state.callbackDiagnostics = [...this.workspace.index.files.values()].flatMap(file => file.callbackDiagnostics ?? []).slice(0, 64);
     this.state.issues = [
       ...[...this.workspace.failures].map(([uri, error]) => `${vscode.workspace.asRelativePath(vscode.Uri.parse(uri))}: ${error}`),
-      ...[...this.workspace.index.files.values()].flatMap(f => f.issues.map(issue => `${vscode.workspace.asRelativePath(vscode.Uri.parse(f.uri))}: ${issue}`))
+      ...analysisNotices([...this.workspace.index.files.values()], uri => vscode.workspace.asRelativePath(vscode.Uri.parse(uri)))
     ];
     if (this.root) {
       let symbol = this.workspace.index.symbol(this.root.id);

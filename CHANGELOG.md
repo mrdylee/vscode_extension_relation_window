@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.52 — 2026-10-20
+
+- Attribute callback limits to the actual observed file, line and function, with
+  analysis stage, elapsed time and evaluation counts. Show limits before syntax
+  notices and keep at most 64 detailed records per inference run.
+- Identify time/memory limits as project budgets; an observation location does
+  not imply that one function consumed the entire budget. Report issue includes
+  only the diagnostic categories and numeric counters, without source identifiers.
+- Stop building unused function mutation summaries for global initializers.
+  Large static tables no longer falsely trigger the 256-slot function limit.
+  Preserve heap writes, callback candidates and all existing safety limits.
+
 ## 0.1.51 — 2026-10-20
 
 - Add **Analyze Callbacks**, enabled by default and independent of **Include

@@ -405,3 +405,71 @@ test('callback member selection survives macro expansion elsewhere in the same f
   assert.deepEqual(index.callbackAt(uri, sources['stage.c'].indexOf('saved->pre();') + 7)?.targets.map(s => s.name), ['prepare']);
   assert.equal(index.callbackAt(uri, sources['stage.c'].indexOf('saved->pre();')), undefined, 'object selection remains ordinary navigation');
 });
+
+test('global initializer slots do not consume a function mutation summary', () => {
+  const source = prelude + 'static int data[300]={' + Array.from({length:300},(_,n)=>n).join(',') + '};' +
+    'static CB cb=foo;void run(void){cb();}';
+  const index = project({'large.c':source});
+  assert.equal([...index.files.values()].some(f=>f.issues.some(i=>i.includes('mutation limit'))), false);
+  assert.ok(inferred(index).some(g=>g.name==='foo'));
+});
+
+test('callback mutation diagnostics identify the actual file and function instead of the first caller file', () => {
+  const writes = Array.from({length:270},(_,n)=>`data[${n}]=${n};`).join('\n');
+  const index = project({'first.c':'void unrelated(void){external();}',
+    'actual.c':prelude+'int data[300];\nvoid large_update(void){\n'+writes+'\n}\nvoid run(void){CB cb=foo;cb();}'});
+  const file = index.files.get('file:///demo/actual.c')!;
+  assert.equal(index.files.get('file:///demo/first.c')!.issues.some(i=>i.includes('mutation limit')), false);
+  const detail = file.callbackDiagnostics?.find(d=>d.kind==='mutation');
+  assert.ok(detail);
+  assert.equal(detail.symbol, 'large_update');
+  assert.equal(detail.location?.uri, file.uri);
+  assert.ok(detail.location!.line>200);
+  assert.equal(detail.stage,'propagation');
+  assert.equal(detail.slots,256);
+  assert.ok(detail.evaluations>0);
+  assert.ok(detail.scopeEvaluations>0);
+  assert.ok(inferred(index).some(g=>g.name==='foo'));
+});
+
+test('project timeout diagnostics are distinct from a function exceeding its own budget', t => {
+  const raw = [analyzer.analyze('file:///demo/time.c', prelude+'void run(void){CB cb=foo;cb();}')];
+  let clock = 0, checks = 0;
+  t.mock.method(performance, 'now', () => clock);
+  const files = inferPointerCalls(raw, () => { if (++checks === 2) clock = 10001; return false; }, {});
+  const detail = files.flatMap(f=>f.callbackDiagnostics ?? []).find(d=>d.kind==='time')!;
+  assert.ok(detail);
+  assert.equal(detail.stage, 'setup');
+  assert.equal(detail.location, undefined, 'pre-propagation timeout must not blame the first function');
+  assert.equal(detail.elapsedMs, 10001);
+  assert.equal(detail.scopeEvaluations, 0);
+});
+
+test('callback diagnostic record count is bounded across many functions', () => {
+  const writes = Array.from({length:260},(_,n)=>`data[${n}]=${n};`).join('');
+  const functions = Array.from({length:70},(_,n)=>`void write_${n}(void){${writes}}`).join('\n');
+  const index=project({'many.c':prelude+'int data[300];'+functions+'void run(void){CB cb=foo;cb();}'});
+  assert.ok([...index.files.values()].flatMap(f=>f.callbackDiagnostics ?? []).length<=64);
+  assert.ok([...index.files.values()].some(f=>f.issues.some(i=>i.includes('mutation limit'))));
+});
+
+test('callback memory guard before inference has a project diagnostic without a blamed file', () => {
+  const raw = [analyzer.analyze('file:///demo/memory.c', prelude+'void run(void){CB cb=foo;cb();}')];
+  const files = inferPointerCalls(raw, () => true, {});
+  const detail = files.flatMap(f=>f.callbackDiagnostics ?? [])[0];
+  assert.equal(detail.kind, 'memory');
+  assert.equal(detail.stage, 'setup');
+  assert.equal(detail.location, undefined);
+  assert.equal(detail.evaluations, 0);
+});
+
+test('mutation diagnostics in macro-containing functions retain original source locations', () => {
+  const writes = Array.from({length:270},(_,n)=>`data[${n}]=VALUE(${n});`).join('\n');
+  const index=project({'macro.c':'#define VALUE(x) (x)\n'+prelude+'int data[300];\nvoid update(void){\n'+writes+
+    '\n}\nvoid run(void){CB cb=foo;cb();}'});
+  const file=index.files.get('file:///demo/macro.c')!, detail=file.callbackDiagnostics?.find(d=>d.kind==='mutation');
+  assert.ok(detail);
+  assert.equal(detail.symbol, 'update');
+  assert.equal(detail.location?.uri, file.uri);
+  assert.ok(detail.location!.line>200 && detail.location!.line<280);
+});

@@ -436,3 +436,21 @@ test('callback setting changes reuse source facts and discard in-flight results 
   assert.equal(hasTarget(), true);
   assert.equal(workspace.diagnostics.index.sourceParses, parses);
 });
+
+test('Worker transfers located callback diagnostics and clears them when callback analysis is disabled', async t => {
+  const {workspace,adapter,configuration}=fixture(t);
+  await workspace.ready;
+  const file=uri('limits.c');
+  adapter.fs.readFile=async()=>Buffer.from('void target(void){}int data[300];void update(void){'+
+    Array.from({length:270},(_,n)=>`data[${n}]=${n};`).join('')+'}void run(void){void(*cb)(void)=target;cb();}');
+  await workspace.enqueue(file);await workspace.derive();
+  const analysis=workspace.index.files.get(file.toString());
+  assert.equal(analysis.callbackDiagnostics.find(d=>d.kind==='mutation').symbol,'update');
+  assert.equal(analysis.programs,undefined,'flow programs remain Worker-only');
+  assert.match(workspace.status,/Partial index: analysis limits/);
+  adapter.getConfiguration=()=>({get:(key,fallback)=>key==='analyzeCallbacks'?false:fallback});
+  configuration.fire({affectsConfiguration:key=>key==='dynsight.analyzeCallbacks'});
+  await bounded(workspace.whenIdle());
+  assert.equal(workspace.index.files.get(file.toString()).callbackDiagnostics,undefined);
+  assert.equal(workspace.status,'Index ready');
+});

@@ -614,6 +614,20 @@ export async function run() {
   await vscode.workspace.fs.delete(pointerUri);
   await new Promise(resolve=>setTimeout(resolve,500)); await api.workspace.whenIdle();
   assert.equal(api.workspace.index.symbols().some((symbol:any)=>symbol.name==='pointer_target'),false);
+  const limitUri = vscode.Uri.joinPath(root, 'callback-limits.c');
+  await vscode.workspace.fs.writeFile(limitUri, Buffer.from('int data[300];void limit_update(void){\n' +
+    Array.from({length:270},(_,n)=>`data[${n}]=${n};`).join('\n') +
+    '\n}void limit_target(void){}void limit_run(void){void(*cb)(void)=limit_target;cb();}'));
+  await new Promise(resolve=>setTimeout(resolve,500)); await api.workspace.whenIdle();
+  const limit = api.view.state.callbackDiagnostics.find((detail:any)=>detail.symbol==='limit_update');
+  assert.equal(limit.kind,'mutation');
+  assert.equal(limit.location.uri,limitUri.toString());
+  assert.ok(limit.scopeEvaluations>0);
+  assert.ok(api.view.state.issues.some((issue:string)=>/callback-limits.c:\d+ · limit_update: Callback mutation limit/.test(issue)));
+  assert.match(api.workspace.status,/Partial index: analysis limits/);
+  await vscode.workspace.fs.delete(limitUri);
+  await new Promise(resolve=>setTimeout(resolve,500)); await api.workspace.whenIdle();
+  assert.equal(api.view.state.callbackDiagnostics.some((detail:any)=>detail.symbol==='limit_update'),false,'deleted limits must not persist in the view');
   const layoutUri = vscode.Uri.joinPath(root, 'layout-review.c');
   const layoutSource = 'void layout_leaf(void){} void layout_a(void){layout_leaf();} void layout_z(void){} void layout_pivot(void){layout_z();layout_a();layout_z();} void layout_entry(void){layout_pivot();}';
   await vscode.workspace.fs.writeFile(layoutUri, Buffer.from(layoutSource));

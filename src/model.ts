@@ -70,6 +70,13 @@ export type PreprocessorEvent =
   | { kind: 'undef'; location: Location; conditions: string[]; name: string }
   | { kind: 'include'; location: Location; conditions: string[]; path: string; system: boolean };
 export interface FunctionBody { id: string; location: Location; body: Location }
+export interface CallbackDiagnostic {
+  kind: 'memory' | 'time' | 'work' | 'mutation' | 'loop' | 'array' | 'propagation';
+  stage: 'setup' | 'initializers' | 'propagation';
+  message: string; location?: Location; symbol?: string;
+  elapsedMs: number; scopeElapsedMs: number;
+  evaluations: number; scopeEvaluations: number; slots?: number;
+}
 export interface FileAnalysis {
   uri: string; text: string; symbols: SymbolRecord[]; references: ReferenceRecord[];
   includes: string[]; issues: string[]; systemIncludes?: string[];
@@ -82,6 +89,7 @@ export interface FileAnalysis {
   programs?: FlowProgram[]; initializers?: GlobalInitializer[];
   argumentPrograms?: FlowProgram[];
   functionArguments?: ReferenceRecord[];
+  callbackDiagnostics?: CallbackDiagnostic[];
   statementConditions?: { start: number; conditions: string[] }[];
 }
 export interface RelationSite extends ReferenceRecord { ambiguous: boolean; candidates: string[] }

@@ -70,6 +70,12 @@ export function createIssueReport(input: IssueReportInput): string {
       excludePatternCount: scopes.reduce((n, s) => n + s.exclude, 0), macroPatternCount: scopes.reduce((n, s) => n + s.macroPatterns, 0),
       macroFolderModes: Object.fromEntries(['all', 'selected', 'none'].map(mode => [mode, scopes.filter(s => s.macroMode === mode).length])) },
     noticeCount: state.issues.length, notices,
+    callbackLimits: (state.callbackDiagnostics ?? []).slice(0, 64).map(detail => ({
+      kind: choice(detail.kind, ['memory', 'time', 'work', 'mutation', 'loop', 'array', 'propagation']),
+      stage: choice(detail.stage, ['setup', 'initializers', 'propagation']), located: !!detail.location,
+      elapsedMs: number(detail.elapsedMs), scopeElapsedMs: number(detail.scopeElapsedMs),
+      evaluations: number(detail.evaluations), scopeEvaluations: number(detail.scopeEvaluations), slots: number(detail.slots)
+    })),
     workerError: diagnostics.workerError ? noticeKind(diagnostics.workerError) : 'none',
     index: index ? {
       sessionAgeSeconds: age(index.sessionStartedAt), rebuildCount: number(index.rebuildCount),
