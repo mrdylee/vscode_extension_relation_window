@@ -299,7 +299,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     const broad = patterns.map(key => state.memory.get(key) ?? heapValue(key)).filter((value): value is Value => !!value);
     return broad.length ? union(exact ?? defaultValue(slot), ...broad) : exact ?? defaultValue(slot);
   }
-  function write(slot: string, value: Value, state: State, ctx: Context, definite = true) {
+  function write(slot: string, value: Value, state: State, ctx: Context, definite = true, summarize = true) {
     if (expired()) { state.incomplete = true; return; }
     const weak = slot.includes('[*]') || !definite;
     memorySet(state.memory, slot, weak ? union(read(slot, state), value) : value);
@@ -307,7 +307,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     for (const [root, declaration] of ctx.locals) if (!declaration.persistent && (slot === root || slot.startsWith(root + '.') || slot.startsWith(root + '['))) { local = true; break; }
     if (!local) {
       // Global initializer effects are never consumed as a function summary.
-      if (ctx.program.id !== 'global') {
+      if (ctx.program.id !== 'global' && summarize) {
         if (state.effects.has(slot) || state.effects.size < 256) state.effects.set(slot, { value: state.memory.get(slot)!, definite: !weak });
         else { state.incomplete = true; notice('Callback mutation limit: 256 slots per function; targets may be incomplete', 256); }
       }
@@ -341,6 +341,39 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     const drop = expr.kind === 'call' ? (layout.layers[0] === 'pointer' ? 2 : 1) : 1;
     return { ...base, id: base.id + ':' + expr.location.start, type: { name: '', id: layout.id || undefined, layers: layout.layers.slice(drop) } };
   }
+  // Exclude only proven write-only scalar declarations from exported effects.
+  // Keep all reads (including selectors/guards), address uses and unresolved
+  // storage conservative; evaluation and heap values are still retained.
+  const scalarReads = new Set<string>(), unresolvedReads = new Set<string>();
+  function collectReads(expr: Expr, ctx: Context, writing = false) {
+    if (!writing && (expr.kind === 'name' || expr.kind === 'member')) {
+      const record = valueType(expr, ctx);
+      if (record) scalarReads.add(record.id);
+      else unresolvedReads.add(expr.kind === 'name' ? expr.name : expr.field);
+    }
+    if (expr.kind === 'assign') { collectReads(expr.left, ctx, expr.operator === '='); collectReads(expr.right, ctx); }
+    else if (expr.kind === 'call') { collectReads(expr.callee, ctx); expr.args.forEach(arg => collectReads(arg, ctx)); }
+    else if (expr.kind === 'index') { collectReads(expr.object, ctx); collectReads(expr.index, ctx); }
+    else if (expr.kind === 'member' || expr.kind === 'dereference' || expr.kind === 'address' || expr.kind === 'cast') collectReads(expr.object, ctx);
+    else if (expr.kind === 'choice' || expr.kind === 'sequence') expr.values.forEach(value => collectReads(value, ctx));
+    else if (expr.kind === 'initializer') expr.entries.forEach(entry => collectReads(entry.value, ctx));
+    else if (expr.kind === 'unknown') expr.children?.forEach(child => collectReads(child, ctx));
+  }
+  function collectBodyReads(body: FlowStatement[], ctx: Context) {
+    for (const statement of body) {
+      if (statement.kind === 'expression' || statement.kind === 'return') collectReads(statement.value, ctx);
+      else if (statement.kind === 'loop' || statement.kind === 'branch') {
+        collectReads(statement.condition, ctx);
+        if (statement.kind === 'loop') collectBodyReads(statement.body, ctx);
+        else { collectBodyReads(statement.then, ctx); collectBodyReads(statement.otherwise, ctx); }
+      }
+    }
+  }
+  function summarize(record: SymbolRecord | undefined) {
+    if (!record || !index.symbol(record.id) || scalarReads.has(record.id) || unresolvedReads.has(record.name)) return true;
+    const layouts = index.layout(record);
+    return !layouts.length || !layouts.every(layout => !layout.layers.length && layout.scalar);
+  }
   function storedValue(expr: Expr, value: Value, state: State, ctx: Context): Value {
     if (!value.unknown || value.objects.size) return value;
     const record = valueType(expr, ctx), layout = record && index.layout(record)[0];
@@ -350,7 +383,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
       return { ...value, objects: new Set(slots(expr, state, ctx)) };
     return value;
   }
-  function copyStorage(destination: string, sources: ReadonlySet<string>, layout: ReturnType<RelationIndex['layout']>[number], state: State, ctx: Context, depth = 0) {
+  function copyStorage(destination: string, sources: ReadonlySet<string>, layout: ReturnType<RelationIndex['layout']>[number], state: State, ctx: Context, depth = 0, record?: SymbolRecord) {
     if (depth >= 16) { write(destination, unknown('Aggregate copy depth limit'), state, ctx); return; }
     if (layout.layers[0] === 'array') {
       heapShape();
@@ -361,8 +394,8 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     } else if (!layout.layers.length && layout.fields.length) {
       write(destination, { ...blank(), objects: new Set([destination]) }, state, ctx);
       for (const field of layout.fields) copyStorage(destination + '.' + field.name, new Set([...sources].map(root => root + '.' + field.name)),
-        index.layout(field)[0] ?? { id: '', layers: [], conditions: [], fields: [] }, state, ctx, depth + 1);
-    } else write(destination, union(...[...sources].map(root => read(root, state))), state, ctx);
+        index.layout(field)[0] ?? { id: '', layers: [], conditions: [], fields: [] }, state, ctx, depth + 1, field);
+    } else write(destination, union(...[...sources].map(root => read(root, state))), state, ctx, true, summarize(record));
   }
   function publish(value: Value, state: State) {
     for (const root of value.objects) for (const key of descendants(state.memory, root)) put(heap, key, state.memory.get(key)!);
@@ -409,19 +442,19 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     if (expr.kind === 'index') { const base = evaluate(expr.object, state, ctx); return indexSlots(writing ? base.objects : objects(base), evaluate(expr.index, state, ctx), state, writing); }
     return [];
   }
-  function initializer(slot: string, expr: Expr, layouts: ReturnType<RelationIndex['layout']>, state: State, ctx: Context) {
+  function initializer(slot: string, expr: Expr, layouts: ReturnType<RelationIndex['layout']>, state: State, ctx: Context, record?: SymbolRecord) {
     if (layouts.length > 1) {
-      const variants = layouts.map(layout => { const branch = clone(state); initializer(slot, expr, [layout], branch, ctx); return branch; });
+      const variants = layouts.map(layout => { const branch = clone(state); initializer(slot, expr, [layout], branch, ctx, record); return branch; });
       Object.assign(state, variants.slice(1).reduce((a, b) => joinStates(a, b), variants[0])); return;
     }
     if (expr.kind === 'choice') {
-      const variants = expr.values.map(value => { const branch = clone(state); initializer(slot, value, layouts, branch, ctx); return branch; });
+      const variants = expr.values.map(value => { const branch = clone(state); initializer(slot, value, layouts, branch, ctx, record); return branch; });
       if (variants.length) Object.assign(state, variants.slice(1).reduce((a, b) => joinStates(a, b), variants[0]));
       return;
     }
     if (expr.kind !== 'initializer') {
       const value = evaluate(expr, state, ctx);
-      write(slot, layouts.length && layouts.every(layout => !layout.layers.length && layout.scalar) ? scalar(value) : value, state, ctx); return;
+      write(slot, layouts.length && layouts.every(layout => !layout.layers.length && layout.scalar) ? scalar(value) : value, state, ctx, true, summarize(record)); return;
     }
     const layout = layouts[0] ?? { id: '', layers: [], conditions: [], fields: [] };
     // Explicit designators identify storage even when the aggregate definition
@@ -437,19 +470,19 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     for (const entry of expr.entries) {
       if (designatedOnly && !entry.path.length) continue;
       const path = entry.path.length ? entry.path : [layout.layers[0] === 'array' ? next : layout.fields[next]?.name ?? String(next)];
-      let target = slot, current = layout;
+      let target = slot, current = layout, member: SymbolRecord | undefined;
       for (const part of path) {
         if (typeof part === 'number' || part === '*') {
-          target += '[' + part + ']'; current = { ...current, layers: current.layers.slice(1) };
+          target += '[' + part + ']'; current = { ...current, layers: current.layers.slice(1) }; member = undefined;
           if (typeof part === 'number') next = part;
         } else {
           target += '.' + part;
-          const field = current.fields.find(s => s.name === part);
+          const field = current.fields.find(s => s.name === part); member = field;
           if (field) { next = current.fields.indexOf(field); current = index.layout(field)[0] ?? { id: '', layers: [], conditions: [], fields: [] }; }
           else current = { id: '', layers: [], conditions: [], fields: [] };
         }
       }
-      initializer(target, entry.value, [current], state, ctx); next++;
+      initializer(target, entry.value, [current], state, ctx, member); next++;
     }
   }
   function scalar(value: Value): Value {
@@ -518,7 +551,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     if (expr.kind === 'assign') {
       const targets = slots(expr.left, state, ctx, true), record = valueType(expr.left, ctx);
       if (expr.right.kind === 'initializer') {
-        for (const target of targets) initializer(target, expr.right, record ? index.layout(record) : [], state, ctx);
+        for (const target of targets) initializer(target, expr.right, record ? index.layout(record) : [], state, ctx, record);
         return union(...targets.map(target => read(target, state)));
       }
       let value = expr.operator === '=' ? evaluate(expr.right, state, ctx) : unknown('Compound pointer mutation');
@@ -532,7 +565,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
         for (const target of targets) copyStorage(target, objects(value), layouts[0], state, ctx);
         return union(...targets.map(target => read(target, state)));
       }
-      for (const target of targets) write(target, value, state, ctx, targets.length === 1);
+      for (const target of targets) write(target, value, state, ctx, targets.length === 1, summarize(record));
       return value;
     }
     if (expr.kind === 'call') {
@@ -618,6 +651,8 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
   const globalProgram: FlowProgram = { id: 'global', locals: [], params: [], body: [] };
   const persistent = new Map(programs.flatMap(program => program.locals.filter(local => local.persistent).map(local => [local.id, local] as const)));
   const globalContext: Context = { program: globalProgram, locals: persistent, exits: [], returned: blank() };
+  for (const program of programs) collectBodyReads(program.body, { program, locals: new Map(program.locals.map(local => [local.id, local])), exits: [], returned: blank() });
+  for (const file of files) for (const init of file.initializers ?? []) collectReads(init.value, globalContext);
   expired(true);
   stage = 'initializers';
   for (const file of files) for (const init of file.initializers ?? []) {
