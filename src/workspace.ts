@@ -41,7 +41,8 @@ export class WorkspaceIndex implements vscode.Disposable {
     const heap = getHeapStatistics();
     return { environment: `${process.platform} ${process.arch} · ${vscode.env.remoteName ?? 'local'} · VS Code ${vscode.version}`,
       host: { at: Date.now(), heapUsed: heap.used_heap_size, heapLimit: heap.heap_size_limit, external: heap.external_memory },
-      index: { ...this.indexDiagnostics, rebuilds: this.indexDiagnostics.rebuilds.map(record => ({ ...record })) },
+      index: { ...this.indexDiagnostics, rebuilds: this.indexDiagnostics.rebuilds.map(record => ({ ...record,
+        files: record.files ? { ...record.files } : undefined })) },
       worker: this.workerDiagnostics, workerError: this.workerError
         ? [(this.workerError as NodeJS.ErrnoException).code, this.workerError.message].filter(Boolean).join(': ') : undefined };
   }
@@ -194,7 +195,9 @@ export class WorkspaceIndex implements vscode.Disposable {
     if ([...this.failures.values()].some(error => error.includes('memory budget')) ||
       [...this.index.files.values()].some(file => file.issues.some(issue => issue.includes('memory budget'))))
       return 'Partial index: memory budget reached. Narrow Include/Exclude, then Rebuild index.';
-    return this.fileLimitReached ? 'Partial index: 10,000 file limit reached' : 'Index ready';
+    if (this.fileLimitReached) return 'Partial index: 10,000 file limit reached';
+    if (this.failures.size) return `Partial index: ${this.failures.size} file(s) failed. See Analysis notices.`;
+    return 'Index ready';
   }
   private derive(): Promise<void> {
     if (this.deriving) return this.deriving;
@@ -227,7 +230,7 @@ export class WorkspaceIndex implements vscode.Disposable {
     if (this.indexDiagnostics.rebuilds.length > 5) this.indexDiagnostics.rebuilds.shift();
     const epoch = ++this.epoch;
     let failed = false;
-    try { await this.rebuild(epoch); }
+    try { await this.rebuild(epoch, record); }
     catch (error) { failed = true; throw error; }
     finally {
       record.finishedAt = Date.now();
@@ -237,7 +240,7 @@ export class WorkspaceIndex implements vscode.Disposable {
       if (!this.disposed) this.diagnosticsChanged.fire();
     }
   }
-  private async rebuild(epoch: number) {
+  private async rebuild(epoch: number, record: RebuildRecord) {
     this.indexing = true;
     if (this.workerError || this.status.includes('memory budget')) {
       await this.deriving;
@@ -253,8 +256,10 @@ export class WorkspaceIndex implements vscode.Disposable {
     this.scopes.clear();
     this.index.clear(); this.failures.clear();
     this.status = 'Indexing C sources…'; this.changed.fire();
+    const counts: NonNullable<RebuildRecord['files']> = { searchResults: 0, selected: 0, discoveryComplete: false };
+    record.files = counts;
+    const uris: vscode.Uri[] = [];
     try {
-      const uris: vscode.Uri[] = [];
       const seen = new Set<string>();
       for (const folder of vscode.workspace.workspaceFolders ?? []) {
         const scope = this.scope(folder), exclude = `{${scope.exclude.join(',')}}`;
@@ -262,6 +267,7 @@ export class WorkspaceIndex implements vscode.Disposable {
         for (const include of scope.include.length ? scope.include : ['**/*.{c,h}']) {
           const found = await vscode.workspace.findFiles(new vscode.RelativePattern(folder, include), exclude, scope.include.length ? undefined : maxFiles + 1 - uris.length);
           if (this.disposed || epoch !== this.epoch) return;
+          counts.searchResults += found.length;
           for (const uri of found) {
             const key = uri.toString();
             if (!seen.has(key) && this.eligible(uri)) { seen.add(key); uris.push(uri); }
@@ -271,6 +277,8 @@ export class WorkspaceIndex implements vscode.Disposable {
         }
         if (uris.length > maxFiles) break;
       }
+      counts.discoveryComplete = uris.length <= maxFiles;
+      counts.selected = Math.min(uris.length, maxFiles);
       this.fileLimitReached ||= uris.length > maxFiles;
       for (const uri of uris.slice(0, maxFiles)) {
         if (this.disposed || epoch !== this.epoch) return;
@@ -290,6 +298,15 @@ export class WorkspaceIndex implements vscode.Disposable {
       if (this.disposed || epoch !== this.epoch) return;
       this.indexing = false;
       this.status = `Index error: ${String(error)}`; this.changed.fire();
+    } finally {
+      // A superseded run must not count files from its replacement.
+      if (!this.disposed && epoch === this.epoch) {
+        const selected = uris.slice(0, maxFiles);
+        counts.selected = selected.length;
+        counts.indexed = selected.filter(uri => this.index.files.has(uri.toString())).length;
+        counts.failed = selected.filter(uri => !this.index.files.has(uri.toString()) && this.failures.has(uri.toString())).length;
+        counts.missing = counts.selected - counts.indexed - counts.failed;
+      }
     }
   }
   async whenIdle() {

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.47 — 2026-10-20
+
+- Report partial indexing when source files fail to read or analyze, instead of
+  incorrectly reporting Index ready. Successful retries clear the failure.
+- Record per-rebuild search results, selected files and final indexed/failed/
+  unaccounted counts in Diagnostics, saved history and issue reports.
+- Keep interrupted discovery and superseded runs distinguishable. This does not
+  establish the cause of the reported 1,820-to-297 file-count change or host restart.
+
 ## 0.1.46 — 2026-10-20
 
 - Enhance Report issue with bounded persistent diagnostic history across host restarts,

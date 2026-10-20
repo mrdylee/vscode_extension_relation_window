@@ -517,12 +517,14 @@ try {
   diagnostics.index = { sessionStartedAt: at - 30000, rebuildCount: 5, sourceParses: 1820, relationPasses: 5,
     lastSourceEvent: { at: at - 2000, kind: 'editor-close' },
     rebuilds: Array.from({ length: 5 }, (_, i) => ({ number: i + 1, at: at - 10000, finishedAt: at - 5000,
-      reason: i === 4 ? 'configuration' : 'startup', settings: i === 4 ? ['include'] : undefined, outcome: 'completed' })) };
+      reason: i === 4 ? 'configuration' : 'startup', settings: i === 4 ? ['include'] : undefined, outcome: 'completed',
+      files: { searchResults: 1820, selected: 1820, discoveryComplete: true, indexed: 1820, failed: 0, missing: 0 } })) };
   await configure({ diagnostics, status: 'Index ready' });
   await page.getByRole('button', { name: 'Diagnostics', exact: true }).click();
   const diagnosticDialog = page.getByRole('dialog', { name: 'Memory diagnostics' });
   assert.ok(await diagnosticDialog.isVisible());
   assert.match(await diagnosticDialog.textContent(), /Last rebuild: #5.*Analysis settings changed \(include\)/);
+  assert.match(await diagnosticDialog.textContent(), /Search results: 1820 · Selected: 1820 · Indexed: 1820 · Failed: 0 · Unaccounted: 0 · Discovery: finished/);
   await diagnosticDialog.getByText('Rebuild history and source activity', { exact: true }).click();
   await page.evaluate(diagnostics => window.dispatchEvent(new MessageEvent('message', { data: { type: 'diagnostics', diagnostics } })), diagnostics);
   assert.equal(await diagnosticDialog.locator('details').getAttribute('open'), '', 'history stays open during measurement refresh');

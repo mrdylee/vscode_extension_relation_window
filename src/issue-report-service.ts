@@ -4,7 +4,7 @@ import type { RelationView } from './view';
 import path from 'node:path';
 import os from 'node:os';
 import { DiagnosticHistory, collectHostLogs } from './diagnostic-history';
-import { createIssueReport, statusKind, ISSUE_URL } from './issue-report';
+import { createIssueReport, reportFileCounts, statusKind, ISSUE_URL } from './issue-report';
 
 export function registerIssueReporting(context: vscode.ExtensionContext, workspace: WorkspaceIndex, view: RelationView) {
   const history = new DiagnosticHistory(context.storageUri?.scheme === 'file' ? path.join(context.storageUri.fsPath, 'diagnostics') : undefined);
@@ -21,6 +21,7 @@ export function registerIssueReporting(context: vscode.ExtensionContext, workspa
         sourceParses: index.sourceParses, relationPasses: index.relationPasses,
         lastRebuild: rebuild ? { number: rebuild.number, at: rebuild.at, finishedAt: rebuild.finishedAt,
           reason: rebuild.reason, outcome: rebuild.outcome,
+          files: reportFileCounts(rebuild.files),
           settings: rebuild.settings?.filter(key => ['skipInactive', 'include', 'exclude', 'macroExpansionFolders'].includes(key)) } : undefined,
         lastSourceEvent: index.lastSourceEvent ? { at: index.lastSourceEvent.at, kind: index.lastSourceEvent.kind } : undefined } : undefined });
   };

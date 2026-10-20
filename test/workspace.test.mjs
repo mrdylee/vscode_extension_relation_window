@@ -115,6 +115,8 @@ test('watcher events respect the file limit while existing files can update and 
   const { workspace, adapter, created, changed, deleted } = fixture(t, files);
   await workspace.ready;
   assert.equal(workspace.index.files.size, 10000);
+  assert.equal(workspace.diagnostics.index.rebuilds[0].files.discoveryComplete, false,
+    'a file-limit stop must not claim complete discovery');
   const extra = uri('extra.h');
   created.fire(extra); changed.fire(files[10000]); await bounded(workspace.whenIdle());
   assert.equal(workspace.index.files.size, 10000);
@@ -321,4 +323,66 @@ test('unexpected rebuild setup errors are recorded as failures', async t => {
   try { await assert.rejects(workspace.reindex(), /worker unavailable/); }
   finally { workspace.worker.postMessage = original; }
   assert.equal(workspace.diagnostics.index.rebuilds.at(-1).outcome, 'failed');
+});
+
+test('failed source reads and oversized files cannot report a complete index', async t => {
+  const { workspace, adapter, changed } = fixture(t);
+  await workspace.ready;
+  const files = ['good.c', 'unreadable.h', 'oversized.h'].map(uri);
+  adapter.findFiles = async () => files;
+  adapter.fs.readFile = async file => {
+    if (file.toString() === files[1].toString()) throw new Error('EACCES: read denied');
+    return Buffer.from(file.toString() === files[2].toString() ? ' '.repeat(2_000_001) : 'void target(void){}');
+  };
+  await workspace.reindex();
+  assert.equal(workspace.index.files.size, 1);
+  assert.match(workspace.status, /Partial index: 2 file.*failed/);
+  assert.equal(workspace.diagnostics.index.rebuilds.at(-1).outcome, 'partial');
+  adapter.fs.readFile = async () => Buffer.from('');
+  changed.fire(files[1]); changed.fire(files[2]);
+  await bounded(workspace.whenIdle());
+  assert.equal(workspace.index.files.size, 3);
+  assert.equal(workspace.status, 'Index ready', 'recovered files clear the partial status');
+});
+
+test('rebuild file counts distinguish search results, filtering and failed analysis', async t => {
+  const { workspace, adapter } = fixture(t);
+  await workspace.ready;
+  const files = ['good.c', 'bad.h', 'node_modules/ignored.h', 'readme.txt'].map(uri);
+  adapter.findFiles = async () => [...files, files[0]];
+  adapter.fs.readFile = async file => {
+    if (file.toString() === files[1].toString()) throw new Error('EACCES');
+    return Buffer.from('');
+  };
+  await workspace.reindex();
+  const first = workspace.diagnostics.index.rebuilds.at(-1);
+  assert.deepEqual(JSON.parse(JSON.stringify(first.files)), {
+    searchResults: 5, selected: 2, discoveryComplete: true, indexed: 1, failed: 1, missing: 0
+  });
+  adapter.findFiles = async () => [files[0]];
+  await workspace.reindex();
+  const second = workspace.diagnostics.index.rebuilds.at(-1);
+  assert.equal(second.files.searchResults, 1);
+  assert.equal(second.files.selected, 1);
+  assert.equal(second.files.indexed, 1);
+  assert.equal(first.files.failed, 1, 'old rebuild counts must remain a snapshot');
+  second.files.indexed = 99;
+  assert.equal(workspace.diagnostics.index.rebuilds.at(-1).files.indexed, 1, 'diagnostic readers cannot mutate the record');
+});
+
+test('unfinished discovery and superseded rebuilds do not claim analyzed file counts', async t => {
+  const { workspace, adapter } = fixture(t);
+  await workspace.ready;
+  adapter.findFiles = async () => { throw new Error('search unavailable'); };
+  await workspace.reindex();
+  assert.equal(workspace.diagnostics.index.rebuilds.at(-1).files.discoveryComplete, false);
+  const search = deferred(); let first = true;
+  adapter.findFiles = async () => first ? (first = false, search.promise) : [uri('current.c')];
+  const old = workspace.reindex();
+  await workspace.reindex();
+  search.resolve([uri('obsolete.c')]); await old;
+  const records = workspace.diagnostics.index.rebuilds;
+  assert.equal(records.at(-2).outcome, 'superseded');
+  assert.equal(records.at(-2).files.indexed, undefined);
+  assert.equal(records.at(-1).files.indexed, 1);
 });

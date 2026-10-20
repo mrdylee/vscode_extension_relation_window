@@ -325,6 +325,15 @@ lost and no samples are collected while the host is frozen. Worker values are th
 last received samples (`sampledAt`); process RSS includes the shared host and its
 Workers, not only Dynsight. This starts after installation, not retroactively.
 
+Since v0.1.47, Diagnostics and reports include file counts for each rebuild:
+**Search results** counts API results (possibly duplicates/non-C files); **Selected**
+counts unique C/H files after filtering and the file limit. **Indexed**, **Failed**
+and **Unaccounted** describe those selected files at rebuild end. Missing values
+mean no final snapshot, for example a superseded rebuild. **Discovery: unfinished**
+means collection stopped on an error or file limit. These counts do not prove the search API found
+every file. Later edits/deletions can change the current index independently.
+Failed source reads or analysis now report **Partial index**, not **Index ready**.
+
 Report issue includes up to the last 16 KiB of each journal segment, without waiting for pending writes. Host collection
 reads only known `exthost.log` / `remoteagent.log` files near the extension log
 folder in the current and preceding VS Code log session, at most eight files and

@@ -48,6 +48,9 @@ export async function run() {
   try { await api.view.handleMessage({ type: 'refresh' }); } finally { opening.dispose(); }
   assert.equal(api.workspace.diagnostics.index.rebuilds.at(-1).reason, 'toolbar');
   assert.equal(api.workspace.diagnostics.index.rebuilds.at(-1).outcome, 'completed');
+  assert.deepEqual(api.workspace.diagnostics.index.rebuilds.at(-1).files, {
+    searchResults: 93, selected: 93, discoveryComplete: true, indexed: 93, failed: 0, missing: 0
+  }, 'native discovery and successful analysis counts agree');
   assert.equal(openedByReindex, 0, 'background indexing must not open VS Code documents');
   assert.equal(api.workspace.index.files.has(excludedUri.toString()), false, 'initial indexing excludes configured folders');
   // Real editor navigation must not restart analysis when documents are unchanged.

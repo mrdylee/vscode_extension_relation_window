@@ -38,6 +38,13 @@ export function createDiagnostics(version: string, refresh: () => void, reportIs
       const latest = index.rebuilds.at(-1);
       const trigger = (record: typeof latest) => record ? `${rebuildNames[record.reason]}${record.settings?.length ? ` (${record.settings.join(', ')})` : ''}` : '';
       if (latest) body.append(el('div', `Last rebuild: #${latest.number} · ${time(latest.at)} · ${trigger(latest)} · ${latest.outcome}`));
+      const fileCounts = (record: typeof latest, showDiscovery = true) => {
+        const files = record?.files;
+        return files ? `Search results: ${files.searchResults} · Selected: ${files.selected} · Indexed: ${files.indexed ?? '—'} · Failed: ${files.failed ?? '—'} · Unaccounted: ${files.missing ?? '—'}${showDiscovery || !files.discoveryComplete ? ` · Discovery: ${files.discoveryComplete ? 'finished' : 'unfinished'}` : ''}` : 'File counts unavailable';
+      };
+      if (latest?.files) {
+        body.append(el('div', fileCounts(latest, false), `diagnostics-file-counts${latest.files.failed || latest.files.missing ? ' warning' : ''}`));
+      }
       const history = el('details'); history.open = historyOpen;
       history.append(el('summary', 'Rebuild history and source activity'));
       const table = el('table'), heading = el('tr');
@@ -46,10 +53,11 @@ export function createDiagnostics(version: string, refresh: () => void, reportIs
         const row = el('tr');
         row.append(el('td', `#${record.number} · ${time(record.at)}`),
           el('td', trigger(record)),
-          el('td', `${record.outcome}${record.finishedAt === undefined ? '' : ` · ${((record.finishedAt - record.at) / 1000).toFixed(1)}s`}`));
+          el('td', `${record.outcome}${record.finishedAt === undefined ? '' : ` · ${((record.finishedAt - record.at) / 1000).toFixed(1)}s`}${record.files ? '\n' + fileCounts(record) : ''}`));
         table.append(row);
       }
       history.append(table, el('div', `Rebuilds: ${index.rebuildCount} · Source parses: ${index.sourceParses} · Relation passes: ${index.relationPasses} (this session)`));
+      if (latest?.files) history.append(el('div', 'Search results may include duplicates/non-C files. Selected is unique C/H files within the limit. Indexed/Failed/Unaccounted are selected-file snapshots at rebuild end; unfinished runs may have no results. Discovery is unfinished on errors or file limits. These counts cannot prove search found every file.', 'diagnostics-note muted'));
       if (index.lastSourceEvent) history.append(el('div', `Last source event: ${index.lastSourceEvent.kind} · ${time(index.lastSourceEvent.at)} (may reuse unchanged source)`, 'muted'));
       body.append(history);
     }

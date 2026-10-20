@@ -70,3 +70,17 @@ test('report includes bounded rebuild reasons without source details or arbitrar
   assert.equal(data.index.lastSourceEvent.kind, 'editor-close');
   assert.doesNotMatch(report, /SECRET/);
 });
+
+test('report includes file-loss checkpoints without exporting discovered paths', () => {
+  const value = input();
+  value.state.status = 'Partial index: 2 file(s) failed. See Analysis notices.';
+  value.diagnostics.index = { sessionStartedAt: now, rebuildCount: 1, sourceParses: 1, relationPasses: 1,
+    rebuilds: [{ number: 1, at: now, reason: 'startup', outcome: 'partial',
+      files: { searchResults: 4, selected: 3, discoveryComplete: true, indexed: 1, failed: 2, missing: 0,
+        paths: ['SECRET_SOURCE'] } as any }] };
+  const report = createIssueReport(value), data = JSON.parse(report.split('```json\n')[1].split('\n```')[0]);
+  assert.deepEqual(data.index.rebuilds[0].files, {
+    searchResults: 4, selected: 3, discoveryComplete: true, indexed: 1, failed: 2, missing: 0
+  });
+  assert.doesNotMatch(report, /SECRET/);
+});

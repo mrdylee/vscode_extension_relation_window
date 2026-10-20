@@ -35,7 +35,9 @@ function fixture() {
   const sample = { at: Date.now(), heapUsed: 100, heapLimit: 1000, external: 0 };
   module.exports.registerIssueReporting({ subscriptions: [], extension: { packageJSON: { version: '0.1.40' } } }, {
     changed: emitter, diagnosticsChanged: emitter,
-    diagnostics: { host: sample, workerError: 'ERR_WORKER_OUT_OF_MEMORY PRIVATE', index: { rebuilds: [{ number: 1, at: 1, reason: 'startup', outcome: 'completed', settings: ['include', 'PRIVATE_PATTERN'], rawError: 'PRIVATE' }], lastSourceEvent: { at: 1, kind: 'editor-close', uri: 'PRIVATE' } } }, status: 'Analysis stopped',
+    diagnostics: { host: sample, workerError: 'ERR_WORKER_OUT_OF_MEMORY PRIVATE', index: { rebuilds: [{ number: 1, at: 1, reason: 'startup', outcome: 'completed', settings: ['include', 'PRIVATE_PATTERN'], rawError: 'PRIVATE',
+      files: { searchResults: 1800, selected: 1800, discoveryComplete: true, indexed: 297, failed: 1503, missing: 0, paths: ['PRIVATE'] }
+    }], lastSourceEvent: { at: 1, kind: 'editor-close', uri: 'PRIVATE' } } }, status: 'Analysis stopped',
     index: { files: new Map() }, failures: new Map(), request() { throw Error('Unexpected Worker request'); }
   }, { activity: emitter, state: { mode: 'both', depth: 1, accessFilter: 'all', calleeSort: 'name', contextLayout: 'combined', callGraphDirection: 'callers-left' } });
   return { calls, records, history, vscode, document, run: () => command(), choose: (value?: string, index = choices.length - 1) => choices[index](value) };
@@ -98,6 +100,8 @@ test('report includes saved history and host evidence without asking the Worker'
   assert.match(f.document.text, /previous-run evidence/);
   assert.match(f.document.text, /host-exit evidence/);
   assert.ok(f.records.length > 0);
+  assert.equal(f.records[0].index.lastRebuild.files.selected, 1800);
+  assert.equal(f.records[0].index.lastRebuild.files.indexed, 297);
   assert.doesNotMatch(JSON.stringify(f.records), /PRIVATE/);
 });
 test('Save report writes reviewed content; cancel does not write or share', async () => {

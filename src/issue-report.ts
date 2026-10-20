@@ -1,4 +1,4 @@
-import type { AnalysisPhase, Diagnostics, MemorySample } from './diagnostics';
+import type { AnalysisPhase, Diagnostics, MemorySample, RebuildRecord } from './diagnostics';
 import type { ViewState } from './view-state';
 
 export const ISSUE_URL = 'https://github.com/mrdylee/vscode_extension_relation_window/issues/new?' + new URLSearchParams({
@@ -11,7 +11,12 @@ export interface IssueReportInput {
 }
 const phases: (AnalysisPhase | 'idle')[] = ['sources', 'macros', 'callbacks', 'transfer', 'idle'];
 const choice = (value: string, allowed: readonly string[]) => allowed.includes(value) ? value : 'other';
-const number = (value: number) => Number.isFinite(value) && value >= 0 ? value : null;
+const number = (value: number | undefined) => value !== undefined && Number.isFinite(value) && value >= 0 ? value : null;
+export function reportFileCounts(files: RebuildRecord['files']) {
+  return files ? { searchResults: number(files.searchResults), selected: number(files.selected),
+    discoveryComplete: files.discoveryComplete === true, indexed: number(files.indexed),
+    failed: number(files.failed), missing: number(files.missing) } : null;
+}
 const version = (value: string) => /^\d+\.\d+\.\d+(?:-[\w.]+)?$/.test(value) && value.length < 60 ? value : 'unknown';
 function noticeKind(text: string) {
   if (/ERR_WORKER_OUT_OF_MEMORY|heap out of memory/i.test(text)) return 'worker-out-of-memory';
@@ -74,6 +79,7 @@ export function createIssueReport(input: IssueReportInput): string {
         reason: choice(record.reason, ['startup', 'configuration', 'workspace-folders', 'command', 'toolbar']),
         settings: (record.settings ?? []).filter(key => ['skipInactive', 'include', 'exclude', 'macroExpansionFolders'].includes(key)),
         outcome: choice(record.outcome, ['running', 'completed', 'partial', 'failed', 'superseded']),
+        files: reportFileCounts(record.files),
         durationMs: record.finishedAt === undefined ? null : number(record.finishedAt - record.at) }))
     } : 'unavailable',
     worker: worker ? {

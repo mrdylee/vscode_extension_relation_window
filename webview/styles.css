@@ -74,6 +74,7 @@ body.vscode-light .highlight, body.vscode-light .selected, body.vscode-high-cont
 .diagnostics-incident { font-weight: 600; margin: 6px 0; }
 .diagnostics-host { margin-top: 6px; }
 .diagnostics-note { font-size: 11px; margin-top: 6px; }
+.diagnostics-file-counts { font-size: 12px; line-height: 1; }
 .detail-location { color: var(--syntax-number); font-weight: 600; }
 .node-details .detail-label { display: block; color: var(--fg); }
 .node-details .detail-warning, .node-details .badge { color: var(--vscode-editorWarning-foreground, #d6b36a); font-weight: 600; }

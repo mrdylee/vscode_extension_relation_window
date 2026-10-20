@@ -5,6 +5,10 @@ export type SourceEvent = 'editor-change' | 'editor-close' | 'file-create' | 'fi
 export interface RebuildRecord {
   number: number; at: number; reason: RebuildReason; settings?: string[]; finishedAt?: number;
   outcome: 'running' | 'completed' | 'partial' | 'failed' | 'superseded';
+  files?: {
+    searchResults: number; selected: number; discoveryComplete: boolean;
+    indexed?: number; failed?: number; missing?: number;
+  };
 }
 export interface IndexDiagnostics {
   sessionStartedAt: number; rebuildCount: number; sourceParses: number; relationPasses: number;
