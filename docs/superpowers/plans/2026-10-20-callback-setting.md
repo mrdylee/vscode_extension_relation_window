@@ -14,4 +14,4 @@
 - [x] Add manifest checkbox; RelationView skips callbackAt when disabled, clears existing focus and retracks ordinary selection. Report `analyzeCallbacks` in the diagnostic snapshot. Native extension test verifies callback selection on/off/on and direct graph behavior.
 - [x] Test typedef callback registration fixture against callbackAt. Keep any distinct unresolved WSL diagnosis separate from the setting change.
 - [x] Document default, option independence, rebuild timing and inference limitations in README/USER_GUIDE/CHANGELOG. Run typecheck, unit, Worker, memory, browser and native suites.
-- [ ] Review full diff for scope, stale inference and config races; fix findings. Package next patch VSIX, tag and publish through existing release workflow; verify assets and CI before claiming publication.
+- [x] Review full diff for scope, stale inference and config races; fix findings. Package next patch VSIX, tag and publish through existing release workflow; verify assets and CI before claiming publication.
