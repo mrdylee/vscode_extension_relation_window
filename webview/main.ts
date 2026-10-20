@@ -123,6 +123,11 @@ function showOptions(event: MouseEvent | KeyboardEvent) {
   event.preventDefault(); hideDetails();
   menuAnchor = (event.target as HTMLElement).closest<HTMLElement>('.node-title') ?? graph;
   options.replaceChildren();
+  if (menuAnchor.dataset.symbolId) {
+    const key = menuAnchor.dataset.key;
+    const pin = button('Pin this symbol', () => { closeOptions(); send('pinNode', { key }); });
+    pin.setAttribute('role', 'menuitem'); options.append(pin);
+  }
   const settings = button('Settings…', () => { closeOptions(); send('settings'); });
   settings.setAttribute('role', 'menuitem'); options.append(settings);
   const reset = button('Reset graph position', () => { closeOptions(); resetGraphPosition(); }); reset.setAttribute('role', 'menuitem'); options.append(reset);
@@ -254,6 +259,7 @@ function drawNode(node: GraphNode): HTMLElement {
   const openId = node.callKind || node.direction || node.sites.some(site => site.argument) || node.sites[0]?.access ? node.sites[0].id : node.symbolId ?? node.sites[0]?.id;
   const title = button('', event => { if (event.detail <= 1) send('selectNode', { key: node.key }); }, '');
   title.className = 'node-title'; title.dataset.key = node.key;
+  if (node.symbolId) title.dataset.symbolId = node.symbolId;
   title.dataset.preview = openId;
   title.append(icon(node), el('span', 'symbol-name', node.symbolId ? node.name : node.sites[0]?.name ?? node.name));
   const accesses = [...new Set(node.sites.flatMap(site => site.access ? [site.access] : []))];
@@ -353,7 +359,7 @@ function render(state: ViewState) {
   mode.onchange = () => send(variable ? 'access' : 'mode', { value: mode.value });
   if (depth.value !== String(state.depth)) depth.value = String(state.depth);
   lock.textContent = state.locked ? 'Pinned · Follow paused' : 'Following selection'; lock.setAttribute('aria-pressed', String(state.locked));
-  lock.title = state.locked ? `Pinned to ${state.graph?.root.name ?? 'the current Relation'}. Click to unpin and follow the selected symbol.` : 'Click to pin the current Relation and pause following selection.';
+  lock.title = state.locked ? `Pinned to ${state.graph?.root.name ?? 'the current Relation'}. Click to unpin and follow the selected symbol. Right-click another node to change the pin.` : 'Click to pin the last symbol selected in Relation (or the current root) and pause following selection.';
   goToPin.hidden = !state.locked; goToPin.disabled = !state.graph?.root.symbolId;
   goToPin.title = state.graph ? `Go to pinned symbol: ${state.graph.root.name}` : 'Pinned symbol is unavailable';
   skip.checked = state.skipInactive;

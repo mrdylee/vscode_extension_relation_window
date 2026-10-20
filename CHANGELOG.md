@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.48 — 2026-10-20
+
+- Pin the node last selected in Relation instead of always pinning the current root.
+- Add **Pin this symbol** to resolved nodes' context menus so the pin can be replaced
+  while following is paused. The pushpin and **Go to pinned symbol** follow the new root.
+
 ## 0.1.47 — 2026-10-20
 
 - Report partial indexing when source files fail to read or analyze, instead of

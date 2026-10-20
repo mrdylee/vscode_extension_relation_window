@@ -114,6 +114,19 @@ export async function run() {
   assert.equal(api.view.state.context.location.uri, document.uri.toString());
   assert.ok(editor.selection.active.isEqual(document.positionAt(controlOffset)), 'Callees preview preserves editor');
   assert.equal(api.view.state.graph.root.name, 'control_task');
+  await api.view.handleMessage({ type: 'lock' });
+  assert.equal(api.view.state.graph.root.name, 'check_fault', 'pin uses the clicked callee symbol, not its call-site owner');
+  assert.equal(api.view.state.locked, true);
+  await api.view.handleMessage({ type: 'mode', value: 'callers' });
+  const repin = api.view.state.graph.root.children.find((g: any) => g.name === 'control_task');
+  await api.view.handleMessage({ type: 'pinNode', key: repin.key });
+  assert.equal(api.view.state.graph.root.name, 'control_task', 'explicit pin replaces the pinned symbol');
+  assert.equal(api.view.state.locked, true, 'replacing a pin keeps following paused');
+  await api.view.handleMessage({ type: 'pinNode', key: 'stale-node' });
+  assert.equal(api.view.state.graph.root.name, 'control_task', 'stale pin requests preserve the current pin');
+  await api.view.handleMessage({ type: 'lock' });
+  assert.equal(api.view.state.locked, false);
+  await api.view.handleMessage({ type: 'mode', value: 'callees' });
   await api.view.handleMessage({ type: 'mode', value: 'invalid' });
   assert.equal(api.view.state.mode, 'callees', 'invalid mode rejected');
   editor.selection = new vscode.Selection(document.positionAt(offset), document.positionAt(offset));
@@ -148,6 +161,7 @@ export async function run() {
   await vscode.workspace.fs.delete(chainUri);
   await new Promise(resolve => setTimeout(resolve, 500));
   await api.workspace.whenIdle();
+  await api.view.handleMessage({ type: 'selectNode', key: api.view.state.graph.root.key });
   await api.view.handleMessage({ type: 'lock' });
   const other = document.getText().indexOf('background_task(void)');
   editor.selection = new vscode.Selection(document.positionAt(other), document.positionAt(other));

@@ -216,6 +216,23 @@ try {
   await page.getByRole('button', { name: 'Following selection', exact: true }).click();
   const pinned = page.getByRole('button', { name: 'Pinned · Follow paused', exact: true });
   assert.equal(await pinned.getAttribute('aria-pressed'), 'true');
+  await caller.locator('.node-title').click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Pin this symbol', exact: true }).click();
+  const callerKey = await caller.locator('.node-title').getAttribute('data-key');
+  assert.ok(await page.evaluate(key => window.sent.some(m => m.type === 'pinNode' && m.key === key), callerKey),
+    'right-click pin targets the node, including while already pinned');
+  await page.locator('.pane-heading').last().click({ button: 'right' });
+  assert.equal(await page.getByRole('menuitem', { name: 'Pin this symbol', exact: true }).count(), 0,
+    'background menu does not offer an unrelated pin');
+  await page.keyboard.press('Escape');
+  const previousGraph = state.graph;
+  await configure({ graph: fixture.calleeGraph });
+  assert.equal(await page.locator('.pin-marker').locator('xpath=ancestor::article').getAttribute('data-node-name'), fixture.calleeGraph.root.name,
+    'pin marker follows the replacement root');
+  await page.getByRole('button', { name: 'Go to pinned symbol', exact: true }).click();
+  assert.ok(await page.evaluate(id => window.sent.some(m => m.type === 'open' && m.id === id), fixture.calleeGraph.root.symbolId),
+    'return to pin opens the replacement symbol');
+  await configure({ graph: previousGraph });
   await pinned.click();
   assert.equal(await page.getByRole('button', { name: 'Following selection', exact: true }).getAttribute('aria-pressed'), 'false');
   const divider = page.getByRole('separator');

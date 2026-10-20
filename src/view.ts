@@ -17,6 +17,7 @@ export class RelationView implements vscode.Disposable {
   private locations = new Map<string, { location: Location; label: string }>();
   private nodes = new Map<string, GraphNode>();
   private selection?: string;
+  private selectedNodeKey?: string;
   private listener: vscode.Disposable;
   private preferences: vscode.Disposable;
   private diagnosticsListener: vscode.Disposable;
@@ -94,7 +95,7 @@ export class RelationView implements vscode.Disposable {
     const candidates = this.workspace.index.resolveAt(editor.document.uri.toString(), editor.document.offsetAt(word.start));
     if (!candidates.length) { this.pendingTrack = true; return false; }
     if (candidates.length > 1) {
-      this.root = undefined; this.selection = undefined; this.expanded = {};
+      this.root = undefined; this.selection = undefined; this.selectedNodeKey = undefined; this.expanded = {};
       this.state.graph = undefined; this.state.context = undefined;
       this.state.candidates = candidates; this.refresh(); return true;
     }
@@ -105,7 +106,7 @@ export class RelationView implements vscode.Disposable {
     return true;
   }
   private setRoot(symbol: SymbolRecord) {
-    if (symbol.id !== this.root?.id) { this.expanded = {}; this.selection = symbol.id; }
+    if (symbol.id !== this.root?.id) { this.expanded = {}; this.selection = symbol.id; this.selectedNodeKey = undefined; }
     this.root = { id: symbol.id, name: symbol.name, uri: symbol.location.uri };
     this.state.candidates = []; this.refresh();
   }
@@ -140,6 +141,7 @@ export class RelationView implements vscode.Disposable {
     };
     if (this.state.graph) visit(this.state.graph.root);
     this.state.graph?.callers?.forEach(visit);
+    if (this.selectedNodeKey && !this.nodes.has(this.selectedNodeKey)) this.selectedNodeKey = undefined;
     if (this.selection && this.locations.has(this.selection)) this.preview(this.selection);
     else if (this.state.graph?.root.symbolId) { this.selection = this.state.graph.root.symbolId; this.preview(this.selection); }
     else this.state.context = undefined;
@@ -161,10 +163,20 @@ export class RelationView implements vscode.Disposable {
     void this.webview?.webview.postMessage({ type: 'state', state: this.state });
     void this.contextView?.webview.postMessage({ type: 'context', context: this.state.context });
   }
+  private pinNode(key: string | undefined) {
+    const id = key ? this.nodes.get(key)?.symbolId : undefined;
+    const symbol = id ? this.workspace.index.symbol(id) : undefined;
+    if (!symbol) return;
+    this.state.locked = true;
+    this.pendingTrack = false;
+    this.selection = symbol.id;
+    this.selectedNodeKey = undefined;
+    this.setRoot(symbol);
+  }
   async handleMessage(message: unknown) {
     if (!message || typeof message !== 'object') return;
     const m = message as Record<string, unknown>;
-    if (typeof m.type === 'string' && ['selectNode', 'navigateContext', 'choose', 'mode', 'depth', 'lock', 'skip', 'refresh', 'expand', 'collapse', 'expandSpecial', 'open'].includes(m.type)) this.activity.fire(m.type);
+    if (typeof m.type === 'string' && ['selectNode', 'pinNode', 'navigateContext', 'choose', 'mode', 'depth', 'lock', 'skip', 'refresh', 'expand', 'collapse', 'expandSpecial', 'open'].includes(m.type)) this.activity.fire(m.type);
     switch (m.type) {
       case 'diagnostics': this.workspace.refreshDiagnostics(); break;
       case 'reportIssue': await vscode.commands.executeCommand('dynsight.reportIssue'); break;
@@ -176,6 +188,7 @@ export class RelationView implements vscode.Disposable {
       case 'selectNode': {
         const node = typeof m.key === 'string' ? this.nodes.get(m.key) : undefined;
         if (!node) return;
+        this.selectedNodeKey = node.key;
         this.selection = node.callKind || node.direction || node.sites.some(site => site.argument) || node.sites[0]?.access ? node.sites[0].id : node.symbolId ?? node.sites[0]?.id;
         if (node.symbolId && !node.cycle && (!node.callKind || ['direct', 'expanded', 'inferred'].includes(node.callKind))) {
           // Preserve a deeper inherited expansion, including explicit ancestor overrides.
@@ -213,7 +226,11 @@ export class RelationView implements vscode.Disposable {
         this.state.accessFilter = m.value; this.expanded = {}; this.refresh();
       } break;
       case 'depth': if (Number.isInteger(m.value) && Number(m.value) >= 1 && Number(m.value) <= 8) { this.state.depth = Number(m.value); this.expanded = {}; this.refresh(); } break;
-      case 'lock': this.state.locked = !this.state.locked; this.publish(); if (!this.state.locked) this.track(this.lastEditor); break;
+      case 'lock':
+        if (this.state.locked) { this.state.locked = false; this.publish(); this.track(this.lastEditor); }
+        else this.pinNode(this.selectedNodeKey ?? this.state.graph?.root.key);
+        break;
+      case 'pinNode': if (typeof m.key === 'string') this.pinNode(m.key); break;
       case 'skip': if (typeof m.value === 'boolean') await vscode.workspace.getConfiguration('dynsight').update('skipInactive', m.value, vscode.workspace.workspaceFolders?.length ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global); break;
       case 'refresh': await this.workspace.reindex('toolbar'); this.track(vscode.window.activeTextEditor); this.refresh(); break;
       case 'expand': case 'collapse': case 'expandSpecial': {
