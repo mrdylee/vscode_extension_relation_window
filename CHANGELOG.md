@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.53 — 2026-10-21
+
+- Exclude proven unread scalar fields from callback mutation summaries. Retain
+  selectors, address uses, compatible cross-file fields and unresolved storage.
+- Represent opaque-call changes as bounded object regions, including pointer
+  aliases and helper parameters. Preserve conditional candidates, later exact
+  overwrites and callback values copied before a change.
+- Keep unrelated mutation limits from marking every callback incomplete.
+  Preserve uncertainty for omitted effects and project-wide analysis limits.
+- Index uncertainty by storage object to avoid scanning unrelated regions.
+  Existing time, memory and explicit-mutation limits remain unchanged; complex
+  analyses may still return partial results.
+
 ## 0.1.52 — 2026-10-20
 
 - Attribute callback limits to the actual observed file, line and function, with

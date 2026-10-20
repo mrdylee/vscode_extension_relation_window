@@ -34,8 +34,8 @@ Recovery point: `checkpoint/pre-sparse-callback-effects-20261020` at `1f2c1c6`, 
 
 ## 4. Package and publish
 
-- [ ] Bump manifest, lockfile and package output to 0.1.53; add `docs/releases/0.1.53.md`.
-- [ ] Package and validate the actual VSIX in an isolated native VS Code test.
+- [x] Bump manifest, lockfile and package output to 0.1.53; add `docs/releases/0.1.53.md`.
+- [x] Package and validate the actual VSIX in an isolated native VS Code test.
 - [ ] Commit, push the source branch and `v0.1.53`; require Windows/macOS/Linux release CI success.
 - [ ] Verify public release assets, SHA256, package contents and update resolution. Commit publication evidence separately.
 
