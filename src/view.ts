@@ -8,7 +8,7 @@ import { highlightC, SyntaxToken } from './syntax';
 export class RelationView implements vscode.Disposable {
   state: ViewState = { candidates: [], status: 'Open a C file and click a symbol name.', fileCount: 0,
     issues: [], mode: 'references', accessFilter: 'all', depth: 1, locked: false, skipInactive: true,
-    calleeSort: 'name', contextLayout: 'combined', callGraphDirection: 'callers-left', includeFunctionArguments: false };
+    calleeSort: 'name', contextLayout: 'combined', callGraphDirection: 'callers-left', includeFunctionArguments: false, analyzeCallbacks: true };
   readonly activity = new vscode.EventEmitter<string>();
   private webview?: vscode.WebviewView;
   private contextView?: vscode.WebviewView;
@@ -34,9 +34,14 @@ export class RelationView implements vscode.Disposable {
     });
     this.readPreferences();
     this.preferences = vscode.workspace.onDidChangeConfiguration(event => {
-      if (event.affectsConfiguration('dynsight.calleeSort') || event.affectsConfiguration('dynsight.contextLayout') || event.affectsConfiguration('dynsight.includeFunctionArguments')) {
+      if (event.affectsConfiguration('dynsight.calleeSort') || event.affectsConfiguration('dynsight.contextLayout') || event.affectsConfiguration('dynsight.includeFunctionArguments') || event.affectsConfiguration('dynsight.analyzeCallbacks')) {
         const previousLayout = this.state.contextLayout;
-        this.readPreferences(); this.refresh();
+        this.readPreferences();
+        if (event.affectsConfiguration('dynsight.analyzeCallbacks')) {
+          this.callbackFocus = undefined; this.state.callback = undefined;
+          this.track(this.lastEditor, true);
+        }
+        this.refresh();
         if (previousLayout !== this.state.contextLayout) void this.applyPanelLayout(previousLayout);
         if (previousLayout !== 'separate' && this.state.contextLayout === 'separate') {
           void vscode.commands.executeCommand('dynsight.context.focus', { preserveFocus: true });
@@ -59,6 +64,7 @@ export class RelationView implements vscode.Disposable {
     this.state.contextLayout = layout === 'separate' || layout === 'combined-full-width' ? layout : 'combined';
     this.state.callGraphDirection = config.get('callGraphDirection') === 'callees-left' ? 'callees-left' : 'callers-left';
     this.state.includeFunctionArguments = config.get('includeFunctionArguments') === true;
+    this.state.analyzeCallbacks = config.get('analyzeCallbacks', true);
   }
   private async applyPanelLayout(previousLayout?: ViewState['contextLayout']) {
     try {
@@ -94,7 +100,7 @@ export class RelationView implements vscode.Disposable {
     const word = editor.document.getWordRangeAtPosition(position, /[A-Za-z_][A-Za-z0-9_]*/);
     if (!word) return false;
     const uri = editor.document.uri.toString(), offset = editor.document.offsetAt(word.start);
-    const callback = this.workspace.index.callbackAt(uri, offset);
+    const callback = this.state.analyzeCallbacks ? this.workspace.index.callbackAt(uri, offset) : undefined;
     if (callback) {
       if (this.callbackFocus?.uri === uri && this.callbackFocus.offset === offset && this.state.callback) return false;
       this.activity.fire('callback-selection');

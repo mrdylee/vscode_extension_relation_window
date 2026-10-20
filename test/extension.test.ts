@@ -556,7 +556,7 @@ export async function run() {
   await new Promise(resolve => setTimeout(resolve, 500)); await api.workspace.whenIdle();
   assert.equal(api.view.state.graph.root.children.some((node: any) => node.name === 'changed_target'), false);
   const pointerUri = vscode.Uri.joinPath(root, 'pointer-review.c');
-  const pointerSource = 'typedef void (*CB)(void);\nvoid pointer_leaf(void){} void pointer_target(void){pointer_leaf();} void pointer_changed(void){}\nstruct ReviewOps{CB run;};struct ReviewOps review_ops={.run=pointer_target};\nvoid pointer_run(void){review_ops.run();}\n';
+  const pointerSource = '#define POINTER_CHECK(x) (x)\ntypedef void (*CB)(void);\nvoid pointer_leaf(void){} void pointer_target(void){pointer_leaf();} void pointer_changed(void){}\nstruct ReviewOps{CB run;};struct ReviewOps review_ops={.run=pointer_target};\nvoid pointer_run(void){if(POINTER_CHECK(1))review_ops.run();}\n';
   await vscode.workspace.fs.writeFile(pointerUri, Buffer.from(pointerSource));
   await new Promise(resolve=>setTimeout(resolve,500)); await api.workspace.whenIdle();
   const pointerDocument = await vscode.workspace.openTextDocument(pointerUri);
@@ -567,6 +567,15 @@ export async function run() {
   api.view.track(pointerEditor, true);
   assert.deepEqual(api.view.state.callback?.targets.map((s: any) => s.name), ['pointer_target'],
     'selecting a callback member exposes its inferred target');
+  for (const enabled of [false, true]) {
+    await vscode.workspace.getConfiguration('dynsight').update('analyzeCallbacks', enabled, vscode.ConfigurationTarget.Workspace);
+    await new Promise(resolve => setTimeout(resolve, 100)); await api.workspace.whenIdle();
+    api.view.track(pointerEditor, true); api.view.refresh();
+    assert.equal(api.view.state.analyzeCallbacks, enabled);
+    assert.equal(!!api.view.state.callback, enabled, 'callback selection follows its independent setting');
+    if (!enabled) assert.equal(api.view.state.graph?.root.kind, 'variable', 'off preserves ordinary member navigation');
+  }
+  assert.equal(api.workspace.diagnostics.index.sourceParses, parsesBeforeCallbackNavigation);
   assert.equal(api.view.state.context.location.start, pointerSource.indexOf('review_ops.run()'));
   assert.equal(api.view.state.graph, undefined, 'candidate is not silently treated as a certain target');
   await api.view.handleMessage({ type: 'choose', id: 'stale-callback-target' });

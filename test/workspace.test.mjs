@@ -402,3 +402,37 @@ test('unfinished discovery and superseded rebuilds do not claim analyzed file co
   assert.equal(records.at(-2).files.indexed, undefined);
   assert.equal(records.at(-1).files.indexed, 1);
 });
+
+test('callback setting changes reuse source facts and discard in-flight results from the old mode', async t => {
+  const { workspace, adapter, configuration } = fixture(t);
+  await workspace.ready;
+  const file = uri('callbacks.c');
+  adapter.fs.readFile = async () => Buffer.from(latest);
+  await workspace.enqueue(file); await workspace.derive();
+  const parses = workspace.diagnostics.index.sourceParses;
+  const task = workspace.index.symbols().find(s => s.name === 'task');
+  const hasTarget = () => workspace.index.relations(task.id, 'callees').some(g => g.name === 'new_target');
+  assert.equal(hasTarget(), true);
+  let enabled = false;
+  adapter.getConfiguration = () => ({ get: (key, fallback) => key === 'analyzeCallbacks' ? enabled : fallback });
+  const event = { affectsConfiguration: key => key === 'dynsight.analyzeCallbacks' };
+  configuration.fire(event); await bounded(workspace.whenIdle());
+  assert.equal(hasTarget(), false);
+  assert.equal(workspace.diagnostics.index.sourceParses, parses);
+  const request = workspace.request, held = deferred(), entered = deferred();
+  workspace.request = function (message) {
+    const result = request.call(this, message);
+    if (message.type === 'derive' && message.analyzeCallbacks === true) {
+      entered.resolve(); return { ...result, promise: result.promise.then(async value => { await held.promise; return value; }) };
+    }
+    return result;
+  };
+  enabled = true; configuration.fire(event); await bounded(entered.promise);
+  enabled = false; configuration.fire(event); held.resolve();
+  await bounded(workspace.whenIdle());
+  assert.equal(hasTarget(), false, 'an obsolete enabled result must never replace disabled relationships');
+  workspace.request = request;
+  enabled = true; configuration.fire(event); await bounded(workspace.whenIdle());
+  assert.equal(hasTarget(), true);
+  assert.equal(workspace.diagnostics.index.sourceParses, parses);
+});

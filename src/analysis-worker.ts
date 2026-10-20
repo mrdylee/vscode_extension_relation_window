@@ -6,7 +6,7 @@ import { FileAnalysis } from './model';
 import { AnalysisPhase, WorkerDiagnostics } from './diagnostics';
 const analyzer = createAnalyzer(path.join(workerData.assets, 'web-tree-sitter.wasm'), path.join(workerData.assets, 'tree-sitter-c.wasm'));
 type Request = { id: number; uri: string; text: string; skip: boolean; expandMacros?: boolean; type?: 'analyze' }
-  | { type: 'derive'; id: number; versions: [string, number, number][] }
+  | { type: 'derive'; id: number; analyzeCallbacks?: boolean; versions: [string, number, number][] }
   | { type: 'remove'; uri: string } | { type: 'reset' } | { type: 'diagnostics' };
 const raw = new Map<string, { id: number; file: FileAnalysis }>();
 const stamps = new WeakMap<FileAnalysis, number>(); let serial = 0;
@@ -74,7 +74,7 @@ parentPort!.on('message', (request: Request) => {
         const active = new Set(request.versions.map(([uri]) => uri));
         for (const uri of raw.keys()) if (!active.has(uri)) remove(uri);
         const changed: FileAnalysis[] = [], versions: [string, number][] = [];
-        const derived = parser.derive(files, memoryPressure, phase);
+        const derived = parser.derive(files, memoryPressure, phase, request.analyzeCallbacks);
         phase('transfer');
         derived.forEach((file, i) => {
           let stamp = file === files[i] ? -request.versions[i][1] : stamps.get(file);

@@ -13,7 +13,7 @@ interface State { memory: Map<string, Value>; effects: Map<string, Effect>; aliv
 interface Context { program: FlowProgram; locals: Map<string, FlowLocal>; exits: State[]; returned: Value }
 interface Observation { value: Value; expression: string; kind: 'variable' | 'unknown' }
 interface ArgumentObservation { call: Extract<Expr, { kind: 'call' }>; values: Map<number, Value> }
-const projectCache = new WeakMap<object, { inputs: FileAnalysis[]; results: FileAnalysis[]; memoryLimited?: boolean }>();
+const projectCache = new WeakMap<object, { inputs: FileAnalysis[]; results: FileAnalysis[]; analyzeCallbacks: boolean; memoryLimited?: boolean }>();
 const callbackMemoryLimit = 'Callback analysis memory budget reached; targets may be incomplete. Narrow Include/Exclude scope.';
 const fileCaches = new WeakMap<object, WeakMap<FileAnalysis, { fingerprint: string; result: FileAnalysis }>>();
 export function clearPointerCache(owner: object) { projectCache.delete(owner); fileCaches.delete(owner); }
@@ -129,21 +129,22 @@ function uniqueCalls(refs: ReferenceRecord[]): ReferenceRecord[] {
 }
 
 // Static may-target propagation. Every produced edge is labelled as inferred.
-export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => boolean, owner: object = files[0]): FileAnalysis[] {
+export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => boolean, owner: object = files[0], analyzeCallbacks = true): FileAnalysis[] {
   if (!files.length) { if (owner) clearPointerCache(owner); return files; }
   const cached = projectCache.get(owner);
-  if (cached && cached.inputs.length === files.length && files.every((file, n) => file === cached.inputs[n]) &&
+  if (cached && cached.analyzeCallbacks !== analyzeCallbacks) clearPointerCache(owner);
+  if (cached && cached.analyzeCallbacks === analyzeCallbacks && cached.inputs.length === files.length && files.every((file, n) => file === cached.inputs[n]) &&
     (!cached.memoryLimited || memoryPressure?.())) return cached.results;
   let fileCache = fileCaches.get(owner);
   if (!fileCache) fileCaches.set(owner, fileCache = new WeakMap());
   const index = new RelationIndex(); files.forEach(file => index.update(file));
   const functionArguments = new FunctionArguments(files, index);
-  const programs = files.flatMap(file => file.programs ?? []), byFunction = new Map<string, FlowProgram[]>();
+  const programs = analyzeCallbacks ? files.flatMap(file => file.programs ?? []) : [], byFunction = new Map<string, FlowProgram[]>();
   for (const program of programs) { const list = byFunction.get(program.id) ?? []; list.push(program); byFunction.set(program.id, list); }
-  const references = files.flatMap(file => file.references.filter(ref => ref.kind === 'call' && ref.flowKey));
+  const references = analyzeCallbacks ? files.flatMap(file => file.references.filter(ref => ref.kind === 'call' && ref.flowKey)) : [];
   const localNames = new Set(programs.flatMap(program => program.locals.map(local => local.name)));
-  const memoryLimited = memoryPressure?.() === true;
-  if (memoryLimited || !references.some(ref => ref.indirect || localNames.has(ref.name) || index.resolveReference(ref).some(s => s.kind === 'variable'))) {
+  const memoryLimited = analyzeCallbacks && memoryPressure?.() === true;
+  if (!analyzeCallbacks || memoryLimited || !references.some(ref => ref.indirect || localNames.has(ref.name) || index.resolveReference(ref).some(s => s.kind === 'variable'))) {
     const results = files.map(file => {
       const references = uniqueCalls(file.references), argumentsFound = functionArguments.forFile(file.uri);
       const warnings = memoryLimited && file === files[0] ? [callbackMemoryLimit] : [];
@@ -154,7 +155,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
         functionArguments: argumentsFound.length ? argumentsFound : undefined };
       fileCache!.set(file, { fingerprint, result }); return result;
     });
-    projectCache.set(owner, { inputs: files, results, memoryLimited }); return results;
+    projectCache.set(owner, { inputs: files, results, analyzeCallbacks, memoryLimited }); return results;
   }
   const heap = new Map<string, Value>(), summaries = new Map<string, Summary>();
   const deadline = performance.now() + 10_000;
@@ -691,5 +692,5 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     const result = { ...file, references: unique, issues: [...file.issues, ...warnings], functionArguments: argumentsFound.length ? argumentsFound : undefined };
     fileCache!.set(file, { fingerprint, result }); return result;
   });
-  projectCache.set(owner, { inputs: files, results, memoryLimited: notices.has(callbackMemoryLimit) }); return results;
+  projectCache.set(owner, { inputs: files, results, analyzeCallbacks, memoryLimited: notices.has(callbackMemoryLimit) }); return results;
 }

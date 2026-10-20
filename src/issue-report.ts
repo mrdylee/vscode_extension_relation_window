@@ -60,6 +60,7 @@ export function createIssueReport(input: IssueReportInput): string {
     view: {
       mode: choice(state.mode, ['references', 'callers', 'callees', 'both']), depth: number(state.depth),
       pinned: !!state.locked, skipInactive: !!state.skipInactive, includeFunctionArguments: !!state.includeFunctionArguments,
+      analyzeCallbacks: !!state.analyzeCallbacks,
       accessFilter: choice(state.accessFilter, ['all', 'read', 'write', 'readwrite', 'address']),
       calleeSort: choice(state.calleeSort, ['name', 'source']),
       contextLayout: choice(state.contextLayout, ['combined', 'combined-full-width', 'separate']),

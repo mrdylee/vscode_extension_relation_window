@@ -9,6 +9,6 @@ export interface ViewState {
   mode: RelationMode; accessFilter: AccessFilter; depth: number; locked: boolean; skipInactive: boolean;
   calleeSort: CalleeSort; contextLayout: 'combined' | 'combined-full-width' | 'separate';
   callGraphDirection: 'callers-left' | 'callees-left';
-  includeFunctionArguments: boolean;
+  includeFunctionArguments: boolean; analyzeCallbacks: boolean;
   diagnostics?: Diagnostics;
 }

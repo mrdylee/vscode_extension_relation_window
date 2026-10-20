@@ -203,7 +203,7 @@ export function deriveMacroCalls(raw: FileAnalysis[], analyze: Analyze, parseCal
               expansions.set(expansionKey, expansion);
             }
           }
-          calls.push({ ...ref, id: `${file.uri}@${token.location.start}:expanded:${calls.length}:${fn.id}`, location: token.location,
+          calls.push({ ...ref, id: `${file.uri}@${token.location.start}:expanded:${calls.length}:${fn.id}`, location: chain.length ? token.location : mapLocation(ref.location.start, ref.location.end),
             ownerId: fn.id, functionId: fn.id, conditions, callKind: chain.length ? 'expanded' : undefined,
             expansion, macroIds: token.unexpanded ? macroIds(ref.name, token.location.start) : [] });
         }

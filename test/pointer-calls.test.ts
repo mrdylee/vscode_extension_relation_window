@@ -371,3 +371,37 @@ test('review: generated literal returns and dereference writes retain source bra
   const index=project({'main.c':source});
   assert.equal(inferred(index).find(group=>group.name==='bar')!.sites.length,2);
 });
+
+test('callback analysis toggles independently of direct calls and literal function arguments', () => {
+  const uri = 'file:///demo/option.c';
+  const raw = [analyzer.analyze(uri, prelude +
+    'void submit(CB cb){} void run(void){CB fp=foo;fp();bar();submit(foo);}')];
+  for (const enabled of [true, false, true, false]) {
+    const index = new RelationIndex();
+    analyzer.derive(raw, undefined, undefined, enabled).forEach(file => index.update(file));
+    assert.equal(inferred(index).some(group => group.name === 'foo'), enabled);
+    assert.ok(calls(index).some(group => group.name === 'bar' && group.callKind === 'direct'));
+    const run = index.symbols().find(s => s.name === 'run')!;
+    assert.ok(index.graph(run.id, 'both', 1, {}, 'all', 'name', true)!.root.children
+      .some(node => node.name === 'foo' && node.sites.some(site => site.argument)), 'literal arguments remain available');
+    assert.equal(index.files.get(uri)!.issues.some(issue => issue.startsWith('Callback ')), false);
+  }
+});
+
+test('typedef callback members retain selection through getter, registration and stored pointer', () => {
+  const sources = callbackTableProject(true);
+  sources['api.h'] = sources['api.h'].replace('struct Ops{void(*pre)(void);void(*process)(void);};',
+    'typedef void(*Pre)(void);typedef void(*Process)(void);struct Ops{Pre pre;Process process;};');
+  const index = project(sources), uri = 'file:///demo/stage.c';
+  assert.deepEqual(index.callbackAt(uri, sources['stage.c'].indexOf('saved->pre();') + 7)?.targets.map(s => s.name), ['prepare']);
+});
+
+test('callback member selection survives macro expansion elsewhere in the same function', () => {
+  const sources = callbackTableProject(true);
+  sources['api.h'] = sources['api.h'].replace('struct Ops{void(*pre)(void);void(*process)(void);};',
+    'typedef void(*Pre)(void);typedef void(*Process)(void);struct Ops{Pre pre;Process process;};');
+  sources['stage.c'] = '#define ERROR(x) (x)\n' + sources['stage.c'].replace('void run(void){', 'void run(void){if(!saved){int ret=ERROR(1);return;}');
+  const index = project(sources), uri = 'file:///demo/stage.c';
+  assert.deepEqual(index.callbackAt(uri, sources['stage.c'].indexOf('saved->pre();') + 7)?.targets.map(s => s.name), ['prepare']);
+  assert.equal(index.callbackAt(uri, sources['stage.c'].indexOf('saved->pre();')), undefined, 'object selection remains ordinary navigation');
+});

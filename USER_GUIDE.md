@@ -197,6 +197,27 @@ notices apply. References and variable R/W filters retain their original meaning
 
 JSON setting: `"dynsight.includeFunctionArguments": true`.
 
+### Callback analysis (separate option)
+
+**Settings → Analyze Callbacks** (`dynsight.analyzeCallbacks`, default **on**)
+controls function-pointer and structure callback target inference in Callers,
+Callees and Callers & Callees. It also controls callback candidate selection when
+clicking a callback call site. With it off, member clicks use ordinary variable
+navigation and indirect calls can remain unresolved.
+
+This is separate from **Include Function Arguments**. Turning callback analysis
+off skips propagation, while direct calls, macro expansion and literal function
+names/addresses passed as arguments remain available. Alias, member and returned
+function argument targets require callback analysis.
+
+Changing the option recalculates relationships from existing source facts without
+reparsing files. Any running analysis completes before the change is applied.
+This is not immediate cancellation or recovery of failed/missing files: check the
+scope and use **Rebuild index** when recovery is needed. Basic parsing and macro
+analysis still consume memory and retain their existing limits. Report issue
+records the option so partial results can be interpreted correctly.
+
+
 If macro include traversal reaches its limit, directly written function names
 and addresses can still appear as partial argument candidates. Their popup shows
 the incomplete-analysis reason; this does not confirm macro expansion or actual

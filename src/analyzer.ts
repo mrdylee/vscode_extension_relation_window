@@ -294,11 +294,11 @@ export async function createAnalyzer(runtime: string, grammar: string) {
     tree.delete(); return { value, issues };
   }, reset() {
     clearMacroCache(analyzer.analyze); clearPointerCache(analyzer.analyze);
-  }, derive(files: FileAnalysis[], memoryPressure?: () => boolean, phase?: (value: 'macros' | 'callbacks') => void): FileAnalysis[] {
+  }, derive(files: FileAnalysis[], memoryPressure?: () => boolean, phase?: (value: 'macros' | 'callbacks') => void, analyzeCallbacks = true): FileAnalysis[] {
     phase?.('macros');
     const expanded = deriveMacroCalls(files, analyzer.analyze, analyzer.calls, analyzer.initializer, memoryPressure);
     phase?.('callbacks');
-    return inferPointerCalls(expanded, memoryPressure, analyzer.analyze);
+    return inferPointerCalls(expanded, memoryPressure, analyzer.analyze, analyzeCallbacks);
   } };
   return analyzer;
 }

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.51 — 2026-10-20
+
+- Add **Analyze Callbacks**, enabled by default and independent of **Include
+  Function Arguments**. Turning it off skips callback propagation and uses
+  ordinary symbol navigation while retaining direct calls and literal arguments.
+- Recalculate relationships on option changes without reparsing sources; discard
+  in-flight results from an obsolete setting and record the option in reports.
+- Preserve the full source range of non-macro callback calls inside functions
+  that also contain macros, so selecting the member opens callback candidates.
+
 ## 0.1.50 — 2026-10-20
 
 - Preserve explicit callback member initializers and pointer/return layers when

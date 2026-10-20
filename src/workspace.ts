@@ -52,6 +52,7 @@ export class WorkspaceIndex implements vscode.Disposable {
   }
   private scopes = new Map<string, { include: string[]; exclude: string[]; included: Minimatch[]; excluded: Minimatch[]; macros: Minimatch[] }>();
   get skipInactive() { return vscode.workspace.getConfiguration('dynsight').get<boolean>('skipInactive', true); }
+  get analyzeCallbacks() { return vscode.workspace.getConfiguration('dynsight').get<boolean>('analyzeCallbacks', true); }
   private startWorker() {
     const assets = path.join(this.extensionPath, 'dist');
     const worker = new Worker(path.join(assets, 'analysis-worker.cjs'), { workerData: { assets } });
@@ -88,6 +89,10 @@ export class WorkspaceIndex implements vscode.Disposable {
       vscode.workspace.onDidChangeConfiguration(event => {
         const settings = ['skipInactive', 'include', 'exclude', 'macroExpansionFolders'].filter(key => event.affectsConfiguration(`dynsight.${key}`));
         if (settings.length) void this.reindex('configuration', settings);
+        else if (event.affectsConfiguration('dynsight.analyzeCallbacks')) {
+          this.revision++;
+          void this.derive();
+        }
       }),
       vscode.workspace.onDidChangeWorkspaceFolders(() => void this.reindex('workspace-folders')));
     this.ready = this.reindex('startup');
@@ -209,7 +214,7 @@ export class WorkspaceIndex implements vscode.Disposable {
         const revision = this.revision;
         this.indexDiagnostics.relationPasses++;
         const versions = [...this.rawVersions].map(([uri, id]) => [uri, id, this.appliedDerived.get(uri) ?? -id]);
-        const result = await this.request<{ stale: boolean; files: FileAnalysis[]; versions: [string, number][] }>({ type: 'derive', versions }).promise;
+        const result = await this.request<{ stale: boolean; files: FileAnalysis[]; versions: [string, number][] }>({ type: 'derive', versions, analyzeCallbacks: this.analyzeCallbacks }).promise;
         if (this.disposed || revision !== this.revision) continue;
         if (result.stale) throw new Error('Analysis input changed unexpectedly. Rebuild index to retry.');
         for (const file of result.files) this.index.update(file);

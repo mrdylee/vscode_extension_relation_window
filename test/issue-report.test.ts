@@ -9,7 +9,7 @@ function input(): IssueReportInput {
     scopes: [{ include: 2, exclude: 1, macroMode: 'selected', macroPatterns: 1 }],
     state: { status: 'Partial index: memory budget reached. Narrow Include/Exclude, then Rebuild index.', fileCount: 1820,
       mode: 'both', depth: 2, locked: true, skipInactive: true, accessFilter: 'all', calleeSort: 'source',
-      contextLayout: 'separate', callGraphDirection: 'callees-left', includeFunctionArguments: true, candidates: [],
+      contextLayout: 'separate', callGraphDirection: 'callees-left', includeFunctionArguments: true, analyzeCallbacks: false, candidates: [],
       issues: ['secret/file.c: Callback analysis memory budget reached; targets may be incomplete.', 'secret/file.c: Line 60: incomplete or unsupported C syntax'] },
     diagnostics: { environment: 'secret-host', host: sample, workerError: 'ERR_WORKER_OUT_OF_MEMORY secret/path',
       worker: { run: 'secret-run', phase: 'callbacks', sample, peakHeap: 300 * 1048576,
@@ -19,6 +19,7 @@ function input(): IssueReportInput {
 test('report contains actionable version, state, counts and memory checkpoints', () => {
   const report = createIssueReport(input());
   for (const text of ['0.1.40', '1.105.0', 'wsl', '1820', '256', '1024', 'callbacks', 'memory-budget', 'syntax', 'worker-out-of-memory', 'sampleAgeSeconds', 'Reproduction steps']) assert.ok(report.includes(text), text);
+  assert.match(report, /"analyzeCallbacks": false/);
   assert.ok(report.includes('public'));
   assert.ok(report.includes('not total system RAM'));
 });
