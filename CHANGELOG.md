@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.50 — 2026-10-20
+
+- Preserve explicit callback member initializers and pointer/return layers when
+  only a forward structure declaration is indexed. Follow the object through
+  getters, registration arguments and stored pointers without matching unrelated
+  objects by member name or guessing positional field order.
+- Show recorded callback failure reasons in an expandable **Callback analysis**
+  section, open automatically when no target is resolved.
+- Report macro/callback analysis limits as **Partial index** instead of
+  **Index ready**. Keep existing memory and inference limits.
+
 ## 0.1.49 — 2026-10-20
 
 - Select `cb()` or a callback member such as `ops->callback()` to inspect indexed

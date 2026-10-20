@@ -55,7 +55,9 @@ export class MemberResolver {
     for (const symbol of targets.slice(0, 64)) {
       if (seen.has(symbol.id)) continue;
       if (symbol.aggregate) {
-        if (symbol.definition) result.push({ id: symbol.id, layers: type.layers, conditions: symbol.conditions });
+        // A forward declaration has no fields, but still preserves pointer and
+        // function-return layers needed to follow an explicitly initialized object.
+        result.push({ id: symbol.id, layers: type.layers, conditions: symbol.conditions });
       } else {
         for (const base of this.normalize(symbol.type, symbol, unitUri, new Set(seen).add(symbol.id), depth + 1)) {
           result.push({ ...base, layers: [...type.layers, ...base.layers], conditions: [...symbol.conditions, ...base.conditions] });

@@ -145,6 +145,7 @@ Include/Exclude는 기본 분석에 포함할 파일을 정하고, **Macro Expan
 - **Relation 배경을 왼쪽 버튼으로 드래그**하면 그래프를 이동합니다. 우클릭의 **Reset graph position**으로 되돌립니다. 심볼 클릭·더블클릭과 Context 텍스트 선택은 그대로 사용할 수 있습니다.
 - 고정 중에는 **Pinned · Follow paused** 옆의 **↩ Pin** 버튼으로 고정한 심볼 위치로 돌아갈 수 있습니다. 메인 편집기와 Context가 해당 심볼을 표시하고 Relation에서도 핀이 꽂힌 루트가 보이도록 이동합니다. 고정 상태와 펼친 가지는 유지됩니다.
 - **콜백 추적:** `Following selection` 상태에서 `cb()`의 `cb` 또는 `ops->callback()`의 `callback`을 클릭하면 **Callback targets**에 실제 호출 대상 후보가 표시됩니다. 함수 이름·파일 위치를 확인하고 후보를 선택하면 해당 함수의 Relation으로 이동하며 Pin도 설정할 수 있습니다. 후보 하나도 실행 확정을 뜻하지 않으며, 미확정 경로는 **Other targets may exist**로 표시합니다. 기존 인덱스를 재사용하므로 클릭으로 전체 재분석을 시작하지 않습니다. `Include Function Arguments`는 이 추적에 필요하지 않습니다.
+- **콜백 진단:** 대상이 없으면 **Callback analysis**가 자동으로 펼쳐집니다. getter 본문 누락(`Return value unavailable`), 인자 공급 경로 누락(`Argument … has no indexed supply`), 객체 연결·멤버 값 미확인(`Object connection unavailable` / `Member value unavailable`), 구조체 정의 미확인(`Structure layout unavailable`)을 확인하세요. 이는 색인에서 확인하지 못한 정보이며 실제 실행 오류를 뜻하지 않습니다.
 - **Settings → Context Layout → Combined / Combined · Full width / Separate**: Combined는 Context와 Relation을 함께 표시합니다. **Combined · Full width**는 두 창을 왼쪽·오른쪽 사이드바 아래까지 하단 전체 너비로 표시합니다. VS Code의 패널 정렬을 바꾸므로 Terminal 등 다른 하단 패널도 같은 너비를 사용하며, Combined나 Separate로 바꾸면 기본 편집기 너비로 돌아옵니다. Separate는 **Dynsight Context**를 Explorer의 독립 뷰로 엽니다. 제목줄 드래그 또는 **View: Move View**로 왼쪽 파일 트리 아래 등 원하는 위치에 배치합니다. 세 방식 모두 분석 인덱스·미리보기·코드 이동·고정 상태를 공유합니다. Settings 버튼은 Include/Exclude를 포함한 확장의 모든 설정을 한곳에서 엽니다.
 - **Macro-expanded call**은 매크로 확장으로 찾은 호출입니다. **Inferred call**은 정적 분석으로 찾은 함수 포인터·콜백 후보이며 점선 아이콘과 근거 위치를 표시합니다. **Macro invocation**은 확장하지 못한 호출, **Indirect call**은 아직 모르는 간접 대상, **Unresolved call**은 분석 범위에 정의가 없는 호출입니다. 미확정 대상은 말단 노드로 남깁니다.
 - 함수 이름 선택: 해당 정의를 Context에서 미리 봅니다.
@@ -237,6 +238,7 @@ void run(struct Motor *m, struct Sensor *s) {
 
 - 객체형·함수형 매크로, 중첩 인자 확장, 문자열화, 토큰 붙이기, 가변 인자와 리터럴 include를 처리합니다. 팝업에서 확장 경로와 코드를 보고 원래 호출 위치로 이동합니다. 계산된 include 경로나 빌드별 헤더 인스턴스화는 지원하지 않습니다.
 - 지역 포인터의 초기화·대입·별칭, 분기/반복, 함수 인자 전달·등록·반환, 정적 상태, 구조체 콜백 테이블과 배열을 추적합니다. 알려진 배열 인덱스는 분리하고 모르는 인덱스는 가능한 항목을 모읍니다.
+- 구조체 정의가 색인에 없어도 `.cb_preprocess = target`처럼 직접 명시한 멤버 초기화는 해당 객체에 보존합니다. 테이블 주소를 getter로 반환하고 등록 함수의 인자로 전달해 포인터에 저장하는 경로도 추적합니다. 타입 정보가 없을 때 `{target, other}`의 필드 순서는 추측하지 않습니다.
 - 알려진 객체는 구분하지만, 가리키는 객체를 모르는 포인터 필드는 같은 선언 단위로 후보가 합쳐질 수 있습니다.
 - **Inferred call** 팝업의 **Evidence**를 클릭하면 함수 주소·대입·인자 전달 근거를 Context에서 봅니다. Enter/더블클릭은 그 근거 위치를 편집기에서 엽니다. 노드 클릭은 실제 간접 호출 위치를 보여주며 대상 함수의 다음 호출도 펼칠 수 있습니다.
 - 추정은 실행 대상의 보증이 아닙니다. 외부 호출에 의한 변경, 미확인 값이나 한계 도달은 **Other targets may exist**와 미확정 간접 호출로 남깁니다. 임의 주소, 바이트 단위 메모리 조작, 모든 캐스트/포인터 산술과 런타임 동적 연결을 정확히 해석하지는 않습니다.
@@ -360,6 +362,7 @@ Tree-sitter C 구문 트리에서 심볼·위치를 수집하고 파일/지역 �
 2. **Following selection** 상태인지 확인합니다. **Pinned · Follow paused**는 선택 추적을 멈추고 현재 Relation을 유지하는 상태입니다. 버튼을 누르면 추적을 재개합니다.
 3. 하단의 **분석 상태와 파일 수**를 확인합니다. 초기 분석 중에는 아직 처리하지 않은 파일의 관계가 빠질 수 있습니다. **Partial index: 10,000 file limit reached**이면 일부 파일이 초기 색인에서 빠졌으므로 제외 설정으로 범위를 줄이세요.
 4. **Analysis notices**를 펼칩니다. `File exceeds the 2,000,000 character analysis limit`는 해당 파일의 크기 제한 안내입니다. 도구가 생성한 대형 파일이면 그 폴더를 제외하세요. 문법 분석 알림은 파일과 줄을 확인해야 하며, **Index ready**도 모든 파일에 분석 오류가 없다는 뜻은 아닙니다.
+   매크로·콜백 분석의 한도에 도달하면 **Partial index: analysis limits reached**로 표시합니다. 이미 알려진 관계는 사용할 수 있지만 일부 콜백 연결이 빠질 수 있습니다.
 5. Include를 설정했다면 선택한 파일이 그 패턴에 일치하고, Exclude에는 일치하지 않는지 확인합니다. 0개로 표시되면 폴더 이름과 WSL 경로의 대소문자를 확인하세요. 같은 이름의 정의가 여럿이면 **Select definition**에서 원하는 파일의 정의를 선택합니다.
 
 **Rebuild index**는 현재 범위로 분석을 다시 실행합니다. 제외 설정 없이 반복해서 눌러도 분석 대상이나 파일 수 제한이 달라지지는 않습니다. `Skip inactive branches`는 폴더 제외와 별개이며, 정의 여부가 불명확한 `#ifdef` 분기를 제거하는 옵션은 아닙니다.

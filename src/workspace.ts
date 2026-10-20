@@ -197,6 +197,8 @@ export class WorkspaceIndex implements vscode.Disposable {
       return 'Partial index: memory budget reached. Narrow Include/Exclude, then Rebuild index.';
     if (this.fileLimitReached) return 'Partial index: 10,000 file limit reached';
     if (this.failures.size) return `Partial index: ${this.failures.size} file(s) failed. See Analysis notices.`;
+    if ([...this.index.files.values()].some(file => file.issues.some(issue => /^(Macro|Callback) .*(limit|budget)/i.test(issue))))
+      return 'Partial index: analysis limits reached. See Analysis notices.';
     return 'Index ready';
   }
   private derive(): Promise<void> {

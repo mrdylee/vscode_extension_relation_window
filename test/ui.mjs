@@ -355,6 +355,8 @@ try {
   await callbackChoice.selectOption(fixture.callback.targets[0].id);
   assert.ok(await page.evaluate(id => window.sent.some(m => m.type === 'choose' && m.id === id), fixture.callback.targets[0].id));
   await configure({ callback: { ...fixture.callback, targets: [], incomplete: true, reasons: ['Unknown pointer value'] } });
+  assert.ok(await page.getByText('Unknown pointer value', { exact: true }).isVisible(), 'failure reasons must be readable without a hover tooltip');
+  await page.screenshot({ path: 'output/playwright/callback-diagnosis.png', fullPage: true });
   assert.ok((await page.locator('.candidates').textContent()).includes('Other targets may exist'));
   assert.ok((await page.locator('.graph').textContent()).includes('No callback targets resolved'));
   await configure({ callback: undefined });

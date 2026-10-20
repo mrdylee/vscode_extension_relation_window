@@ -373,6 +373,13 @@ function render(state: ViewState) {
     if (state.callback) {
       const note = el('span', 'muted callback-note', `Callback targets · ${state.callback.expression} · Static candidates${state.callback.incomplete ? ' · Other targets may exist' : ''}`);
       note.title = state.callback.reasons.join('\n'); candidates.append(note);
+      if (state.callback.reasons.length) {
+        const diagnosis = el('details', 'callback-diagnosis');
+        diagnosis.open = !choices.length;
+        diagnosis.append(el('summary', '', 'Callback analysis'));
+        for (const reason of state.callback.reasons) diagnosis.append(el('div', 'condition detail-warning', reason));
+        candidates.append(diagnosis);
+      }
     }
     if (choices.length) {
       const label = el('label', '', `${choices.length} ${state.callback ? (choices.length === 1 ? 'candidate' : 'candidates') : 'definitions'}`); label.htmlFor = 'definition-choice';

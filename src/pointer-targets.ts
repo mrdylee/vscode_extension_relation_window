@@ -193,7 +193,12 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     list[0].params.forEach((_, n) => parameterInfo.set(id + ':param:' + n, { fn: id, index: n }));
   }
   const paramRoot = (fn: string, n: number) => '$arg:' + fn + ':param:' + n;
-  const defaultValue = (_slot: string): Value => unknown('Value is uninitialized or not known from indexed code');
+  const defaultValue = (slot: string): Value => {
+    const parameter = formal(slot);
+    return unknown(parameter && !summaries.get(parameter.fn)?.params[parameter.index]
+      ? `Argument ${parameter.index + 1} to ${index.symbol(parameter.fn)?.name ?? 'function'} has no indexed supply`
+      : 'Value is uninitialized or not known from indexed code');
+  };
   function put(target: Map<string, Value>, key: string, value: Value) {
     const old = target.get(key); if (old && covers(old, value)) return;
     const next = old ? union(old, value) : value;
@@ -395,13 +400,18 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
       write(slot, layouts.length && layouts.every(layout => !layout.layers.length && layout.scalar) ? scalar(value) : value, state, ctx); return;
     }
     const layout = layouts[0] ?? { id: '', layers: [], conditions: [], fields: [] };
-    if (layout.layers[0] !== 'array' && (layout.layers.length || !layout.fields.length)) {
+    // Explicit designators identify storage even when the aggregate definition
+    // is outside the index. Never invent positional fields without its layout.
+    const designatedOnly = !layout.layers.length && !layout.fields.length && !layout.scalar &&
+      expr.entries.some(entry => entry.path.length > 0);
+    if (!designatedOnly && layout.layers[0] !== 'array' && (layout.layers.length || !layout.fields.length)) {
       if (expr.entries[0]) initializer(slot, expr.entries[0].value, [], state, ctx);
       return;
     }
     write(slot, { ...blank(), objects: new Set([slot]) }, state, ctx);
     let next = 0;
     for (const entry of expr.entries) {
+      if (designatedOnly && !entry.path.length) continue;
       const path = entry.path.length ? entry.path : [layout.layers[0] === 'array' ? next : layout.fields[next]?.name ?? String(next)];
       let target = slot, current = layout;
       for (const part of path) {
@@ -456,7 +466,24 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
       if (pointer.targets.size) return pointer;
       return union(...[...objects(pointer)].map(slot => read(slot, state)));
     }
-    if (expr.kind === 'member' || expr.kind === 'index') return storedValue(expr, union(...slots(expr, state, ctx).map(slot => read(slot, state))), state, ctx);
+    if (expr.kind === 'member' || expr.kind === 'index') {
+      const base = evaluate(expr.object, state, ctx);
+      const locations = expr.kind === 'member' ? [...objects(base)].map(root => root + '.' + expr.field)
+        : indexSlots(objects(base), evaluate(expr.index, state, ctx), state, false);
+      let value = union(...locations.map(slot => read(slot, state)));
+      if (!locations.length || (value.unknown && !value.targets.size && !value.objects.size && !value.params.size)) {
+        const reason = !locations.length ? 'Object connection unavailable: ' + expressionText(expr.object)
+          : 'Member value unavailable: ' + expressionText(expr);
+        value = union(value, unknown(reason));
+        const record = valueType(expr.object, ctx), layout = record && index.layout(record)[0];
+        if (expr.kind === 'member' && (!layout || (!layout.fields.length && !layout.scalar)))
+          value = union(value, unknown('Structure layout unavailable: ' + expressionText(expr.object) + '; positional members cannot be resolved'));
+      }
+      // Keep the cause of a missing getter/assignment without treating the
+      // receiver's own function address as the member's callback target.
+      if (base.reasons.length) value = { ...value, reasons: [...new Set([...base.reasons, ...value.reasons])].slice(0, 8) };
+      return storedValue(expr, value, state, ctx);
+    }
     if (expr.kind === 'choice') {
       const variants = expr.values.map(value => { const branch = clone(state); return { state: branch, value: evaluate(value, branch, ctx) }; });
       if (variants.length) Object.assign(state, variants.slice(1).reduce((a, b) => joinStates(a, b.state), variants[0].state));
@@ -506,7 +533,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
       for (const fn of resolved.targets.keys()) {
         depend(fn);
         const target = summaries.get(fn);
-        if (!target) { opaque = true; returns.push(unknown('External function return')); continue; }
+        if (!target) { opaque = true; returns.push(unknown('Return value unavailable: ' + (index.symbol(fn)?.name ?? expressionText(expr.callee)) + ' has no indexed body')); continue; }
         if (target.incomplete) opaque = true;
         args.forEach((arg, n) => {
           if (!parameterLayouts.get(fn)?.[n]?.some(layout => layout.layers.length || layout.fields.length)) return;
@@ -531,7 +558,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
         for (const key of keys) write(key, unknown('Address passed to an opaque call may be modified'), state, ctx);
       }
       for (const [key, effect] of effects) write(key, effect.value, state, ctx, effect.definite && !opaque && effect.count === resolved.targets.size);
-      return returns.length ? union(...returns) : unknown('Unknown function return');
+      return returns.length ? union(...returns) : unknown('Return value unavailable: ' + expressionText(expr.callee));
     }
     if (expr.kind === 'initializer') return union(...expr.entries.map(entry => evaluate(entry.value, state, ctx)));
     if (expr.kind === 'unknown') for (const child of expr.children ?? []) evaluate(child, state, ctx);

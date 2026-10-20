@@ -48,6 +48,22 @@ function fixture(t, files = []) {
 }
 
 const latest = 'typedef void(*CB)(void);void new_target(void){}void task(void){CB cb=new_target;cb();}';
+test('analysis limits report a partial index while ordinary syntax notices retain ready status', async t => {
+  const { workspace } = fixture(t);
+  await workspace.ready;
+  const file = uri('partial.c');
+  await workspace.enqueue(file); await workspace.derive();
+  const analysis = workspace.index.files.get(file.toString());
+  for (const issue of ['Macro include traversal limit reached; call relationships may be incomplete',
+    'Callback propagation limit: 12 project passes; targets may be incomplete',
+    'Callback analysis budget: 10 seconds; targets may be incomplete. Narrow Include/Exclude scope.']) {
+    workspace.index.update({ ...analysis, issues: [issue] });
+    assert.match(workspace.completedStatus(), /Partial index: analysis limits reached/);
+  }
+  workspace.index.update({ ...analysis, issues: ['Line 1: incomplete or unsupported C syntax'] });
+  assert.equal(workspace.completedStatus(), 'Index ready');
+});
+
 test('a late disk read cannot replace a newer buffered edit in the real Worker', async t => {
   const { workspace, adapter } = fixture(t);
   await workspace.ready;

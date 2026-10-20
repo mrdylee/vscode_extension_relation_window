@@ -295,6 +295,16 @@ reuses the selected file's index and does not start another analysis pass.
 Macro-generated indirect calls remain available through the enclosing function's
 Callees and inference details.
 
+**Callback analysis** expands automatically when no target is resolved. It shows
+recorded reasons such as a getter with no indexed body (**Return value unavailable**),
+a registration parameter with no indexed supply (**Argument … has no indexed supply**),
+or missing object/member values (**Object connection unavailable** / **Member value unavailable**).
+**Structure layout unavailable** means positional fields cannot be determined.
+These describe missing analysis information, not a proven runtime error. Include
+the relevant getter, registration and table definitions when collecting a reproduction.
+
+- Explicit member initializers such as `.cb_preprocess = target` remain attached to their object even if the structure definition is unavailable. Getter returns, argument passing and stored pointers can carry that object to a callback invocation. Positional initializers such as `{target, other}` still require a known field layout.
+- Macro/callback analysis limits show **Partial index: analysis limits reached** in the status bar. Existing relations remain usable; inspect **Analysis notices** for the limit that left results incomplete.
 - Object/function macros, nested argument expansion, stringizing, token pasting, variadics and literal indexed includes are supported. The popup shows the expansion chain and tinted effective code. Clicking a call still previews its original invocation in Context.
 - Local pointer initialization/assignment, pointer aliases, branches/loops, callback argument forwarding/registration/returns, static state, struct tables and arrays supply possible targets. Constant array indices stay separate; unknown indices collect possible entries.
 - Known object instances stay separate. Unknown pointer fields may merge by declaration and remain uncertain.

@@ -16,6 +16,65 @@ const prelude = 'typedef void (*CB)(void); void foo(void){} void bar(void){}\n';
 const calls = (index: RelationIndex, name = 'run') => index.relations(index.symbols().find(s => s.name === name && s.kind === 'function' && s.definition)!.id, 'callees');
 const inferred = (index: RelationIndex, name = 'run') => calls(index,name).filter(g => g.callKind === 'inferred');
 
+function callbackTableProject(withType: boolean, withRegistration = true, argumentPosition = 3) {
+  const params = ['int ctx', 'void *data'], args = ['0', '0'];
+  if (argumentPosition === 4) { params.push('int flags'); args.push('0'); }
+  params.splice(argumentPosition - 1, 0, 'const struct Ops *ops');
+  args.splice(argumentPosition - 1, 0, 'get_ops()');
+  return {
+    'api.h': (withType ? 'struct Ops{void(*pre)(void);void(*process)(void);};' : 'struct Ops;') +
+      `const struct Ops *get_ops(void);void install(${params.join(',')});`,
+    'table.c': '#include "api.h"\nstatic void prepare(void){}static void process(void){}' +
+      'static const struct Ops table={.pre=prepare,.process=process};' +
+      'const struct Ops *get_ops(void){return &table;}' +
+      'static void unrelated(void){}static const struct Ops other={.pre=unrelated};',
+    'stage.c': '#include "api.h"\nstatic const struct Ops *saved;' +
+      `void install(${params.join(',')}){if(ops){saved=ops;}}` +
+      'void run(void){if(saved && saved->pre){saved->pre();saved->process();}}',
+    ...(withRegistration ? { 'start.c': `#include "api.h"\nvoid start(void){install(${args.join(',')});}` } : {})
+  };
+}
+for (const withType of [true, false]) for (const position of [1, 2, 3, 4])
+test(`callback table crosses getter, argument ${position} and stored pointer (type ${withType ? 'available' : 'unavailable'})`, () => {
+  const index = project(callbackTableProject(withType, true, position));
+  assert.deepEqual(inferred(index).map(group => group.name).sort(), ['prepare', 'process']);
+  const run = index.symbols().find(symbol => symbol.name === 'run' && symbol.definition)!;
+  assert.deepEqual(index.graph(run.id, 'both', 1)!.root.children.filter(node => node.symbolId).map(node => node.name).sort(), ['prepare', 'process']);
+  for (const group of inferred(index)) assert.ok(index.relations(group.symbol!.id, 'callers').some(caller => caller.name === 'run'));
+  assert.equal(inferred(index).some(group => group.name === 'unrelated'), false, 'same member name on another object must not match');
+});
+test('missing aggregate layout preserves explicit fields without guessing positional members', () => {
+  const index = project({'main.c': prelude +
+    'struct Missing;static const struct Missing table={.first=foo,bar,.last=bar};' +
+    'void run(void){table.first();table.second();table.last();}'});
+  assert.deepEqual(inferred(index).map(group => group.name), ['bar', 'foo']);
+  assert.equal(inferred(index).some(group => group.sites.some(site => site.inference?.expression === 'table.second')), false);
+  const missing = calls(index).find(group => group.name === 'table.second')!;
+  assert.ok(missing.sites[0].inference?.reasons.some(reason => /Member value unavailable: table.second/.test(reason)));
+});
+test('callback diagnosis identifies the missing object connection when registration is outside the index', () => {
+  const index = project(callbackTableProject(true, false));
+  const source = index.files.get('file:///demo/stage.c')!.text;
+  const callback = index.callbackAt('file:///demo/stage.c', source.indexOf('saved->pre();') + 7)!;
+  assert.deepEqual(callback.targets, []);
+  assert.ok(callback.reasons.some(reason => reason.includes('saved') || reason.includes('install')), callback.reasons.join('\n'));
+});
+test('callback diagnosis names missing getter and registration argument data', () => {
+  const source = 'struct Ops{void(*pre)(void);};const struct Ops *get_ops(void);' +
+    'void run(void){const struct Ops *p=get_ops();p->pre();}' +
+    'static void install(const struct Ops *ops){ops->pre();}';
+  const index = project({'main.c': source}), uri = 'file:///demo/main.c';
+  assert.ok(index.callbackAt(uri, source.indexOf('p->pre();') + 3)!.reasons.some(reason => reason.includes('get_ops')));
+  assert.ok(index.callbackAt(uri, source.indexOf('ops->pre();') + 5)!.reasons.some(reason => /Argument 1 to install/.test(reason)));
+});
+test('callback diagnosis distinguishes positional initialization with unavailable structure layout', () => {
+  const source = prelude + 'struct Missing;const struct Missing table={foo};void run(void){table.pre();}';
+  const index = project({'main.c': source});
+  const result = index.callbackAt('file:///demo/main.c', source.indexOf('table.pre();') + 6)!;
+  assert.deepEqual(result.targets, []);
+  assert.ok(result.reasons.some(reason => /Structure layout unavailable/.test(reason)));
+});
+
 test('callback selection follows targets at each call site without changing variable resolution', () => {
   const source = prelude + 'void run(void){CB fp=foo;fp();fp=bar;fp();}';
   const index = project({'main.c': source}), uri = 'file:///demo/main.c';
