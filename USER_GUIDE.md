@@ -276,6 +276,25 @@ may have missing relationships.
 
 Use the existing **Callees**, **Callers** and **References** modes. No build configuration is needed. Include the relevant headers, callback registrations and implementations in the analysis scope, and wait for **Index ready**.
 
+### Follow a callback from its call site
+
+With **Following selection** active, click `cb` in `cb()` or the `callback`
+member in `ops->callback()` in the editor or Context. **Callback targets** lists
+the indexed possible functions by name and file/line. Context shows the original
+call. Choose a target to explore its normal Callers/Callees graph, then pin it if
+desired. Even one result is a static candidate, not proof of runtime execution.
+
+Assignments, pointer aliases, member/table values and registrations use the
+existing inference results. **Include Function Arguments** is not required for
+this call-site navigation; that option controls functions passed as arguments.
+Clicking the object `ops` or an array index retains ordinary variable navigation.
+
+**Other targets may exist** indicates incomplete results. If no target is known,
+the view explicitly says so; check analysis scope and notices. Candidate lookup
+reuses the selected file's index and does not start another analysis pass.
+Macro-generated indirect calls remain available through the enclosing function's
+Callees and inference details.
+
 - Object/function macros, nested argument expansion, stringizing, token pasting, variadics and literal indexed includes are supported. The popup shows the expansion chain and tinted effective code. Clicking a call still previews its original invocation in Context.
 - Local pointer initialization/assignment, pointer aliases, branches/loops, callback argument forwarding/registration/returns, static state, struct tables and arrays supply possible targets. Constant array indices stay separate; unknown indices collect possible entries.
 - Known object instances stay separate. Unknown pointer fields may merge by declaration and remain uncertain.

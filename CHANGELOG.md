@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.49 — 2026-10-20
+
+- Select `cb()` or a callback member such as `ops->callback()` to inspect indexed
+  possible targets, then choose a function to explore its Relation graph.
+- Label all results as static candidates, preserve unknown/partial results, and
+  preview the original call in Context. No additional inference pass is started.
+- Preserve object/index variable navigation and reject stale candidate choices
+  after index changes. Pin pauses callback selection tracking as well.
+
 ## 0.1.48 — 2026-10-20
 
 - Pin the node last selected in Relation instead of always pinning the current root.

@@ -1,4 +1,4 @@
-import { AccessFilter, CalleeSort, FileAnalysis, GraphData, GraphNode, ReferenceRecord, RelationGroup, RelationMode, SymbolRecord } from './model';
+import { AccessFilter, CallbackTargets, CalleeSort, FileAnalysis, GraphData, GraphNode, ReferenceRecord, RelationGroup, RelationMode, SymbolRecord } from './model';
 import { MemberResolver } from './member-resolver';
 
 // Keep each file's contribution separate so edits never rebuild unrelated files.
@@ -210,6 +210,38 @@ export class RelationIndex {
     if (symbol?.definition) return [symbol];
     const ref = file.references.find(ref => !ref.indirect && ref.callKind !== 'inferred' && contains(ref));
     return ref ? this.resolve(ref) : symbol ? [symbol] : [];
+  }
+  callbackAt(uri: string, offset: number): CallbackTargets | undefined {
+    const file = this.files.get(uri);
+    if (!file) return;
+    const calls = file.references.filter(ref => ref.kind === 'call' && ref.access && !ref.expansion &&
+      ref.location.start <= offset && offset < ref.location.end &&
+      (ref.callKind === 'inferred' || ref.indirect || this.resolve(ref).some(s => s.kind === 'variable')));
+    const first = calls.sort((a, b) => (a.location.end - a.location.start) - (b.location.end - b.location.start))[0];
+    if (!first) return;
+    // In factory()(), selecting factory belongs to the inner direct call.
+    if (file.references.some(ref => ref.kind !== 'declaration' && !ref.indirect && ref.callKind !== 'inferred' &&
+      ref.location.start <= offset && offset < ref.location.end &&
+      ref.location.end - ref.location.start <= first.location.end - first.location.start &&
+      this.resolve(ref).some(symbol => symbol.kind === 'function'))) return;
+    const text = file.text.slice(first.location.start, first.location.end);
+    // Trace the callee token, while objects and array indices keep normal navigation.
+    let brackets = 0, token: { start: number; end: number } | undefined;
+    for (const match of text.matchAll(/[A-Za-z_]\w*|\[|\]/g)) {
+      if (match[0] === '[') brackets++;
+      else if (match[0] === ']') brackets--;
+      else if (!brackets) token = { start: first.location.start + match.index, end: first.location.start + match.index + match[0].length };
+    }
+    if (!token || offset < token.start || offset >= token.end) return;
+    const sites = calls.filter(ref => ref.location.start === first.location.start && ref.location.end === first.location.end);
+    const targets = new Map<string, SymbolRecord>();
+    for (const site of sites) {
+      const symbols = site.targetId ? [this.byId.get(site.targetId)] : this.resolve(site);
+      for (const symbol of symbols) if (symbol?.kind === 'function') targets.set(symbol.id, symbol);
+    }
+    return { location: first.location, expression: first.inference?.expression ?? text,
+      targets: [...targets.values()], incomplete: !targets.size || sites.some(ref => ref.callKind !== 'inferred' || ref.inference?.incomplete),
+      reasons: [...new Set(sites.flatMap(ref => ref.inference?.reasons ?? []))] };
   }
   private callees(target: SymbolRecord, sort: CalleeSort, includeFunctionArguments: boolean): RelationGroup[] {
     if (target.kind !== 'function') return [];

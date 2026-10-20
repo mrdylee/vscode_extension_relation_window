@@ -16,6 +16,61 @@ const prelude = 'typedef void (*CB)(void); void foo(void){} void bar(void){}\n';
 const calls = (index: RelationIndex, name = 'run') => index.relations(index.symbols().find(s => s.name === name && s.kind === 'function' && s.definition)!.id, 'callees');
 const inferred = (index: RelationIndex, name = 'run') => calls(index,name).filter(g => g.callKind === 'inferred');
 
+test('callback selection follows targets at each call site without changing variable resolution', () => {
+  const source = prelude + 'void run(void){CB fp=foo;fp();fp=bar;fp();}';
+  const index = project({'main.c': source}), uri = 'file:///demo/main.c';
+  assert.deepEqual(index.callbackAt(uri, source.indexOf('fp();'))?.targets.map(s => s.name), ['foo']);
+  assert.deepEqual(index.callbackAt(uri, source.lastIndexOf('fp();'))?.targets.map(s => s.name), ['bar']);
+  assert.equal(index.callbackAt(uri, source.indexOf('fp=foo')), undefined, 'assignment is ordinary variable selection');
+  assert.equal(index.resolveAt(uri, source.indexOf('fp();'))[0]?.name, 'fp');
+});
+test('callback selection retains member candidates, unknown targets and original call locations', () => {
+  const source = prelude + 'struct Ops{CB cb;};void run(int c){struct Ops x={foo};if(c)x.cb=bar;x.cb();struct Ops *p=&x;p->cb();CB unknown;unknown();}';
+  const index = project({'main.c': source}), uri = 'file:///demo/main.c';
+  const offset = source.indexOf('x.cb();');
+  const result = index.callbackAt(uri, offset + 2)!;
+  assert.equal(index.callbackAt(uri, offset), undefined, 'object selection remains ordinary navigation');
+  assert.deepEqual(result.targets.map(s => s.name).sort(), ['bar', 'foo']);
+  assert.equal(result.location.start, offset);
+  assert.equal(result.expression, 'x.cb');
+  assert.deepEqual(index.callbackAt(uri, source.indexOf('p->cb()') + 3)?.targets.map(s => s.name).sort(), ['bar', 'foo']);
+  const unknown = index.callbackAt(uri, source.indexOf('unknown();'))!;
+  assert.deepEqual(unknown.targets, []);
+  assert.equal(unknown.incomplete, true);
+});
+test('callback selection ignores direct calls, sizeof expressions and stale files', () => {
+  const source = prelude + 'void run(void){CB fp=foo;foo();sizeof(fp());}';
+  const index = project({'main.c': source}), uri = 'file:///demo/main.c';
+  assert.equal(index.callbackAt(uri, source.indexOf('foo();')), undefined);
+  assert.equal(index.callbackAt(uri, source.indexOf('fp());')), undefined);
+  index.remove(uri);
+  assert.equal(index.callbackAt(uri, source.indexOf('fp());')), undefined);
+});
+test('callback selection preserves object and index navigation in complex pointer expressions', () => {
+  const source = prelude + 'struct Ops{CB cb;};void run(int i){struct Ops x={foo};(*x.cb)();CB table[]={foo,bar};table[i]();}';
+  const index = project({'main.c': source}), uri = 'file:///demo/main.c';
+  const member = source.indexOf('x.cb)()'), table = source.indexOf('table[i]()');
+  assert.equal(index.callbackAt(uri, member), undefined);
+  assert.deepEqual(index.callbackAt(uri, member + 2)?.targets.map(s => s.name), ['foo']);
+  assert.equal(index.callbackAt(uri, table + 'table['.length), undefined);
+  assert.deepEqual(index.callbackAt(uri, table)?.targets.map(s => s.name).sort(), ['bar', 'foo']);
+});
+test('callback selection reports unknown when only basic analysis is available', () => {
+  const source = prelude + 'void run(void){CB fp=foo;fp();}';
+  const index = new RelationIndex(), uri = 'file:///demo/main.c';
+  const raw = analyzer.analyze(uri, source); index.update(raw);
+  assert.deepEqual(index.callbackAt(uri, source.indexOf('fp();'))?.targets, []);
+  assert.equal(index.callbackAt(uri, source.indexOf('fp();'))?.incomplete, true);
+  analyzer.derive([raw]).forEach(file => index.update(file));
+  assert.deepEqual(index.callbackAt(uri, source.indexOf('fp();'))?.targets.map(s => s.name), ['foo']);
+});
+test('callback selection does not steal a nested direct factory call', () => {
+  const source = prelude + 'CB factory(void){return foo;}void run(void){factory()();}';
+  const index = project({'main.c': source}), uri = 'file:///demo/main.c';
+  assert.equal(index.callbackAt(uri, source.indexOf('factory()()')), undefined);
+  assert.equal(index.resolveAt(uri, source.indexOf('factory()()'))[0]?.name, 'factory');
+});
+
 test('callback memory pressure preserves literal arguments and retries propagation after recovery', () => {
   const raw = [analyzer.analyze('file:///demo/memory.c', prelude + 'void svc(CB);void run(void){CB fp=foo;svc(foo);fp();}')];
   const partial = inferPointerCalls(raw, () => true);

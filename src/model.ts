@@ -39,6 +39,10 @@ export interface ReferenceRecord {
   argument?: { callee: string; position: number; location: Location; inferred?: boolean };
   unresolvedKind?: Kind;
 }
+export interface CallbackTargets {
+  location: Location; expression: string; targets: SymbolRecord[];
+  incomplete: boolean; reasons: string[];
+}
 export type FlowExpression = { location: Location } & (
   | { kind: 'name'; name: string; localId?: string; alternatives?: string[]; globalFallback?: boolean }
   | { kind: 'number'; value: string }

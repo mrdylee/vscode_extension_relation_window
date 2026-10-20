@@ -18,6 +18,7 @@ export class RelationView implements vscode.Disposable {
   private nodes = new Map<string, GraphNode>();
   private selection?: string;
   private selectedNodeKey?: string;
+  private callbackFocus?: { uri: string; offset: number; text: string };
   private listener: vscode.Disposable;
   private preferences: vscode.Disposable;
   private diagnosticsListener: vscode.Disposable;
@@ -92,10 +93,20 @@ export class RelationView implements vscode.Disposable {
     const position = editor.selection.isEmpty ? editor.selection.active : editor.selection.start;
     const word = editor.document.getWordRangeAtPosition(position, /[A-Za-z_][A-Za-z0-9_]*/);
     if (!word) return false;
-    const candidates = this.workspace.index.resolveAt(editor.document.uri.toString(), editor.document.offsetAt(word.start));
+    const uri = editor.document.uri.toString(), offset = editor.document.offsetAt(word.start);
+    const callback = this.workspace.index.callbackAt(uri, offset);
+    if (callback) {
+      if (this.callbackFocus?.uri === uri && this.callbackFocus.offset === offset && this.state.callback) return false;
+      this.activity.fire('callback-selection');
+      this.callbackFocus = { uri, offset, text: this.workspace.index.files.get(uri)!.text.slice(callback.location.start, callback.location.end) };
+      this.root = undefined; this.selection = undefined; this.selectedNodeKey = undefined; this.expanded = {};
+      this.state.graph = undefined; this.state.candidates = []; this.refresh(); return true;
+    }
+    const candidates = this.workspace.index.resolveAt(uri, offset);
     if (!candidates.length) { this.pendingTrack = true; return false; }
     if (candidates.length > 1) {
       this.root = undefined; this.selection = undefined; this.selectedNodeKey = undefined; this.expanded = {};
+      this.callbackFocus = undefined; this.state.callback = undefined;
       this.state.graph = undefined; this.state.context = undefined;
       this.state.candidates = candidates; this.refresh(); return true;
     }
@@ -106,6 +117,7 @@ export class RelationView implements vscode.Disposable {
     return true;
   }
   private setRoot(symbol: SymbolRecord) {
+    this.callbackFocus = undefined; this.state.callback = undefined;
     if (symbol.id !== this.root?.id) { this.expanded = {}; this.selection = symbol.id; this.selectedNodeKey = undefined; }
     this.root = { id: symbol.id, name: symbol.name, uri: symbol.location.uri };
     this.state.candidates = []; this.refresh();
@@ -130,6 +142,14 @@ export class RelationView implements vscode.Disposable {
       if (!symbol) this.state.context = undefined;
     }
     this.locations.clear(); this.nodes.clear();
+    if (this.callbackFocus) {
+      const focus = this.callbackFocus, callback = this.workspace.index.callbackAt(focus.uri, focus.offset);
+      this.state.callback = callback && this.workspace.index.files.get(focus.uri)?.text.slice(callback.location.start, callback.location.end) === focus.text ? callback : undefined;
+      if (this.state.callback) {
+        this.selection = `callback:${focus.uri}@${this.state.callback.location.start}`;
+        this.locations.set(this.selection, { location: this.state.callback.location, label: `Callback · ${this.state.callback.expression}` });
+      }
+    }
     const visit = (node: GraphNode) => {
       this.nodes.set(node.key, node);
       if (node.symbolId) this.locations.set(node.symbolId, { location: node.location, label: node.name });
@@ -220,7 +240,15 @@ export class RelationView implements vscode.Disposable {
         this.track(editor, true);
         break;
       }
-      case 'choose': if (typeof m.id === 'string') { const symbol = this.state.candidates.find(s => s.id === m.id); if (symbol) this.setRoot(symbol); } break;
+      case 'choose': if (typeof m.id === 'string') {
+        let choices = this.state.candidates;
+        if (this.callbackFocus) {
+          const focus = this.callbackFocus, current = this.workspace.index.callbackAt(focus.uri, focus.offset);
+          choices = current && this.workspace.index.files.get(focus.uri)?.text.slice(current.location.start, current.location.end) === focus.text ? current.targets : [];
+        }
+        const symbol = choices.find(s => s.id === m.id);
+        if (symbol) this.setRoot(symbol); else if (this.callbackFocus) this.refresh();
+      } break;
       case 'mode': if (m.value === 'references' || m.value === 'callers' || m.value === 'callees' || m.value === 'both') { this.state.mode = m.value; this.expanded = {}; this.refresh(); } break;
       case 'access': if (m.value === 'all' || m.value === 'read' || m.value === 'write' || m.value === 'readwrite' || m.value === 'address') {
         this.state.accessFilter = m.value; this.expanded = {}; this.refresh();

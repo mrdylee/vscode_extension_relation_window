@@ -359,28 +359,35 @@ function render(state: ViewState) {
   mode.onchange = () => send(variable ? 'access' : 'mode', { value: mode.value });
   if (depth.value !== String(state.depth)) depth.value = String(state.depth);
   lock.textContent = state.locked ? 'Pinned · Follow paused' : 'Following selection'; lock.setAttribute('aria-pressed', String(state.locked));
+  lock.disabled = !state.locked && !state.graph?.root.symbolId;
   lock.title = state.locked ? `Pinned to ${state.graph?.root.name ?? 'the current Relation'}. Click to unpin and follow the selected symbol. Right-click another node to change the pin.` : 'Click to pin the last symbol selected in Relation (or the current root) and pause following selection.';
   goToPin.hidden = !state.locked; goToPin.disabled = !state.graph?.root.symbolId;
   goToPin.title = state.graph ? `Go to pinned symbol: ${state.graph.root.name}` : 'Pinned symbol is unavailable';
   skip.checked = state.skipInactive;
-  const nextCandidates = JSON.stringify(state.candidates);
+  const choices = state.callback?.targets ?? state.candidates;
+  const nextCandidates = JSON.stringify([choices, state.callback]);
   if (nextCandidates !== candidateSignature) {
     candidateSignature = nextCandidates;
     candidates.replaceChildren();
-    if (state.candidates.length) {
-      const label = el('label', '', `${state.candidates.length} definitions`); label.htmlFor = 'definition-choice';
-      const choice = el('select'); choice.id = 'definition-choice'; choice.setAttribute('aria-label', 'Select definition');
-      const placeholder = el('option', '', 'Select a file'); placeholder.value = ''; placeholder.disabled = true; placeholder.selected = true;
+    candidates.classList.toggle('callback-candidates', !!state.callback);
+    if (state.callback) {
+      const note = el('span', 'muted callback-note', `Callback targets · ${state.callback.expression} · Static candidates${state.callback.incomplete ? ' · Other targets may exist' : ''}`);
+      note.title = state.callback.reasons.join('\n'); candidates.append(note);
+    }
+    if (choices.length) {
+      const label = el('label', '', `${choices.length} ${state.callback ? (choices.length === 1 ? 'candidate' : 'candidates') : 'definitions'}`); label.htmlFor = 'definition-choice';
+      const choice = el('select'); choice.id = 'definition-choice'; choice.setAttribute('aria-label', state.callback ? 'Select callback target' : 'Select definition');
+      const placeholder = el('option', '', state.callback ? 'Select a callback target' : 'Select a file'); placeholder.value = ''; placeholder.disabled = true; placeholder.selected = true;
       choice.append(placeholder);
-      for (const candidate of state.candidates) {
-        const option = el('option', '', `${decodeURIComponent(candidate.location.uri).replace(/^file:\/\//, '')}:${candidate.location.line + 1}`);
+      for (const candidate of choices) {
+        const option = el('option', '', `${state.callback ? candidate.name + ' · ' : ''}${decodeURIComponent(candidate.location.uri).replace(/^file:\/\//, '')}:${candidate.location.line + 1}`);
         option.value = candidate.id; choice.append(option);
       }
       choice.onchange = () => send('choose', { id: choice.value });
       candidates.append(label, choice);
     }
   }
-  graphHeader.replaceChildren(el('strong', '', 'Relation'), el('span', 'muted', state.graph?.root.name ?? state.candidates[0]?.name ?? 'Select a symbol'));
+  graphHeader.replaceChildren(el('strong', '', 'Relation'), el('span', 'muted', state.graph?.root.name ?? state.callback?.expression ?? state.candidates[0]?.name ?? 'Select a symbol'));
   if (state.graph) graphHeader.dataset.rootName = state.graph.root.name; else delete graphHeader.dataset.rootName;
   const nextRoot = state.graph?.root.symbolId;
   const rootChanged = nextRoot !== rootKey;
@@ -388,7 +395,7 @@ function render(state: ViewState) {
   const directionChanged = currentDirection !== direction;
   currentDirection = direction;
   if (rootChanged) { rootKey = nextRoot; finishDrag(); }
-  const next = JSON.stringify([state.graph, direction]);
+  const next = JSON.stringify([state.graph, direction, state.callback]);
   if (next !== signature) {
     const key = (document.activeElement as HTMLElement)?.dataset.key;
     hideDetails();
@@ -411,7 +418,9 @@ function render(state: ViewState) {
       }
       graph.append(tree);
     }
-    else graph.append(el('div', 'empty', state.candidates.length ? 'Select a definition above to show its references.' : 'Click a function or variable name in C source to show its references.'));
+    else graph.append(el('div', 'empty', state.callback
+      ? state.callback.targets.length ? 'Select a callback target above to explore its relations. Candidates do not prove runtime execution.' : 'No callback targets resolved at this call. Check analysis scope and notices; the pointer value may be unknown.'
+      : state.candidates.length ? 'Select a definition above to show its references.' : 'Click a function or variable name in C source to show its references.'));
     positionGraph();
     if (rootChanged || directionChanged) resetGraphPosition();
     if (key) Array.from(graph.querySelectorAll<HTMLButtonElement>('.node-title')).find(b => b.dataset.key === key)?.focus({ preventScroll: true });
