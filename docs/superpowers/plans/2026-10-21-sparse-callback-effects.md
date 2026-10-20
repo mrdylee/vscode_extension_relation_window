@@ -14,23 +14,23 @@ Recovery point: `checkpoint/pre-sparse-callback-effects-20261020` at `1f2c1c6`, 
 
 - [x] Add `test/callback-effects.test.ts`: 270 and 2700 unread scalar members plus one callback must avoid the mutation limit; helper-updated array selectors must still select the correct target.
 - [x] Run `node --import tsx --test test/callback-effects.test.ts`; verify the two scalar-cap failures on the baseline.
-- [ ] Modify only the effect export path in `src/pointer-targets.ts`. Collect resolved scalar reads/address uses before propagation. Omit a scalar effect only with a known declaration and no read; unresolved layout, aliases, and array paths remain conservative. Preserve memory evaluation, getters and arbitrary argument positions.
-- [ ] Run the new tests, `test/pointer-calls.test.ts`, and typecheck. Commit this stage.
+- [x] Modify only the effect export path in `src/pointer-targets.ts`. Collect resolved scalar reads/address uses before propagation. Omit a scalar effect only with a known declaration and no read; unresolved layout, aliases, and array paths remain conservative. Preserve memory evaluation, getters and arbitrary argument positions.
+- [x] Run the new tests, `test/pointer-calls.test.ts`, and typecheck. Commit this stage.
 
 ## 2. Bounded uncertainty
 
-- [ ] Add `test/callback-uncertainty.test.ts`: wide opaque objects, formal-to-actual region import, nested pointees, later strong overwrite, branch join, and independent versus dependent limits.
-- [ ] Confirm expected baseline failures before changing production behavior.
-- [ ] Add bounded region summaries and apply them on reads. Preserve known writes after an invalidation and snapshots copied before it. Normalize exported effects under final state so stale writes cannot regain precision in callers.
-- [ ] Keep project-level Partial diagnostics; localize edge uncertainty only where dependency coverage supports it. Retain conservative global incompleteness for project-wide time/work/memory/nonconvergence stops.
-- [ ] Run both focused suites and existing pointer tests; fix regressions. Commit this stage.
+- [x] Add `test/callback-uncertainty.test.ts`: wide opaque objects, formal-to-actual region import, nested pointees, later strong overwrite, branch join, and independent versus dependent limits.
+- [x] Confirm expected baseline failures before changing production behavior.
+- [x] Add bounded region summaries and apply them on reads. Preserve known writes after an invalidation and snapshots copied before it. Normalize exported effects under final state so stale writes cannot regain precision in callers.
+- [x] Keep project-level Partial diagnostics; localize edge uncertainty only where dependency coverage supports it. Retain conservative global incompleteness for project-wide time/work/memory/nonconvergence stops.
+- [x] Run both focused suites and existing pointer tests; fix regressions. Commit this stage.
 
 ## 3. Review and measurement
 
-- [ ] Independently review the diff against the recovery tag; fix important findings and add failing regressions first.
-- [ ] Run `npm run typecheck`, `npm test`, `npm run test:worker`, `npm run test:memory`, `npm run test:performance`, `npm run test:extension`.
-- [ ] Compare the same synthetic sources against baseline and changed inference, recording callback time, warning counts, targets, incompleteness, and sampled heap. Do not interpret these as measurements of the unavailable private WSL firmware.
-- [ ] Document scope, findings, tests and remaining limitations under `docs/reviews/`.
+- [x] Independently review the diff against the recovery tag; fix important findings and add failing regressions first.
+- [x] Run `npm run typecheck`, `npm test`, `npm run test:worker`, `npm run test:memory`, `npm run test:performance`, `npm run test:extension`.
+- [x] Compare the same synthetic sources against baseline and changed inference, recording callback time, warning counts, targets, incompleteness, and sampled heap. Do not interpret these as measurements of the unavailable private WSL firmware.
+- [x] Document scope, findings, tests and remaining limitations under `docs/reviews/`.
 
 ## 4. Package and publish
 

@@ -614,6 +614,29 @@ export async function run() {
   await vscode.workspace.fs.delete(pointerUri);
   await new Promise(resolve=>setTimeout(resolve,500)); await api.workspace.whenIdle();
   assert.equal(api.workspace.index.symbols().some((symbol:any)=>symbol.name==='pointer_target'),false);
+  const sparseUri = vscode.Uri.joinPath(root, 'callback-effects.c');
+  const sparseSource = 'typedef void(*SparseCB)(void);void sparse_target(void){}' +
+    'struct Sparse{' + Array.from({length:270},(_,n)=>`unsigned status${n};`).join('') + 'SparseCB cb;};static struct Sparse sparse;' +
+    'static void sparse_configure(void){' + Array.from({length:270},(_,n)=>`sparse.status${n}=0;`).join('') + 'sparse.cb=sparse_target;}' +
+    'void sparse_run(void){sparse_configure();sparse.cb();}' +
+    'void sparse_opaque(void*);void sparse_array(void){struct Sparse items[2];sparse_opaque(items);items[0].cb=sparse_target;items[0].cb();}';
+  await vscode.workspace.fs.writeFile(sparseUri, Buffer.from(sparseSource));
+  await new Promise(resolve=>setTimeout(resolve,500)); await api.workspace.whenIdle();
+  const sparseDocument = await vscode.workspace.openTextDocument(sparseUri);
+  const sparseEditor = await vscode.window.showTextDocument(sparseDocument);
+  await api.view.handleMessage({type:'mode',value:'both'});
+  for (const name of ['sparse_run', 'sparse_array']) {
+    const position = sparseDocument.positionAt(sparseSource.indexOf(name + '(void)'));
+    sparseEditor.selection = new vscode.Selection(position,position); api.view.track(sparseEditor,true);
+    const target = api.view.state.graph.root.children.find((node:any)=>node.name==='sparse_target');
+    assert.equal(target.callKind,'inferred');
+    assert.ok(target.sites.every((site:any)=>site.inference.incomplete===false));
+    assert.equal(api.view.state.callbackDiagnostics.some((detail:any)=>detail.location?.uri===sparseUri.toString()),false);
+  }
+  const sparseTarget = api.workspace.index.symbols().find((symbol:any)=>symbol.name==='sparse_target');
+  assert.deepEqual(api.workspace.index.relations(sparseTarget.id,'callers').map((group:any)=>group.name).sort(),['sparse_array','sparse_run']);
+  await vscode.workspace.fs.delete(sparseUri);
+  await new Promise(resolve=>setTimeout(resolve,500)); await api.workspace.whenIdle();
   const limitUri = vscode.Uri.joinPath(root, 'callback-limits.c');
   await vscode.workspace.fs.writeFile(limitUri, Buffer.from('int data[300];void limit_update(void){\n' +
     Array.from({length:270},(_,n)=>`data[${n}]=${n};`).join('\n') +
