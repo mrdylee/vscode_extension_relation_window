@@ -43,6 +43,8 @@ export function createIssueReport(input: IssueReportInput): string {
   const notices: Record<string, number> = {};
   for (const issue of state.issues) { const kind = noticeKind(issue); notices[kind] = (notices[kind] ?? 0) + 1; }
   const worker = diagnostics.worker;
+  const index = diagnostics.index;
+  const age = (at: number) => number(Math.max(0, Math.round((now - at) / 1000)));
   // Explicitly project fields: state and diagnostics contain source identifiers and raw errors.
   const summary = {
     reportSchema: 1, capturedAt: new Date(now).toISOString(),
@@ -63,6 +65,17 @@ export function createIssueReport(input: IssueReportInput): string {
       macroFolderModes: Object.fromEntries(['all', 'selected', 'none'].map(mode => [mode, scopes.filter(s => s.macroMode === mode).length])) },
     noticeCount: state.issues.length, notices,
     workerError: diagnostics.workerError ? noticeKind(diagnostics.workerError) : 'none',
+    index: index ? {
+      sessionAgeSeconds: age(index.sessionStartedAt), rebuildCount: number(index.rebuildCount),
+      sourceParses: number(index.sourceParses), relationPasses: number(index.relationPasses),
+      lastSourceEvent: index.lastSourceEvent ? { ageSeconds: age(index.lastSourceEvent.at),
+        kind: choice(index.lastSourceEvent.kind, ['editor-change', 'editor-close', 'file-create', 'file-change', 'file-delete']) } : null,
+      rebuilds: index.rebuilds.slice(-5).map(record => ({ number: number(record.number), ageSeconds: age(record.at),
+        reason: choice(record.reason, ['startup', 'configuration', 'workspace-folders', 'command', 'toolbar']),
+        settings: (record.settings ?? []).filter(key => ['skipInactive', 'include', 'exclude', 'macroExpansionFolders'].includes(key)),
+        outcome: choice(record.outcome, ['running', 'completed', 'partial', 'failed', 'superseded']),
+        durationMs: record.finishedAt === undefined ? null : number(record.finishedAt - record.at) }))
+    } : 'unavailable',
     worker: worker ? {
       phase: choice(worker.phase, phases), ...memory(worker.sample), sampledPeakMiB: number(Math.round(worker.peakHeap / 104857.6) / 10),
       guardPercent: 60,

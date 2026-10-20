@@ -53,3 +53,20 @@ test('browser URL is fixed and never carries diagnostic data or requires a templ
   assert.equal(url.searchParams.has('template'), false);
   assert.ok(ISSUE_URL.length < 700);
 });
+
+test('report includes bounded rebuild reasons without source details or arbitrary settings', () => {
+  const value = input();
+  (value.diagnostics as any).index = { sessionStartedAt: now - 10000, rebuildCount: 12, sourceParses: 20, relationPasses: 3,
+    lastSourceEvent: { at: now - 1000, kind: 'editor-close', uri: 'SECRET_SOURCE' },
+    rebuilds: Array.from({ length: 12 }, (_, i) => ({ number: i + 1, at: now - 2000, finishedAt: now - 1000,
+      reason: i === 11 ? 'configuration' : 'SECRET_REASON', settings: ['include', 'SECRET_PATTERN'], outcome: 'completed', rawError: 'SECRET_ERROR' })) };
+  const report = createIssueReport(value), data = JSON.parse(report.split('```json\n')[1].split('\n```')[0]);
+  assert.ok(data.index, 'report must include rebuild diagnostics');
+  assert.equal(data.index.rebuildCount, 12);
+  assert.equal(data.index.rebuilds.length, 5);
+  assert.equal(data.index.rebuilds.at(-1).reason, 'configuration');
+  assert.deepEqual(data.index.rebuilds.at(-1).settings, ['include']);
+  assert.equal(data.index.rebuilds.at(-1).durationMs, 1000);
+  assert.equal(data.index.lastSourceEvent.kind, 'editor-close');
+  assert.doesNotMatch(report, /SECRET/);
+});

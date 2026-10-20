@@ -514,10 +514,20 @@ try {
     phases: { sources: { before: memory(20), after: memory(240) }, macros: { before: memory(240), after: memory(1100) }, callbacks: { before: memory(1100), after: memory(900) }, transfer: { before: memory(900), after: memory(900) } },
     counts: { files: 1820, sourceChars: 6000000, references: 82000, programs: 12000, macroFiles: 420 }
   } };
+  diagnostics.index = { sessionStartedAt: at - 30000, rebuildCount: 5, sourceParses: 1820, relationPasses: 5,
+    lastSourceEvent: { at: at - 2000, kind: 'editor-close' },
+    rebuilds: Array.from({ length: 5 }, (_, i) => ({ number: i + 1, at: at - 10000, finishedAt: at - 5000,
+      reason: i === 4 ? 'configuration' : 'startup', settings: i === 4 ? ['include'] : undefined, outcome: 'completed' })) };
   await configure({ diagnostics, status: 'Index ready' });
   await page.getByRole('button', { name: 'Diagnostics', exact: true }).click();
   const diagnosticDialog = page.getByRole('dialog', { name: 'Memory diagnostics' });
   assert.ok(await diagnosticDialog.isVisible());
+  assert.match(await diagnosticDialog.textContent(), /Last rebuild: #5.*Analysis settings changed \(include\)/);
+  await diagnosticDialog.getByText('Rebuild history and source activity', { exact: true }).click();
+  await page.evaluate(diagnostics => window.dispatchEvent(new MessageEvent('message', { data: { type: 'diagnostics', diagnostics } })), diagnostics);
+  assert.equal(await diagnosticDialog.locator('details').getAttribute('open'), '', 'history stays open during measurement refresh');
+  assert.match(await diagnosticDialog.textContent(), /Source parses: 1820.*Relation passes: 5/);
+  await diagnosticDialog.getByText('Rebuild history and source activity', { exact: true }).click();
   assert.match(await diagnosticDialog.textContent(), /900\.0 MiB/);
   assert.match(await diagnosticDialog.textContent(), /1228\.8 MiB/);
   await diagnosticDialog.getByRole('button', { name: 'Report issue', exact: true }).click();

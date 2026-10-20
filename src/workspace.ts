@@ -5,7 +5,7 @@ import { FileAnalysis } from './model';
 import { RelationIndex } from './relations';
 import { Minimatch } from 'minimatch';
 import { getHeapStatistics } from 'node:v8';
-import { Diagnostics, WorkerDiagnostics } from './diagnostics';
+import { Diagnostics, IndexDiagnostics, RebuildReason, RebuildRecord, SourceEvent, WorkerDiagnostics } from './diagnostics';
 
 const builtInExcludes = ['**/node_modules/**', '**/.git/**', '**/.vscode-test/**'];
 const maxFiles = 10_000;
@@ -36,10 +36,12 @@ export class WorkspaceIndex implements vscode.Disposable {
   private disposed = false;
   private workerError?: Error;
   private workerDiagnostics?: WorkerDiagnostics;
+  private indexDiagnostics: IndexDiagnostics = { sessionStartedAt: Date.now(), rebuildCount: 0, sourceParses: 0, relationPasses: 0, rebuilds: [] };
   get diagnostics(): Diagnostics {
     const heap = getHeapStatistics();
     return { environment: `${process.platform} ${process.arch} · ${vscode.env.remoteName ?? 'local'} · VS Code ${vscode.version}`,
       host: { at: Date.now(), heapUsed: heap.used_heap_size, heapLimit: heap.heap_size_limit, external: heap.external_memory },
+      index: { ...this.indexDiagnostics, rebuilds: this.indexDiagnostics.rebuilds.map(record => ({ ...record })) },
       worker: this.workerDiagnostics, workerError: this.workerError
         ? [(this.workerError as NodeJS.ErrnoException).code, this.workerError.message].filter(Boolean).join(': ') : undefined };
   }
@@ -78,16 +80,16 @@ export class WorkspaceIndex implements vscode.Disposable {
   constructor(private extensionPath: string) {
     this.startWorker();
     const watch = vscode.workspace.createFileSystemWatcher('**/*.{c,h}');
-    this.disposables.push(watch, watch.onDidCreate(uri => this.schedule(uri)), watch.onDidChange(uri => this.schedule(uri)),
-      watch.onDidDelete(uri => this.remove(uri)),
-      vscode.workspace.onDidChangeTextDocument(event => { if (event.contentChanges.length) this.schedule(event.document.uri); }),
-      vscode.workspace.onDidCloseTextDocument(document => this.schedule(document.uri)),
+    this.disposables.push(watch, watch.onDidCreate(uri => this.schedule(uri, 'file-create')), watch.onDidChange(uri => this.schedule(uri, 'file-change')),
+      watch.onDidDelete(uri => { this.indexDiagnostics.lastSourceEvent = { at: Date.now(), kind: 'file-delete' }; this.remove(uri); }),
+      vscode.workspace.onDidChangeTextDocument(event => { if (event.contentChanges.length) this.schedule(event.document.uri, 'editor-change'); }),
+      vscode.workspace.onDidCloseTextDocument(document => this.schedule(document.uri, 'editor-close')),
       vscode.workspace.onDidChangeConfiguration(event => {
-        if (event.affectsConfiguration('dynsight.skipInactive') || event.affectsConfiguration('dynsight.include') || event.affectsConfiguration('dynsight.exclude') ||
-          event.affectsConfiguration('dynsight.macroExpansionFolders')) void this.reindex();
+        const settings = ['skipInactive', 'include', 'exclude', 'macroExpansionFolders'].filter(key => event.affectsConfiguration(`dynsight.${key}`));
+        if (settings.length) void this.reindex('configuration', settings);
       }),
-      vscode.workspace.onDidChangeWorkspaceFolders(() => void this.reindex()));
-    this.ready = this.reindex();
+      vscode.workspace.onDidChangeWorkspaceFolders(() => void this.reindex('workspace-folders')));
+    this.ready = this.reindex('startup');
   }
   private scope(folder: vscode.WorkspaceFolder) {
     const key = folder.uri.toString();
@@ -118,8 +120,9 @@ export class WorkspaceIndex implements vscode.Disposable {
     this.failures.delete(key); this.changed.fire();
     if (!this.indexing) void this.derive();
   }
-  private schedule(uri: vscode.Uri) {
+  private schedule(uri: vscode.Uri, kind: SourceEvent) {
     if (this.disposed || !this.eligible(uri)) return;
+    this.indexDiagnostics.lastSourceEvent = { at: Date.now(), kind };
     const key = uri.toString();
     // Invalidate in-flight results immediately, even during the debounce period.
     this.versions.set(key, (this.versions.get(key) ?? 0) + 1);
@@ -163,6 +166,7 @@ export class WorkspaceIndex implements vscode.Disposable {
       // Once dispatched, the Worker may hold this input even if its response is
       // superseded. Do not reuse the old host text until a new result is accepted.
       this.rawVersions.delete(key);
+      this.indexDiagnostics.sourceParses++;
       const request = this.request<FileAnalysis>({ uri: key, text, skip: this.skipInactive, expandMacros });
       const result = await request.promise;
       if (this.disposed || epoch !== this.epoch || version !== this.versions.get(key)) return;
@@ -198,6 +202,7 @@ export class WorkspaceIndex implements vscode.Disposable {
     this.deriving = (async () => {
       while (!this.disposed && !this.indexing && !this.jobs.size && !this.timers.size && this.derivedRevision !== this.revision) {
         const revision = this.revision;
+        this.indexDiagnostics.relationPasses++;
         const versions = [...this.rawVersions].map(([uri, id]) => [uri, id, this.appliedDerived.get(uri) ?? -id]);
         const result = await this.request<{ stale: boolean; files: FileAnalysis[]; versions: [string, number][] }>({ type: 'derive', versions }).promise;
         if (this.disposed || revision !== this.revision) continue;
@@ -216,8 +221,23 @@ export class WorkspaceIndex implements vscode.Disposable {
     }).finally(() => { this.deriving = undefined; });
     return this.deriving;
   }
-  async reindex() {
+  async reindex(reason: RebuildReason = 'command', settings?: string[]) {
+    const record: RebuildRecord = { number: ++this.indexDiagnostics.rebuildCount, at: Date.now(), reason, settings, outcome: 'running' };
+    this.indexDiagnostics.rebuilds.push(record);
+    if (this.indexDiagnostics.rebuilds.length > 5) this.indexDiagnostics.rebuilds.shift();
     const epoch = ++this.epoch;
+    let failed = false;
+    try { await this.rebuild(epoch); }
+    catch (error) { failed = true; throw error; }
+    finally {
+      record.finishedAt = Date.now();
+      record.outcome = epoch !== this.epoch || this.disposed ? 'superseded'
+        : failed || this.workerError || /^(Index error|Analysis unavailable|Analysis stopped)/.test(this.status) ? 'failed'
+        : this.status.startsWith('Partial index') ? 'partial' : 'completed';
+      if (!this.disposed) this.diagnosticsChanged.fire();
+    }
+  }
+  private async rebuild(epoch: number) {
     this.indexing = true;
     if (this.workerError || this.status.includes('memory budget')) {
       await this.deriving;

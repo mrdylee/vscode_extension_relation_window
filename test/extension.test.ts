@@ -42,9 +42,12 @@ export async function run() {
   assert.ok((await vscode.commands.getCommands()).includes('dynsight.openSettings'), 'scope settings command registered');
   assert.ok((await vscode.commands.getCommands()).includes('dynsight.help'), 'offline help command registered');
   assert.equal(api.workspace.index.files.size, 93, 'all files indexed beyond the document cache limit');
+  assert.equal(api.workspace.diagnostics.index.rebuilds[0].reason, 'startup');
   let openedByReindex = 0;
   const opening = vscode.workspace.onDidOpenTextDocument(() => openedByReindex++);
-  try { await api.workspace.reindex(); } finally { opening.dispose(); }
+  try { await api.view.handleMessage({ type: 'refresh' }); } finally { opening.dispose(); }
+  assert.equal(api.workspace.diagnostics.index.rebuilds.at(-1).reason, 'toolbar');
+  assert.equal(api.workspace.diagnostics.index.rebuilds.at(-1).outcome, 'completed');
   assert.equal(openedByReindex, 0, 'background indexing must not open VS Code documents');
   assert.equal(api.workspace.index.files.has(excludedUri.toString()), false, 'initial indexing excludes configured folders');
   // Real editor navigation must not restart analysis when documents are unchanged.

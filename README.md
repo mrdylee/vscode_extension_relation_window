@@ -271,6 +271,22 @@ Worker가 멈춰도 마지막 측정으로 작성하므로 **재색인/재시작
 [GitHub Issues](https://github.com/mrdylee/vscode_extension_relation_window/issues)에서
 확인할 수 있으며, 유지보수자는 [접수·분석 절차](https://github.com/mrdylee/vscode_extension_relation_window/blob/v0.1.40/docs/ISSUE_TRIAGE.md)를 참고하세요.
 
+### 갑자기 다시 인덱싱할 때 (v0.1.45)
+
+오류 알림이 없어도 **Diagnostics → Last rebuild**에서 가장 최근 재인덱싱의
+시각과 시작 원인을 확인할 수 있습니다. `Extension startup`은 확장이 새로
+시작한 경우, `Analysis settings changed`는 Include/Exclude 등 분석 설정 변경,
+`Workspace folders changed`는 작업 폴더 변경, `Rebuild command/button`은
+명령 또는 버튼 실행을 뜻합니다. 설정 변경은 관련 항목 이름만 표시합니다.
+
+**Rebuild history and source activity**를 펼치면 최근 5회 이력, 처리 결과·소요
+시간, 이번 실행의 소스 분석·호출 관계 계산 횟수와 마지막 파일 이벤트를 볼 수
+있습니다. 파일 이벤트가 있어도 내용이 같으면 분석을 생략하므로 이벤트와
+실제 분석 횟수는 다를 수 있습니다. 다시 발생하면 수동 Rebuild/창 재시작 전에
+이 화면을 촬영하거나 **Report issue**를 저장하세요. 이력은 창 재시작 시
+초기화되며, 실행 시작 시각으로 같은 실행 안의 재분석과 새 실행을 구분합니다.
+이 기록 자체가 원인 해결을 의미하지는 않습니다.
+
 ### 메모리 문제를 사진으로 공유하기 (v0.1.38)
 
 Relation 하단 **Diagnostics**를 누르면 사진 한 장에 담을 수 있는 진단 요약이
@@ -284,7 +300,7 @@ Relation 하단 **Diagnostics**를 누르면 사진 한 장에 담을 수 있는
 시작/종료 수치, 처음 제한에 도달한 순간, 분석 입력 규모를 표시합니다.
 Worker가 종료되어도 마지막 측정값과 시각을 남깁니다. **Last Worker sample**은
 실시간 수치가 아니라 마지막으로 전달받은 측정이며, 바쁜 Worker의 Refresh는
-응답을 기다립니다. 재색인/창 재시작 시 이번 진단 기록은 초기화됩니다.
+응답을 기다립니다. 재색인 시 Worker 측정 기록이 초기화되며, 재인덱싱 이력은 최근 5회까지 유지합니다. 창 재시작 시 두 기록 모두 초기화됩니다.
 
 단위는 **MiB**입니다. Worker JS와 외부 메모리, 다른 확장도 함께 사용하는
 Extension host JS를 구분해 표시합니다. 단계별 차이는 캐시·메모리 회수의

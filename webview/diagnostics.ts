@@ -1,4 +1,4 @@
-import type { Diagnostics, AnalysisPhase } from '../src/diagnostics';
+import type { Diagnostics, AnalysisPhase, RebuildReason } from '../src/diagnostics';
 import type { ViewState } from '../src/view-state';
 
 const phaseNames: Record<AnalysisPhase | 'idle', string> = {
@@ -6,6 +6,8 @@ const phaseNames: Record<AnalysisPhase | 'idle', string> = {
 };
 const mib = (bytes: number) => `${(bytes / 1048576).toFixed(1)} MiB`;
 const time = (at: number) => new Date(at).toLocaleTimeString('en-GB', { hour12: false });
+const rebuildNames: Record<RebuildReason, string> = { startup: 'Extension startup', configuration: 'Analysis settings changed',
+  'workspace-folders': 'Workspace folders changed', command: 'Rebuild command', toolbar: 'Rebuild button' };
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, text = '', className = '') {
   const node = document.createElement(tag); node.textContent = text; node.className = className; return node;
 }
@@ -24,12 +26,33 @@ export function createDiagnostics(version: string, refresh: () => void, reportIs
   const body = el('div'); dialog.append(header, body); document.body.append(dialog);
   let data: Diagnostics | undefined, state: ViewState | undefined, lastIncident = '';
   function render() {
+    const historyOpen = body.querySelector('details')?.open ?? false;
     body.replaceChildren();
     if (!data) { body.append(el('p', 'Waiting for analysis measurements…')); return; }
     const worker = data.worker;
-    body.append(el('div', data.environment, 'muted'));
+    body.append(el('div', data.environment + (data.index ? ` · Session started: ${time(data.index.sessionStartedAt)}` : ''), 'muted'));
     body.append(el('div', data.workerError ? `Worker stopped: ${data.workerError}` : state?.status ?? 'Preparing C index…', 'diagnostics-status'));
     body.append(el('div', `${state?.mode ?? 'references'} · ${state?.graph?.root.name ?? 'No symbol selected'} · ${state?.fileCount ?? 0} indexed files`, 'diagnostics-selection'));
+    if (data.index) {
+      const index = data.index;
+      const latest = index.rebuilds.at(-1);
+      const trigger = (record: typeof latest) => record ? `${rebuildNames[record.reason]}${record.settings?.length ? ` (${record.settings.join(', ')})` : ''}` : '';
+      if (latest) body.append(el('div', `Last rebuild: #${latest.number} · ${time(latest.at)} · ${trigger(latest)} · ${latest.outcome}`));
+      const history = el('details'); history.open = historyOpen;
+      history.append(el('summary', 'Rebuild history and source activity'));
+      const table = el('table'), heading = el('tr');
+      ['Recent rebuilds', 'Trigger', 'Result'].forEach(label => heading.append(el('th', label))); table.append(heading);
+      for (const record of [...index.rebuilds].reverse()) {
+        const row = el('tr');
+        row.append(el('td', `#${record.number} · ${time(record.at)}`),
+          el('td', trigger(record)),
+          el('td', `${record.outcome}${record.finishedAt === undefined ? '' : ` · ${((record.finishedAt - record.at) / 1000).toFixed(1)}s`}`));
+        table.append(row);
+      }
+      history.append(table, el('div', `Rebuilds: ${index.rebuildCount} · Source parses: ${index.sourceParses} · Relation passes: ${index.relationPasses} (this session)`));
+      if (index.lastSourceEvent) history.append(el('div', `Last source event: ${index.lastSourceEvent.kind} · ${time(index.lastSourceEvent.at)} (may reuse unchanged source)`, 'muted'));
+      body.append(history);
+    }
     if (worker) {
       const sample = worker.sample, cards = el('div', '', 'diagnostics-metrics');
       function metric(label: string, value: string, warning = false) {
@@ -58,7 +81,7 @@ export function createDiagnostics(version: string, refresh: () => void, reportIs
       body.append(el('div', `Raw references: ${counts.references.toLocaleString('en-US')} · Flow programs: ${counts.programs.toLocaleString('en-US')}`));
     } else body.append(el('p', 'Worker sample not received yet.'));
     body.append(el('div', `Extension host JS (shared): ${mib(data.host.heapUsed)} · sampled ${time(data.host.at)}`, 'diagnostics-host'));
-    body.append(el('div', 'MiB = 1,048,576 bytes. Samples include caches and garbage collection; they are not total system RAM or exact stage allocations. Refresh waits for a busy Worker.', 'diagnostics-note muted'));
+    (body.querySelector('details') ?? body).append(el('div', 'MiB = 1,048,576 bytes. Samples include caches and garbage collection; they are not total system RAM or exact stage allocations. Refresh waits for a busy Worker.', 'diagnostics-note muted'));
   }
   function show() { render(); if (!dialog.open) dialog.showModal(); }
   return {

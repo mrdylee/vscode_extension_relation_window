@@ -212,7 +212,7 @@ export class RelationView implements vscode.Disposable {
       case 'depth': if (Number.isInteger(m.value) && Number(m.value) >= 1 && Number(m.value) <= 8) { this.state.depth = Number(m.value); this.expanded = {}; this.refresh(); } break;
       case 'lock': this.state.locked = !this.state.locked; this.publish(); if (!this.state.locked) this.track(this.lastEditor); break;
       case 'skip': if (typeof m.value === 'boolean') await vscode.workspace.getConfiguration('dynsight').update('skipInactive', m.value, vscode.workspace.workspaceFolders?.length ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global); break;
-      case 'refresh': await this.workspace.reindex(); this.track(vscode.window.activeTextEditor); this.refresh(); break;
+      case 'refresh': await this.workspace.reindex('toolbar'); this.track(vscode.window.activeTextEditor); this.refresh(); break;
       case 'expand': case 'collapse': case 'expandSpecial': {
         if (typeof m.key !== 'string' || !this.nodes.has(m.key)) return;
         let levels = m.type === 'collapse' ? 0 : 1;

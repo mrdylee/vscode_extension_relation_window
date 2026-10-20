@@ -330,14 +330,32 @@ index. Reopen the command after dismissing the notification for a new snapshot.
 
 [Browse existing issues or open one manually](https://github.com/mrdylee/vscode_extension_relation_window/issues).
 
+### Unexpected reindexing (v0.1.45)
+
+Open **Diagnostics** even if there are no Analysis notices. **Last rebuild** shows
+when and why the most recent full indexing started: **Extension startup**,
+**Analysis settings changed** (with setting names), **Workspace folders changed**,
+**Rebuild command** or **Rebuild button**. The extension-session start time helps
+separate a new activation from another rebuild in the same session.
+
+Expand **Rebuild history and source activity** for the last five rebuilds,
+results/durations, source-parse and relation-pass counters, and the last source
+event. A file event can reuse unchanged source without increasing parse/pass
+counts. Counters cover this extension session; they are not per-file timings.
+Capture a photo or **Report issue** before manual Rebuild/Reload. The history is
+in memory only and resets on a new extension session. It contains no source,
+paths or setting values. The diagnostic addition does not establish or fix the
+cause of an unexplained restart.
+
 ### Photograph a memory diagnostic (v0.1.38)
 
 Click **Diagnostics** in the Relation footer. A new memory-limit incident or
 Worker failure opens the summary once automatically. Close it to resume browsing;
 the same incident will not keep reopening it.
 
-1. Open Diagnostics **before Rebuild index or Reload Window**, which clears this
-   diagnostic session. Click **Refresh** if needed.
+1. Open Diagnostics **before Rebuild index or Reload Window**. Rebuild clears
+   Worker measurements but retains the last five rebuild records; Reload clears
+   both. Click **Refresh** if needed.
 2. Increase the panel height if the summary needs scrolling.
 3. Photograph the entire summary, from the version heading through the bottom
    measurements, and share it when reporting the problem.

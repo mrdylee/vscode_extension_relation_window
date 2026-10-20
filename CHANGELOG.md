@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.45 — 2026-10-20
+
+- Show the latest full-index trigger and extension-session start in Diagnostics,
+  including settings/folder changes, startup and manual rebuild actions.
+- Keep the last five rebuilds with outcomes/durations and session counters for
+  source parses and relation passes. Include sanitized history in problem reports.
+- Preserve expanded diagnostic history during live updates. This adds evidence
+  for unexpected reindexing; no confirmed restart or macro-search fix is claimed.
+
 ## 0.1.44 — 2026-10-19
 
 - Complete the Dynsight rename in Settings, extension identity, publisher and VSIX

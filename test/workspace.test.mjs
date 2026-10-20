@@ -28,6 +28,7 @@ async function bounded(promise) {
 function fixture(t, files = []) {
   const folder = { uri: Uri.parse('file:///review'), name: 'review', index: 0 };
   const created = new Emitter(), changed = new Emitter(), deleted = new Emitter(), closed = new Emitter(), edited = new Emitter();
+  const configuration = new Emitter(), folders = new Emitter();
   const adapter = {
     workspaceFolders: [folder], textDocuments: [],
     getConfiguration: () => ({ get: (_key, fallback) => fallback }),
@@ -35,7 +36,7 @@ function fixture(t, files = []) {
     findFiles: async () => files,
     createFileSystemWatcher: () => ({ dispose() {}, onDidCreate: created.event, onDidChange: changed.event, onDidDelete: deleted.event }),
     onDidChangeTextDocument: edited.event, onDidCloseTextDocument: closed.event,
-    onDidChangeConfiguration: disposable, onDidChangeWorkspaceFolders: disposable,
+    onDidChangeConfiguration: configuration.event, onDidChangeWorkspaceFolders: folders.event,
     fs: { readFile: async () => Buffer.from('') }
   };
   const vscode = { EventEmitter: Emitter, Uri, RelativePattern: class {}, env: {}, version: 'test', workspace: adapter };
@@ -43,7 +44,7 @@ function fixture(t, files = []) {
   runInNewContext(bundle, { module, exports: module.exports, process, Buffer, URL, setTimeout, clearTimeout, require: name => name === 'vscode' ? vscode : require(name) });
   const workspace = new module.exports.WorkspaceIndex(process.cwd());
   t.after(async () => { const worker = workspace.worker; workspace.dispose(); await worker.terminate(); });
-  return { workspace, adapter, created, changed, deleted, closed, edited };
+  return { workspace, adapter, created, changed, deleted, closed, edited, configuration, folders };
 }
 
 const latest = 'typedef void(*CB)(void);void new_target(void){}void task(void){CB cb=new_target;cb();}';
@@ -241,4 +242,83 @@ test('returning to indexed text while a changed Worker response is pending resto
   const task = workspace.index.symbols().find(s => s.name === 'task');
   assert.ok(workspace.index.relations(task.id, 'callees').some(g => g.name === 'disk_target'));
   assert.equal(workspace.failures.size, 0);
+});
+
+test('diagnostics distinguish startup, automatic and manual rebuilds with bounded history', async t => {
+  const { workspace, configuration, folders } = fixture(t);
+  await workspace.ready;
+  assert.ok(workspace.diagnostics.index, 'rebuild diagnostics must be available without Worker errors');
+  let data = workspace.diagnostics.index;
+  assert.equal(data.rebuildCount, 1);
+  assert.equal(data.rebuilds[0].reason, 'startup');
+  assert.equal(data.rebuilds[0].outcome, 'completed');
+  configuration.fire({ affectsConfiguration: key => key === 'dynsight.include' });
+  await bounded(workspace.whenIdle());
+  data = workspace.diagnostics.index;
+  assert.equal(data.rebuilds.at(-1).reason, 'configuration');
+  assert.deepEqual(Array.from(data.rebuilds.at(-1).settings), ['include']);
+  folders.fire({}); await bounded(workspace.whenIdle());
+  assert.equal(workspace.diagnostics.index.rebuilds.at(-1).reason, 'workspace-folders');
+  await workspace.reindex('toolbar');
+  assert.equal(workspace.diagnostics.index.rebuilds.at(-1).reason, 'toolbar');
+  for (let i = 0; i < 4; i++) await workspace.reindex();
+  data = workspace.diagnostics.index;
+  assert.equal(data.rebuildCount, 8);
+  assert.equal(data.rebuilds.length, 5);
+  assert.equal(data.rebuilds.at(-1).reason, 'command');
+  assert.equal(data.sessionStartedAt, workspace.diagnostics.index.sessionStartedAt);
+});
+
+test('unchanged document events do not increase source or relation counters; edits do', async t => {
+  const { workspace, adapter, closed, edited } = fixture(t);
+  await workspace.ready;
+  const file = uri('navigation.c');
+  let source = 'void original(void){}';
+  adapter.fs.readFile = async () => Buffer.from(source);
+  await workspace.enqueue(file); await bounded(workspace.whenIdle());
+  assert.ok(workspace.diagnostics.index, 'index activity counters must be available');
+  const initial = workspace.diagnostics.index;
+  closed.fire({ uri: file }); await bounded(workspace.whenIdle());
+  const unchanged = workspace.diagnostics.index;
+  assert.equal(unchanged.sourceParses, initial.sourceParses);
+  assert.equal(unchanged.relationPasses, initial.relationPasses);
+  assert.equal(unchanged.rebuildCount, initial.rebuildCount);
+  assert.equal(unchanged.lastSourceEvent.kind, 'editor-close');
+  source = 'void changed(void){}';
+  edited.fire({ document: { uri: file }, contentChanges: [{}] }); await bounded(workspace.whenIdle());
+  const changed = workspace.diagnostics.index;
+  assert.equal(changed.sourceParses, initial.sourceParses + 1);
+  assert.equal(changed.relationPasses, initial.relationPasses + 1);
+  assert.equal(changed.lastSourceEvent.kind, 'editor-change');
+});
+
+test('overlapping rebuilds keep a completed latest record and mark obsolete runs superseded', async t => {
+  const { workspace, adapter } = fixture(t);
+  await workspace.ready;
+  const pending = deferred(); let first = true;
+  adapter.findFiles = () => first ? (first = false, pending.promise) : Promise.resolve([]);
+  const previous = workspace.reindex('toolbar');
+  assert.equal(workspace.diagnostics.index.rebuilds.at(-1).outcome, 'running');
+  await workspace.reindex('configuration', ['exclude']);
+  pending.resolve([]); await previous;
+  assert.equal(workspace.diagnostics.index.rebuilds.at(-2).outcome, 'superseded');
+  assert.equal(workspace.diagnostics.index.rebuilds.at(-1).outcome, 'completed');
+});
+
+test('failed source discovery appears as a failed rebuild', async t => {
+  const { workspace, adapter } = fixture(t);
+  await workspace.ready;
+  adapter.findFiles = async () => { throw new Error('offline filesystem'); };
+  await workspace.reindex();
+  assert.equal(workspace.diagnostics.index.rebuilds.at(-1).outcome, 'failed');
+});
+
+test('unexpected rebuild setup errors are recorded as failures', async t => {
+  const { workspace } = fixture(t);
+  await workspace.ready;
+  const original = workspace.worker.postMessage;
+  workspace.worker.postMessage = () => { throw new Error('worker unavailable'); };
+  try { await assert.rejects(workspace.reindex(), /worker unavailable/); }
+  finally { workspace.worker.postMessage = original; }
+  assert.equal(workspace.diagnostics.index.rebuilds.at(-1).outcome, 'failed');
 });
