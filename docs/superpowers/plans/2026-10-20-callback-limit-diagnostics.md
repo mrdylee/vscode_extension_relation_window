@@ -11,4 +11,4 @@
 - [x] In synthetic global initializer write, omit state.effects while keeping state.memory and heap writes. Keep real function and persistent local effects unchanged. Run pointer and memory tests.
 - [x] Format callback diagnostics in the view; show project context without file attribution and prioritize limit details before syntax notices. Include only kind/stage and numeric counters in reports. Add privacy and ordering tests; native integration confirms report/selection behavior.
 - [x] Update README, Help, CHANGELOG, release/review notes. Run typecheck, unit, Worker, memory, performance, browser and native checks, inspect the diff and fix review findings.
-- [ ] Package the next patch VSIX, test it, push release tag; verify three-platform CI, public assets/checksums and local/public ZIP content equality. Record publication evidence without changing production installation.
+- [x] Package the next patch VSIX, test it, push release tag; verify three-platform CI, public assets/checksums and local/public ZIP content equality. Record publication evidence without changing production installation.
