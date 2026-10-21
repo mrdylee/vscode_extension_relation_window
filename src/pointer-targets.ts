@@ -999,7 +999,15 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     let modified = false; const refs: ReferenceRecord[] = [];
     for (const ref of file.references) {
       const observation = ref.kind === 'call' && ref.flowKey ? observations.get(ref.flowKey) : undefined;
-      if (!observation) { refs.push(ref); continue; }
+      if (!observation) {
+        if (!converged && (timedOut || projectIncomplete) && ref.kind === 'call' && ref.flowKey &&
+          (ref.indirect || index.resolveReference(ref).some(symbol => symbol.kind === 'variable'))) {
+          modified = true;
+          refs.push({ ...ref, inference: { expression: ref.name, evidence: [], incomplete: true,
+            reasons: ['Callback call was not evaluated before analysis stopped; no target resolution is available.', ...notices] } });
+        } else refs.push(ref);
+        continue;
+      }
       modified = true;
       const value = materialize(observation.value), incomplete = value.unknown || value.nil || !value.targets.size || !converged || projectIncomplete;
       const inference = { expression: observation.expression, evidence: value.evidence, incomplete, reasons: [...new Set([...value.reasons, ...(projectIncomplete ? notices : []), ...(value.nil ? ['Some paths have a null/non-callable value'] : [])])] };

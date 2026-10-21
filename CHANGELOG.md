@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.61 — 2026-10-21
+
+- Explain indirect calls that were not evaluated before callback analysis stopped.
+  Keep the original project limit visible in Callback analysis.
+- After time/work exhaustion, recover short getter/argument/global-registration
+  paths as incomplete Registered candidates using a bounded projection. Preserve
+  unresolved calls, warnings and uncertainty; skip recovery under memory pressure.
+  Existing full-analysis budgets remain unchanged.
+
 ## 0.1.60 — 2026-10-21
 
 - Keep logged scalar status fields out of callback mutation summaries unless

@@ -165,3 +165,71 @@ test('region uncertainty remains bounded when two disjoint branch states are joi
   assert.ok([...index.files.values()].some(file => file.issues.some(issue => issue.includes('region limit'))));
   assert.equal(complete(index, 'foo'), false);
 });
+
+test('a deadline before propagation retains getter registrations as incomplete candidates with reasons', t => {
+  const uri = 'file:///uncertainty/deadline.c';
+  const source = prelude + `static const struct Ops table={.cb=foo};static const struct Ops *active;
+    const struct Ops*getter(void){return &table;}
+    int init(int ctx,int result,const struct Ops*cbs){if(ctx&&result&&cbs&&cbs->cb)active=cbs;return 0;}
+    void setup(void){init(1,1,getter());}void run(void){if(active&&active->cb)active->cb();}`;
+  const raw = analyzer.analyze(uri, source);
+  const now = performance.now.bind(performance); let clockReads = 0;
+  t.mock.method(performance, 'now', () => now() + (++clockReads > 1 ? 10_001 : 0));
+  const files = analyzer.derive([raw], undefined, undefined, true), index = new RelationIndex();files.forEach(file => index.update(file));
+  const site = index.callbackAt(uri, source.lastIndexOf('cb();') + 1)!;
+  assert.ok(files.some(file => file.callbackDiagnostics?.some(detail => detail.kind === 'time')));
+  assert.deepEqual(site.targets.map(target => target.name), ['foo']);
+  assert.equal(site.incomplete, true);
+  assert.ok(site.reasons.some(reason => reason.includes('10 seconds')));
+  assert.ok(calls(index).some(group => group.callKind === 'indirect'));
+  assert.ok(calls(index).some(group => group.callKind === 'registered' && group.name === 'foo'));
+  assert.equal(calls(index).some(group => group.callKind === 'inferred'), false);
+});
+
+test('an unregistered callback stopped by a deadline still explains its missing analysis', t => {
+  const uri = 'file:///uncertainty/no-registration.c', source = prelude + 'extern struct Ops *active;void run(void){active->cb();}';
+  const raw = analyzer.analyze(uri, source);
+  const now = performance.now.bind(performance); let clockReads = 0;
+  t.mock.method(performance, 'now', () => now() + (++clockReads > 1 ? 10_001 : 0));
+  const files = analyzer.derive([raw], undefined, undefined, true), index = new RelationIndex();files.forEach(file => index.update(file));
+  const site = index.callbackAt(uri, source.lastIndexOf('cb();') + 1)!;
+  assert.deepEqual(site.targets, []);
+  assert.equal(site.incomplete, true);
+  assert.ok(site.reasons.some(reason => reason.includes('not evaluated')));
+  assert.ok(site.reasons.some(reason => reason.includes('10 seconds')));
+});
+
+test('deadline recovery keeps unknown mutation uncertain and does not borrow unrelated field registrations', t => {
+  const uri = 'file:///uncertainty/changed.c';
+  const source = prelude + `static const struct Ops table={.cb=foo},other={.cb=bar};static const struct Ops *active;
+    const struct Ops*getter(void){return &table;}
+    void init(const struct Ops*cbs){active=cbs;}void setup(void){init(getter());}
+    void opaque(void*);void run(void){opaque(&active);active->cb();}`;
+  const raw = analyzer.analyze(uri, source);
+  const now = performance.now.bind(performance); let clockReads = 0;
+  t.mock.method(performance, 'now', () => now() + (++clockReads > 1 ? 10_001 : 0));
+  const files = analyzer.derive([raw], undefined, undefined, true), index = new RelationIndex();files.forEach(file => index.update(file));
+  const site = index.callbackAt(uri, source.lastIndexOf('cb();') + 1)!;
+  assert.equal(site.incomplete, true);
+  assert.deepEqual(site.targets, [], 'an opaque replacement cannot be treated as the getter object');
+  assert.ok(site.reasons.some(reason => reason.includes('10 seconds')));
+  assert.ok(calls(index).some(group => group.callKind === 'indirect'));
+});
+
+test('deadline registration recovery skips large bodies, preserves uncertainty and caches projection identity', t => {
+  const uri = 'file:///uncertainty/large-body.c';
+  const source = prelude + `static const struct Ops table={.cb=foo},other={.cb=bar};static const struct Ops *active;
+    const struct Ops*getter(void){return &table;}
+    void init(const struct Ops*cbs){if(cbs)active=cbs;}void setup(void){init(getter());}
+    void heavy(void){${'active=&other;'.repeat(600)}}void run(void){heavy();active->cb();}`;
+  const raw = analyzer.analyze(uri, source);
+  const now = performance.now.bind(performance); let clockReads = 0;
+  t.mock.method(performance, 'now', () => now() + (++clockReads > 1 ? 10_001 : 0));
+  const files = analyzer.derive([raw], undefined, undefined, true), index = new RelationIndex();files.forEach(file => index.update(file));
+  const site = index.callbackAt(uri, source.lastIndexOf('cb();') + 1)!;
+  assert.deepEqual(site.targets.map(target => target.name), ['foo']);
+  assert.equal(site.incomplete, true, 'skipped mutations prohibit a complete call inference');
+  assert.ok(site.reasons.some(reason => reason.includes('mutations may be omitted')));
+  assert.ok(calls(index).some(group => group.callKind === 'indirect'));
+  assert.strictEqual(analyzer.derive([raw], undefined, undefined, true)[0], files[0]);
+});

@@ -4,6 +4,7 @@ import { aggregateId, declaredType, declarator, initializerMember, typedExpressi
 import { clearMacroCache, deriveMacroCalls } from './project-analysis';
 import { flowFacts } from './flow-parser';
 import { clearPointerCache, inferPointerCalls } from './pointer-targets';
+import { suggestPartialCallbacks } from './partial-callbacks';
 import { suggestExplicitCallbacks } from './explicit-callbacks';
 
 function ancestor(node: Node, type: string): Node | null {
@@ -300,7 +301,9 @@ export async function createAnalyzer(runtime: string, grammar: string) {
     const expanded = deriveMacroCalls(files, analyzer.analyze, analyzer.calls, analyzer.initializer, memoryPressure, analyzeCallbacks);
     phase?.('callbacks');
     const derived = inferPointerCalls(expanded, memoryPressure, analyzer.analyze, analyzeCallbacks);
-    return memoryPressure?.() ? derived : suggestExplicitCallbacks(files, derived);
+    if (memoryPressure?.()) return derived;
+    const partial = analyzeCallbacks ? suggestPartialCallbacks(expanded, derived, memoryPressure) : derived;
+    return suggestExplicitCallbacks(files, partial);
   } };
   return analyzer;
 }

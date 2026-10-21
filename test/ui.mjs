@@ -434,6 +434,15 @@ try {
   await page.screenshot({ path: 'output/playwright/callback-diagnosis.png', fullPage: true });
   assert.ok((await page.locator('.candidates').textContent()).includes('Other targets may exist'));
   assert.ok((await page.locator('.graph').textContent()).includes('No callback targets resolved'));
+  const stoppedReason = 'Callback call was not evaluated before analysis stopped; no target resolution is available.';
+  const budgetReason = 'Callback analysis budget: 10 seconds; targets may be incomplete.';
+  await configure({ callback: { ...fixture.callback, incomplete: true, reasons: [stoppedReason, budgetReason] } });
+  assert.ok((await callbackChoice.textContent()).includes('callback_target'), 'partial registration candidates remain selectable');
+  await page.getByText('Callback analysis', { exact: true }).click();
+  assert.ok(await page.getByText(stoppedReason, { exact: true }).isVisible());
+  assert.ok(await page.getByText(budgetReason, { exact: true }).isVisible());
+  assert.ok((await page.locator('.candidates').textContent()).includes('Other targets may exist'));
+  await page.screenshot({ path: 'output/playwright/callback-deadline.png', fullPage: true });
   await configure({ callback: undefined });
   state.graph = fixture.argumentGraph; state.mode = 'callees';
   preview(state.graph.root.symbolId);
