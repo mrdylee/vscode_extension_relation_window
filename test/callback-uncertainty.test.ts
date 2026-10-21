@@ -125,7 +125,7 @@ test('a callback depending on a limited mutator stays incomplete', () => {
     `static void heavy(CB*out){${writes}*out=bar;}void run(void){CB cb=foo;heavy(&cb);cb();}` });
   assert.ok([...index.files.values()].some(file => file.issues.some(issue => issue.includes('mutation limit'))));
   assert.ok(calls(index).some(group => group.callKind === 'indirect'));
-  assert.ok(inferred(index).every(group => group.sites.every(site => site.inference?.incomplete)));
+  assert.ok(inferred(index).every(group => group.sites.filter(site => site.kind === 'call').every(site => site.inference?.incomplete)));
 });
 
 test('a concrete array callback overwrite masks earlier whole-array uncertainty', () => {

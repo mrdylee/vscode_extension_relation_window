@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.60 — 2026-10-21
+
+- Keep logged scalar status fields out of callback mutation summaries unless
+  they feed callback selectors, conditions or storage connections. Follow copies,
+  aliases, helper parameters and returns; retain unresolved layouts conservatively.
+- Separate unrelated aggregate fields while preserving compatible cross-file
+  dependencies. Skip opaque scalar regions proven unrelated to callbacks.
+- Apply limited helper uncertainty to omitted storage effects, preserving unused
+  pointer arguments. Keep actual callback mutations and existing 256-entry budgets.
+
 ## 0.1.59 — 2026-10-21
 
 - Keep unrelated callback calls complete when the ordered region summary reaches

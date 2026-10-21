@@ -312,7 +312,9 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     // Find pointees before invalidating the slots containing their addresses.
     for (let n = 0; n < pending.length; n++) {
       if (expired()) { state.incomplete = true; return; }
-      const { root, exported } = pending[n], identity = root + ':' + exported; if (seen.has(identity)) continue; seen.add(identity);
+      const { root, exported } = pending[n], identity = root + ':' + exported;
+      if (ignoredStorage.has(root) || seen.has(identity)) continue;
+      seen.add(identity);
       if (seen.size > 256) { state.incomplete = true; notice('Callback region limit: 256 reachable objects; targets may be incomplete'); break; }
       affected.push({ root, exported }); heapShape();
       const resolved = objects({ ...blank(), objects: new Set([root]) });
@@ -488,42 +490,90 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     const drop = expr.kind === 'call' ? (layout.layers[0] === 'pointer' ? 2 : 1) : 1;
     return { ...base, id: base.id + ':' + expr.location.start, type: { name: '', id: layout.id || undefined, layers: layout.layers.slice(drop) } };
   }
-  // Exclude only proven write-only scalar declarations from exported effects.
-  // Keep all reads (including selectors/guards), address uses and unresolved
-  // storage conservative; evaluation and heap values are still retained.
-  const scalarReads = new Set<string>(), unresolvedReads = new Set<string>(), memberReads = new Set<string>();
-  function collectReads(expr: Expr, ctx: Context, writing = false) {
-    if (expired()) return;
-    if (!writing && (expr.kind === 'name' || expr.kind === 'member')) {
-      // Compatible struct declarations can have different IDs in different
-      // translation units. Retain names here, without merging storage values.
-      if (expr.kind === 'member') memberReads.add(expr.field);
-      const record = valueType(expr, ctx);
-      if (record) scalarReads.add(record.id);
-      else unresolvedReads.add(expr.kind === 'name' ? expr.name : expr.field);
+  // Follow scalar dependencies of selectors/guards/storage, rather than every
+  // read (e.g. logging). Member keys preserve compatible declarations across
+  // translation units without connecting unrelated aggregate names.
+  const scalarReads = new Set<string>(), scalarDependencies = new Map<string, Set<string>>();
+  const ignoredStorage = new Set<string>();
+  function scalarKey(record: SymbolRecord) {
+    const owner = record.memberOf && index.symbol(record.memberOf);
+    if (!owner) return record.id;
+    return `${owner.scope ? owner.id : owner.aggregate + ':' + owner.name}:${record.name}`;
+  }
+  function linkScalar(targets: Iterable<string>, sources: Iterable<string>) {
+    const values = [...sources];
+    if (!values.length) return;
+    for (const key of targets) {
+      const dependencies = scalarDependencies.get(key) ?? new Set<string>();
+      for (const source of values) dependencies.add(source);
+      scalarDependencies.set(key, dependencies);
     }
-    if (expr.kind === 'assign') { collectReads(expr.left, ctx, expr.operator === '='); collectReads(expr.right, ctx); }
-    else if (expr.kind === 'call') { collectReads(expr.callee, ctx); expr.args.forEach(arg => collectReads(arg, ctx)); }
-    else if (expr.kind === 'index') { collectReads(expr.object, ctx); collectReads(expr.index, ctx); }
-    else if (expr.kind === 'member' || expr.kind === 'dereference' || expr.kind === 'address' || expr.kind === 'cast') collectReads(expr.object, ctx);
-    else if (expr.kind === 'choice' || expr.kind === 'sequence') expr.values.forEach(value => collectReads(value, ctx));
-    else if (expr.kind === 'initializer') expr.entries.forEach(entry => collectReads(entry.value, ctx));
-    else if (expr.kind === 'unknown') expr.children?.forEach(child => collectReads(child, ctx));
+  }
+  function collectReads(expr: Expr, ctx: Context, needed = false): Set<string> {
+    const reads = new Set<string>();
+    if (expired()) return reads;
+    const collect = (child: Expr, required = false) => {
+      const keys = collectReads(child, ctx, required);
+      for (const key of keys) reads.add(key);
+      return keys;
+    };
+    if (expr.kind === 'name' || expr.kind === 'member') {
+      const record = valueType(expr, ctx);
+      reads.add(record ? scalarKey(record) : 'unknown:' + (expr.kind === 'name' ? expr.name : expr.field));
+      if (expr.kind === 'member') collect(expr.object);
+    } else if (expr.kind === 'assign') {
+      const left = collect(expr.left), right = collect(expr.right);
+      const record = valueType(expr.left, ctx), layouts = record ? index.layout(record) : [];
+      linkScalar(record && expr.left.kind !== 'dereference' ? [scalarKey(record)] : left, right);
+      if (expr.right.kind === 'address') linkScalar(right, left);
+      if (!layouts.length || layouts.some(layout => !layout.scalar)) for (const key of right) scalarReads.add(key);
+    } else if (expr.kind === 'call') {
+      const direct = expr.callee.kind === 'name' && !expr.callee.localId && globalSymbols(expr.callee).every(symbol => symbol.kind === 'function');
+      collect(expr.callee, !direct);
+      const args = expr.args.map(arg => collect(arg));
+      if (expr.callee.kind === 'name' && !expr.callee.localId) for (const fn of globalSymbols(expr.callee)) {
+        for (const program of byFunction.get(fn.id) ?? []) program.params.forEach((param, n) => {
+          linkScalar([param], args[n] ?? []);
+          // Pointer parameters can both read and write the supplied storage.
+          if (parameterLayouts.get(fn.id)?.[n]?.some(layout => layout.layers.length || layout.fields.length)) linkScalar(args[n] ?? [], [param]);
+        });
+      }
+    } else if (expr.kind === 'index') { collect(expr.object); collect(expr.index, true); }
+    else if (expr.kind === 'dereference' || expr.kind === 'address' || expr.kind === 'cast') collect(expr.object);
+    else if (expr.kind === 'choice' || expr.kind === 'sequence') expr.values.forEach(value => collect(value));
+    else if (expr.kind === 'initializer') expr.entries.forEach(entry => collect(entry.value));
+    else if (expr.kind === 'unknown') expr.children?.forEach(child => collect(child));
+    if (needed) for (const key of reads) scalarReads.add(key);
+    return reads;
   }
   function collectBodyReads(body: FlowStatement[], ctx: Context) {
     for (const statement of body) {
-      if (statement.kind === 'expression' || statement.kind === 'return') collectReads(statement.value, ctx);
+      if (statement.kind === 'expression' || statement.kind === 'return') {
+        const reads = collectReads(statement.value, ctx);
+        if (statement.kind === 'return') linkScalar([ctx.program.id], reads);
+      }
       else if (statement.kind === 'loop' || statement.kind === 'branch') {
-        collectReads(statement.condition, ctx);
+        collectReads(statement.condition, ctx, true);
         if (statement.kind === 'loop') collectBodyReads(statement.body, ctx);
         else { collectBodyReads(statement.then, ctx); collectBodyReads(statement.otherwise, ctx); }
       }
     }
   }
   function summarize(record: SymbolRecord | undefined) {
-    if (!record || !index.symbol(record.id) || scalarReads.has(record.id) || unresolvedReads.has(record.name) || memberReads.has(record.name)) return true;
+    if (!record || scalarReads.has(scalarKey(record)) || scalarReads.has('unknown:' + record.name)) return true;
+    if (record.memberOf && index.symbol(record.memberOf)?.aggregate === 'union') return true;
     const layouts = index.layout(record);
     return !layouts.length || !layouts.every(layout => !layout.layers.length && layout.scalar);
+  }
+  function trackedStorage(record: SymbolRecord | undefined, seen = new Set<string>()): boolean {
+    if (!record || seen.has(record.id)) return true;
+    const layouts = index.layout(record);
+    return !layouts.length || layouts.some(layout => layout.layers.length > 0 || (layout.scalar ? summarize(record)
+      : !layout.fields.length || layout.fields.some(field => trackedStorage(field, new Set(seen).add(record.id)))));
+  }
+  function rememberStorage(slot: string, record: SymbolRecord | undefined) {
+    if (trackedStorage(record)) ignoredStorage.delete(slot);
+    else ignoredStorage.add(slot);
   }
   function storedValue(expr: Expr, value: Value, state: State, ctx: Context): Value {
     if (!value.unknown || value.objects.size) return value;
@@ -594,6 +644,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     return [];
   }
   function initializer(slot: string, expr: Expr, layouts: ReturnType<RelationIndex['layout']>, state: State, ctx: Context, record?: SymbolRecord) {
+    rememberStorage(slot, record);
     if (layouts.length > 1) {
       const variants = layouts.map(layout => { const branch = clone(state); initializer(slot, expr, [layout], branch, ctx, record); return branch; });
       Object.assign(state, variants.slice(1).reduce((a, b) => joinStates(a, b), variants[0])); return;
@@ -666,6 +717,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
         const pointer = evaluate(expr.object.object, state, ctx); if (pointer.targets.size) return pointer;
       }
       const targets = slots(expr.object, state, ctx);
+      for (const target of targets) rememberStorage(target, valueType(expr.object, ctx));
       publish({ ...blank(), objects: new Set(targets) }, state);
       return { ...blank(), objects: new Set(targets) };
     }
@@ -716,7 +768,10 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
         for (const target of targets) copyStorage(target, objects(value), layouts[0], state, ctx);
         return union(...targets.map(target => read(target, state)));
       }
-      for (const target of targets) write(target, value, state, ctx, targets.length === 1, summarize(record));
+      for (const target of targets) {
+        rememberStorage(target, record);
+        write(target, value, state, ctx, targets.length === 1, summarize(record));
+      }
       return value;
     }
     if (expr.kind === 'call') {
@@ -744,7 +799,8 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
         depend(fn);
         const target = summaries.get(fn);
         if (!target) { opaque = true; returns.push(unknown('Return value unavailable: ' + (index.symbol(fn)?.name ?? expressionText(expr.callee)) + ' has no indexed body')); continue; }
-        if (target.incomplete) opaque = true;
+        // Budgeted omissions are represented by their affected regions. An
+        // indexed helper's unused arguments are not opaque mutation roots.
         args.forEach((arg, n) => {
           if (!parameterLayouts.get(fn)?.[n]?.some(layout => layout.layers.length || layout.fields.length)) return;
           const value = evidence(arg, { location: expr.location, reason: 'Argument ' + (n + 1) + ' to ' + (index.symbol(fn)?.name ?? 'function') }), old = target.params[n];
@@ -773,7 +829,8 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
           const keys = part?.fn === fn ? [...(args[part.index]?.objects ?? [])].map(actual => actual + part.suffix) : [key];
           for (const key of keys) {
             if (!effects.has(key) && effects.size >= 256) {
-              opaque = true; state.incomplete = true; notice('Callback mutation limit: 256 slots per function; targets may be incomplete', 256);
+              // Only this omitted storage effect is uncertain, not every argument.
+              state.incomplete = true; notice('Callback mutation limit: 256 slots per function; targets may be incomplete', 256);
               regions.set(key, { count: 0, definite: false }); continue;
             }
             const value = instantiate(effect.value, fn, args), old = effects.get(key);
@@ -822,7 +879,16 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
   const persistent = new Map(programs.flatMap(program => program.locals.filter(local => local.persistent).map(local => [local.id, local] as const)));
   const globalContext: Context = { program: globalProgram, locals: persistent, exits: [], returned: blank() };
   for (const program of programs) collectBodyReads(program.body, { program, locals: new Map(program.locals.map(local => [local.id, local])), exits: [], returned: blank() });
-  for (const file of files) for (const init of file.initializers ?? []) collectReads(init.value, globalContext);
+  for (const file of files) for (const init of file.initializers ?? []) {
+    const reads = collectReads(init.value, globalContext);
+    linkScalar([init.id], reads);
+    if (init.value.kind === 'address') linkScalar(reads, [init.id]);
+  }
+  const requiredScalars = [...scalarReads];
+  for (let n = 0; n < requiredScalars.length && !expired(); n++) for (const source of scalarDependencies.get(requiredScalars[n]) ?? []) {
+    if (!scalarReads.has(source)) { scalarReads.add(source); requiredScalars.push(source); }
+  }
+  scalarDependencies.clear();
   expired(true);
   stage = 'initializers';
   for (const file of files) for (const init of file.initializers ?? []) {

@@ -17,7 +17,10 @@ export async function run() {
   const elapsedMs = Date.now() - start;
   const expected = await vscode.workspace.findFiles('**/*.{c,h}', '**/{node_modules,.git,.vscode-test}/**');
   assert.ok(expected.length > 600, 'test uses the full FreeRTOS tree');
-  assert.equal(api.workspace.status, 'Index ready');
+  assert.equal(api.workspace.status, 'Index ready', JSON.stringify({
+    notices: [...api.workspace.index.files.values()].flatMap((file: any) => file.callbackDiagnostics ?? []).slice(0, 8),
+    firstLimit: api.workspace.diagnostics.worker?.firstLimit
+  }));
   assert.equal(api.workspace.index.files.size, expected.length);
   assert.equal(api.workspace.failures.size, 0);
   assert.deepEqual(opened, [], 'indexing does not create C editor documents');

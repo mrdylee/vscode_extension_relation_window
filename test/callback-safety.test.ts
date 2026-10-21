@@ -66,8 +66,8 @@ test('opaque helper summaries do not invalidate other call sites actual objects'
   assert.equal(calls(index).some(group => group.callKind === 'indirect'), false);
 });
 
-for (const count of [256, 257, 270]) test(`unrelated ${count} opaque regions preserve the getter callback chain`, () => {
-  const fields = Array.from({ length: count }, (_, n) => `int status${n};`).join('');
+for (const type of ['int', 'CB']) for (const count of [256, 257, 270]) test(`unrelated ${count} opaque ${type} regions preserve the getter callback chain`, () => {
+  const fields = Array.from({ length: count }, (_, n) => `${type} status${n};`).join('');
   const escapes = Array.from({ length: count }, (_, n) => `opaque(&data.status${n});`).join('');
   const index = project(`typedef void(*CB)(void);static void target(void){}struct Ops{CB cb;};
     static const struct Ops registered={.cb=target};static const struct Ops *active;
@@ -76,14 +76,14 @@ for (const count of [256, 257, 270]) test(`unrelated ${count} opaque regions pre
     struct Data{${fields}};static struct Data data;void opaque(void*);
     static void heavy(void){${escapes}}
     void run(void){heavy();active->cb();}`);
-  assert.equal([...index.files.values()].some(file => file.issues.some(issue => issue.includes('region limit'))), count > 256);
+  assert.equal([...index.files.values()].some(file => file.issues.some(issue => issue.includes('region limit'))), type === 'CB' && count > 256);
   assert.deepEqual(calls(index).filter(group => group.callKind === 'inferred').map(group => group.name), ['target']);
   assert.ok(calls(index).filter(group => group.callKind === 'inferred').every(group => group.sites.every(site => site.inference?.incomplete === false)));
   assert.equal(calls(index).some(group => group.callKind === 'indirect'), false);
 });
 
 for (const conditional of [false, true]) test(`a region-limited no-argument helper retains its omitted global callback invalidation (conditional=${conditional})`, () => {
-  const fields = Array.from({ length: 257 }, (_, n) => `int status${n};`).join('');
+  const fields = Array.from({ length: 257 }, (_, n) => `CB status${n};`).join('');
   const escapes = Array.from({ length: 257 }, (_, n) => `opaque(&data.status${n});`).join('');
   const index = project(`typedef void(*CB)(void);void foo(void){}struct Ops{CB cb;};
     struct Data{${fields}};static struct Data data;static struct Ops selected;void opaque(void*);
@@ -93,8 +93,8 @@ for (const conditional of [false, true]) test(`a region-limited no-argument help
   assert.ok(calls(index).some(group => group.callKind === 'indirect'));
 });
 
-for (const conditional of [false, true]) test(`truncated parameter reachability retains uncertainty through helpers (conditional=${conditional})`, () => {
-  const fields = Array.from({ length: 257 }, (_, n) => `int status${n};`).join('');
+for (const conditional of [false, true]) test(`region-limited parameter helpers preserve unrelated objects (conditional=${conditional})`, () => {
+  const fields = Array.from({ length: 257 }, (_, n) => `CB status${n};`).join('');
   const escapes = Array.from({ length: 257 }, (_, n) => `opaque(&data.status${n});`).join('');
   const index = project(`typedef void(*CB)(void);void foo(void){}void bar(void){}struct Ops{CB cb;};
     struct Data{${fields}};static struct Data data;void opaque(void*);
@@ -103,15 +103,58 @@ for (const conditional of [false, true]) test(`truncated parameter reachability 
     void run(int condition){struct Ops x={foo},y={bar};wrapper(&x,condition);x.cb();y.cb();}`);
   assert.ok([...index.files.values()].some(file => file.issues.some(issue => issue.includes('region limit'))));
   const bar = calls(index).find(group => group.callKind === 'inferred' && group.name === 'bar');
-  assert.ok(bar?.sites.every(site => site.inference?.incomplete), 'truncated reachability must retain the project fallback');
+  assert.ok(bar?.sites.every(site => site.inference?.incomplete === false));
   assert.ok(calls(index).some(group => group.callKind === 'indirect' && group.sites.some(site => site.inference?.expression === 'x.cb')));
 });
 
+test('a genuinely truncated pointee traversal retains project uncertainty', () => {
+  const fields = Array.from({ length: 257 }, (_, n) => `struct Ops *p${n};`).join('');
+  const init = Array.from({ length: 257 }, (_, n) => `.p${n}=&slots[${n}]`).join(',');
+  const index = project(`typedef void(*CB)(void);void foo(void){}struct Ops{CB cb;};
+    struct Holder{${fields}};static struct Ops slots[257];void opaque(void*);
+    void run(void){CB saved=foo;struct Holder holder={${init}};opaque(&holder);saved();}`);
+  assert.ok([...index.files.values()].some(file => file.issues.some(issue => issue.includes('region limit'))));
+  assert.ok(calls(index).some(group => group.callKind === 'indirect'));
+  assert.ok(calls(index).filter(group => group.callKind === 'inferred').every(group => group.sites.filter(site => site.kind === 'call').every(site => site.inference?.incomplete)));
+});
+
 test('exhausting omitted-region bookkeeping retains conservative project uncertainty', () => {
-  const fields = Array.from({ length: 514 }, (_, n) => `int status${n};`).join('');
+  const fields = Array.from({ length: 514 }, (_, n) => `CB status${n};`).join('');
   const escapes = Array.from({ length: 514 }, (_, n) => `opaque(&data.status${n});`).join('');
   const index = project(`typedef void(*CB)(void);void foo(void){}struct Data{${fields}};static struct Data data;
     void opaque(void*);void heavy(void){${escapes}}void run(void){CB cb=foo;heavy();cb();}`);
   assert.ok([...index.files.values()].some(file => file.issues.some(issue => issue.includes('region limit'))));
   assert.ok(calls(index).some(group => group.callKind === 'indirect'));
+});
+
+for (const wrapper of [false, true]) test(`a limited callback mutator preserves its unused pointer argument (wrapper=${wrapper})`, () => {
+  const declarations = Array.from({ length: 270 }, (_, n) => `static CB callback${n};`).join('');
+  const writes = Array.from({ length: 270 }, (_, n) => `callback${n}=bar;`).join('');
+  const index = project(`typedef void(*CB)(void);void foo(void){}void bar(void){}struct Ops{CB cb;};
+    ${declarations}static void heavy(struct Ops*unused,struct Ops*changed){${writes}changed->cb=bar;}
+    ${wrapper ? 'static void wrapper(struct Ops*unused,struct Ops*changed){heavy(unused,changed);}' : ''}
+    void run(void){struct Ops x={foo},y={foo};${wrapper ? 'wrapper' : 'heavy'}(&x,&y);x.cb();y.cb();}`);
+  assert.ok([...index.files.values()].some(file => file.issues.some(issue => issue.includes('mutation limit'))));
+  const inferred = calls(index).filter(group => group.callKind === 'inferred');
+  assert.ok(inferred.find(group => group.name === 'foo')?.sites.some(site => site.inference?.expression === 'x.cb' && !site.inference.incomplete));
+  assert.equal(calls(index).some(group => group.callKind === 'indirect' && group.sites.some(site => site.inference?.expression === 'x.cb')), false);
+  assert.ok(calls(index).some(group => group.callKind === 'indirect' && group.sites.some(site => site.inference?.expression === 'y.cb')));
+});
+
+for (const wrapper of [false, true]) test(`expanding helper effects past the budget preserves unused pointer arguments (wrapper=${wrapper})`, () => {
+  const fields = Array.from({ length: 135 }, (_, n) => `CB callback${n};`).join('');
+  const writes = Array.from({ length: 135 }, (_, n) => `changed->callback${n}=bar;`).join('');
+  const index = project(`typedef void(*CB)(void);void foo(void){}void bar(void){}
+    struct Wide{${fields}};struct Ops{CB cb;};static struct Wide a,b;
+    static void heavy(struct Wide*changed,struct Ops*unused){${writes}}
+    ${wrapper ? 'static void wrapper(struct Wide*changed,struct Ops*unused){heavy(changed,unused);}' : ''}
+    void run(int choose){struct Ops x={foo};struct Wide*p=choose?&a:&b;
+      ${wrapper ? 'wrapper' : 'heavy'}(p,&x);x.cb();a.callback134();b.callback134();}`);
+  assert.ok([...index.files.values()].some(file => file.issues.some(issue => issue.includes('mutation limit'))));
+  const inferred = calls(index).filter(group => group.callKind === 'inferred');
+  assert.ok(inferred.find(group => group.name === 'foo')?.sites.some(site => site.kind === 'call' && site.inference?.expression === 'x.cb' && !site.inference.incomplete));
+  assert.equal(calls(index).some(group => group.callKind === 'indirect' && group.sites.some(site => site.inference?.expression === 'x.cb')), false);
+  for (const expression of ['a.callback134', 'b.callback134']) {
+    assert.ok(calls(index).some(group => group.callKind === 'indirect' && group.sites.some(site => site.inference?.expression === expression)));
+  }
 });

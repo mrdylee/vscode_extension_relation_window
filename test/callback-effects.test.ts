@@ -112,3 +112,116 @@ test('lane and group callback copies retain actual targets and reverse callers w
   assert.deepEqual(unrelated.map(group => group.name), ['unrelated_group']);
   assert.ok(unrelated[0].sites.every(site => site.kind === 'reference' && site.callKind === 'registered'));
 });
+
+for (const reader of ['same object', 'different struct', 'different struct selector']) test(`logged scalar effects do not consume the callback budget (${reader})`, () => {
+  const fields = Array.from({ length: 270 }, (_, n) => `int status${n};`).join('');
+  const writes = Array.from({ length: 270 }, (_, n) => `data.status${n}=0;`).join('');
+  const logs = Array.from({ length: 270 }, (_, n) => `log_int(${reader === 'same object' ? 'data' : 'other'}.status${n});`).join('');
+  const index = project(`typedef void(*CB)(void);static void target(void){}static void second(void){}
+    struct Data{${fields}};static struct Data data;
+    struct Other{${fields}};static struct Other other;static CB table[2]={target,second};
+    void log_int(int);void logger(void){${logs}}
+    void heavy(void){${writes}}
+    void run(void){CB saved=target;heavy();${reader === 'different struct selector' ? 'table[other.status269]();' : ''}saved();}`);
+  assert.equal([...index.files.values()].some(file => file.issues.some(issue => /mutation limit|region limit/.test(issue))), false);
+  assert.ok(inferred(index, 'run').find(group => group.name === 'target')?.sites.every(site => site.inference?.incomplete === false));
+});
+
+test('unrelated scalar addresses and their parent do not consume region entries', () => {
+  const fields = Array.from({ length: 270 }, (_, n) => `int status${n};`).join('');
+  const escapes = Array.from({ length: 270 }, (_, n) => `opaque(&data.status${n});`).join('');
+  const index = project(`typedef void(*CB)(void);static void target(void){}
+    struct Data{${fields}};static struct Data data;void opaque(void*);
+    void heavy(void){opaque(&data);${escapes}}
+    void run(void){CB saved=target;heavy();saved();}`);
+  assert.equal([...index.files.values()].some(file => file.issues.some(issue => /mutation limit|region limit/.test(issue))), false);
+  assert.deepEqual(inferred(index, 'run').map(group => group.name), ['target']);
+  assert.ok(inferred(index, 'run')[0].sites.every(site => site.inference?.incomplete === false));
+});
+
+test('a scalar selector copied through an address alias retains its helper effect among logged fields', () => {
+  const fields = Array.from({ length: 270 }, (_, n) => `int status${n};`).join('');
+  const writes = Array.from({ length: 270 }, (_, n) => `data.status${n}=0;`).join('');
+  const logs = Array.from({ length: 270 }, (_, n) => `log_int(data.status${n});`).join('');
+  const index = project(`typedef void(*CB)(void);static void first(void){}static void second(void){}
+    static CB table[2]={first,second};struct Data{${fields}unsigned selected;};static struct Data data;
+    void log_int(int);void logger(void){${logs}}static void configure(void){${writes}data.selected=1;}
+    void run(void){data.selected=0;unsigned *alias=&data.selected;configure();unsigned copied=*alias;table[copied]();}`);
+  assert.equal([...index.files.values()].some(file => file.issues.some(issue => /mutation limit|region limit/.test(issue))), false);
+  assert.deepEqual(inferred(index, 'run').map(group => group.name), ['second']);
+  assert.ok(inferred(index, 'run')[0].sites.every(site => site.inference?.incomplete === false));
+});
+
+for (const variant of ['global alias', 'output parameter', 'pointer getter']) test(`scalar selector dependencies survive ${variant}`, () => {
+  const index = project(`typedef void(*CB)(void);static void first(void){}static void second(void){}
+    static CB table[2]={first,second};static unsigned selected;static unsigned *alias=&selected;
+    static void configure(void){selected=1;}${variant === 'output parameter' ? 'static void copy(unsigned*out){*out=selected;}' : ''}
+    ${variant === 'pointer getter' ? 'static unsigned *get_selected(void){return &selected;}' : ''}
+    void run(void){selected=0;configure();${variant === 'global alias' ? 'table[*alias]();' : variant === 'pointer getter' ? 'table[*get_selected()]();' : 'unsigned copied=0;copy(&copied);table[copied]();'}}`);
+  assert.deepEqual(inferred(index, 'run').map(group => group.name), variant === 'output parameter' ? ['first', 'second'] : ['second']);
+  assert.ok(inferred(index, 'run')[0].sites.every(site => site.inference?.incomplete === false));
+});
+
+test('scalar getters used only for logging do not retain their source effects', () => {
+  const fields = Array.from({ length: 270 }, (_, n) => `int status${n};`).join('');
+  const writes = Array.from({ length: 270 }, (_, n) => `data.status${n}=0;`).join('');
+  const getters = Array.from({ length: 270 }, (_, n) => `static int sample${n}(void){return data.status${n};}`).join('');
+  const logs = Array.from({ length: 270 }, (_, n) => `log_int(sample${n}());`).join('');
+  const index = project(`typedef void(*CB)(void);static void target(void){}static CB cb=target;
+    struct Data{${fields}};static struct Data data;void log_int(int);${getters}
+    void configure(void){${writes}}void logger(void){${logs}}void run(void){cb();}`);
+  assert.equal([...index.files.values()].some(file => file.issues.some(issue => /mutation limit|region limit/.test(issue))), false);
+});
+
+test('opaque writes to a relevant scalar selector retain uncertainty', () => {
+  const index = project(`typedef void(*CB)(void);static void first(void){}static void second(void){}
+    static CB table[2]={first,second};static unsigned selected;void opaque(void*);
+    void run(void){selected=0;opaque(&selected);table[selected]();}`);
+  assert.deepEqual(inferred(index, 'run').map(group => group.name).sort(), ['first', 'second']);
+});
+
+test('ignoring scalar child addresses does not hide opaque writes to the parent callback', () => {
+  const fields = Array.from({ length: 270 }, (_, n) => `int status${n};`).join('');
+  const escapes = Array.from({ length: 270 }, (_, n) => `opaque(&data.status${n});`).join('');
+  const index = project(`typedef void(*CB)(void);static void target(void){}
+    struct Data{${fields}CB cb;};static struct Data data;void opaque(void*);
+    void run(void){data.cb=target;opaque(&data);${escapes}data.cb();}`);
+  assert.equal([...index.files.values()].some(file => file.issues.some(issue => /mutation limit|region limit/.test(issue))), false);
+  assert.ok(index.relations(symbol(index, 'run').id, 'callees').some(group => group.callKind === 'indirect'));
+  assert.equal(inferred(index, 'run').some(group => group.sites.some(site => site.kind === 'call' && site.inference?.incomplete === false)), false);
+});
+
+for (const count of [256, 257]) test(`the mutation budget still applies to ${count} relevant integer selectors`, () => {
+  const fields = Array.from({ length: count }, (_, n) => `unsigned index${n};`).join('');
+  const writes = Array.from({ length: count }, (_, n) => `data.index${n}=1;`).join('');
+  const reads = Array.from({ length: count }, (_, n) => `table[data.index${n}]();`).join('');
+  const index = project(`typedef void(*CB)(void);static void first(void){}static void second(void){}
+    static CB table[2]={first,second};struct Data{${fields}};static struct Data data;
+    static void configure(void){${writes}}void run(void){configure();${reads}}`);
+  assert.equal([...index.files.values()].some(file => file.issues.some(issue => issue.includes('mutation limit'))), count > 256);
+  assert.ok(inferred(index, 'run').some(group => group.name === 'second'));
+  assert.equal(inferred(index, 'run').some(group => group.name === 'first'), count > 256);
+});
+
+for (const scope of ['different functions', 'nested blocks']) test(`same-named local struct tags do not share scalar dependencies (${scope})`, () => {
+  const fields = Array.from({ length: 270 }, (_, n) => `unsigned status${n};`).join('');
+  const writes = Array.from({ length: 270 }, (_, n) => `data.status${n}=0;`).join('');
+  const reads = Array.from({ length: 270 }, (_, n) => `table[other.status${n}]();`).join('');
+  const writer = `struct Data{${fields}};static struct Data data;${writes}`;
+  const reader = `struct Data{${fields}};static struct Data other;${reads}`;
+  const index = project(`typedef void(*CB)(void);static void first(void){}static void second(void){}
+    static CB table[2]={first,second};${scope === 'different functions'
+      ? `static void heavy(void){${writer}}void run(void){heavy();${reader}}`
+      : `void run(void){{${writer}}{${reader}}}`}`);
+  assert.equal([...index.files.values()].some(file => file.issues.some(issue => /mutation limit|region limit/.test(issue))), false);
+  assert.deepEqual(inferred(index, 'run').map(group => group.name).sort(), ['first', 'second']);
+});
+
+for (const storage of ['array element', 'pointer dereference']) test(`relevant scalar writes through ${storage} remain in helper summaries`, () => {
+  const index = project(`typedef void(*CB)(void);static void first(void){}static void second(void){}
+    static CB table[2]={first,second};static unsigned selected[1];
+    ${storage === 'array element' ? 'static void configure(void){selected[0]=1;}' : 'static void configure(unsigned*out){*out=1;}'}
+    void run(void){selected[0]=0;${storage === 'array element' ? 'configure();' : 'configure(&selected[0]);'}table[selected[0]]();}`);
+  assert.deepEqual(inferred(index, 'run').map(group => group.name), ['second']);
+  assert.ok(inferred(index, 'run').every(group => group.sites.every(site => site.inference?.incomplete === false)));
+});

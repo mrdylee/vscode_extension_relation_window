@@ -216,7 +216,7 @@ test('discarded derived responses are retried until the caller acknowledges them
   } finally { await worker.terminate(); }
 });
 
-test('Worker keeps region-limit warnings scoped while transferring affected callback uncertainty', async () => {
+for (const limit of ['region', 'mutation']) test(`Worker scopes ${limit}-limit warnings while transferring affected callback uncertainty`, async () => {
   const worker = new Worker(path.resolve('dist/analysis-worker.cjs'), { workerData: { assets: path.resolve('dist') } });
   let serial = 0; const pending = new Map();
   worker.on('message', message => {
@@ -229,20 +229,20 @@ test('Worker keeps region-limit warnings scoped while transferring affected call
     return { id, result: new Promise((resolve, reject) => { pending.set(id, { resolve, reject }); worker.postMessage({ ...data, id }); }) };
   };
   try {
-    const fields = Array.from({ length: 257 }, (_, n) => `int status${n};`).join('');
-    const escapes = Array.from({ length: 257 }, (_, n) => `opaque(&data.status${n});`).join('');
+    const fields = Array.from({ length: 257 }, (_, n) => `CB status${n};`).join('');
+    const changes = Array.from({ length: 257 }, (_, n) => limit === 'region' ? `opaque(&data.status${n});` : `data.status${n}=target;`).join('');
     const uri = 'file:///limits.c';
     const source = request({ uri, skip: true, text: `typedef void(*CB)(void);static void target(void){}struct Ops{CB cb;};
       static const struct Ops registered={.cb=target};static const struct Ops *active;static CB selected;
       static const struct Ops* get_ops(void){return &registered;}
       static void init(const struct Ops*p){active=p;}void setup(void){init(get_ops());}
       struct Data{${fields}};static struct Data data;void opaque(void*);
-      static void heavy(void){${escapes}opaque(&selected);}
+      static void heavy(void){${changes}${limit === 'region' ? 'opaque(&selected);' : 'selected=target;'}}
       void run(void){selected=target;heavy();active->cb();selected();}` });
     await source.result;
     const result = await request({ type: 'derive', versions: [[uri, source.id, -source.id]], analyzeCallbacks: true }).result;
     const file = result.files.find(file => file.uri === uri);
-    assert.ok(file.callbackDiagnostics.some(detail => detail.message.includes('region limit')));
+    assert.ok(file.callbackDiagnostics.some(detail => detail.message.includes(limit + ' limit')));
     const normal = file.references.filter(ref => ref.callKind === 'inferred' && ref.inference?.expression === 'active->cb');
     assert.equal(normal.length, 1);
     assert.equal(normal[0].inference.incomplete, false);
