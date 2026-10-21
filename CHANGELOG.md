@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.56 — 2026-10-21
+
+- Ship the callback and Copilot fixes below. Correct the new progress test to
+  use dependency WASM files without requiring a previous local build. The
+  v0.1.55 CI gate caught this test setup issue; no v0.1.55 release was published.
+
 ## 0.1.55 — 2026-10-21
 
 - Preserve simple explicit callback registrations and exact local pointer aliases

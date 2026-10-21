@@ -108,3 +108,15 @@ cover the escapes without expanding the fallback to pointer-to-pointer inference
 
 Actual user Windows source and live Copilot responses remain unverified. The
 existing macro and full callback propagation limits were not raised or removed.
+
+### Clean-checkout correction: 0.1.56
+
+The v0.1.55 tag run failed before publication: the two new progress tests loaded
+WASM from `dist/`, which existed locally but not before the CI unit-test step.
+All three operating systems reported the same missing-file setup failure (348
+passed, two hook failures). The tests now use dependency WASM paths, as the other
+analyzer unit suites do. All 350 tests then passed in an archive checkout with no
+`dist/` directory. The v0.1.56 package differs only in version metadata, the
+displayed version string and the changelog; runtime code otherwise matches the
+locally tested v0.1.55 package. The failed
+tag is retained, and the corrected release uses v0.1.56.

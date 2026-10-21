@@ -7,7 +7,7 @@ import { createAnalyzer } from '../src/analyzer';
 import { CopilotCallbackController, CopilotSnapshot } from '../src/copilot-callbacks';
 
 let analyzer: Awaited<ReturnType<typeof createAnalyzer>>;
-before(async () => { analyzer = await createAnalyzer(path.resolve('dist/web-tree-sitter.wasm'), path.resolve('dist/tree-sitter-c.wasm')); });
+before(async () => { analyzer = await createAnalyzer(path.resolve('node_modules/web-tree-sitter/web-tree-sitter.wasm'), path.resolve('node_modules/tree-sitter-c/tree-sitter-c.wasm')); });
 function snapshot(count = 7): CopilotSnapshot {
   const text = 'struct Ops {void(*cb)(void);};' + Array.from({length:count}, (_, n) => `void run${n}(struct Ops*p){p->cb();}`).join('');
   return {generation:1,settingsKey:'off-mode',files:[analyzer.analyze('file:///progress.c',text)]};
