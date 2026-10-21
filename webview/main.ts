@@ -1,5 +1,6 @@
 import type { Access, GraphNode, Kind } from '../src/model';
 import type { ViewState } from '../src/view-state';
+import type { Diagnostics } from '../src/diagnostics';
 import { highlightC } from '../src/syntax';
 import { createDiagnostics } from './diagnostics';
 declare const __EXTENSION_VERSION__: string;
@@ -31,6 +32,20 @@ graph.addEventListener('dblclick', event => {
 const graphHeader = el('div', 'pane-heading');
 const candidates = el('div', 'candidates');
 const footer = el('footer');
+const copilotProgress = el('div', 'copilot-progress'); copilotProgress.hidden = true;
+function renderCopilot(ai: Diagnostics['copilot']) {
+  copilotProgress.hidden = !ai;
+  copilotProgress.replaceChildren();
+  if (!ai) return;
+  const total = ai.total ?? 0, completed = ai.completed ?? 0;
+  const busy = ['analyzing', 'restoring-cache', 'waiting-for-saved-index'].includes(ai.state);
+  const ready = ai.state === 'ready';
+  const state = ready ? total ? 'All detected sites processed' : 'No unresolved callback sites detected' : ai.state.replaceAll('-', ' ');
+  copilotProgress.append(el('span', '', `Copilot: ${state} · ${completed}/${total} processed · Remaining: ${ai.remaining} · Failed: ${ai.failures}`));
+  if (total) copilotProgress.append(el('span', 'muted', `Candidates: ${ai.candidates} · No candidate in supplied context: ${ai.notFound} · Context limited: ${ai.contextLimited}`));
+  copilotProgress.title = 'Coverage of detected callback sites in the current saved index. Failed sites remain pending. Processing every site does not prove every runtime target was found.';
+  if (ai.remaining > 0 && !busy) copilotProgress.append(button('Analyze next 5', () => send('copilotAnalyze'), 'Analyze up to 5 pending callback sites with Copilot'));
+}
 const divider = el('div', 'divider'); divider.tabIndex = 0;
 divider.setAttribute('role', 'separator'); divider.setAttribute('aria-label', 'Context width'); divider.setAttribute('aria-orientation', 'vertical');
 let split = 42;
@@ -199,6 +214,7 @@ function showDetails(node: GraphNode, anchor: HTMLButtonElement) {
   if (node.cycle) popup.append(el('div', 'condition detail-warning', 'Recursion: further expansion stopped on this path.'));
   if (node.ambiguous) popup.append(el('div', 'condition detail-warning', 'Candidate: inferred targets, conditions or multiple definitions prevent a unique match.'));
   if (node.sites.some(site => site.callKind === 'ai-candidate')) popup.append(el('div', 'condition detail-warning', 'Copilot candidate: source evidence suggests a possible callback target. This is not proof of invocation.'));
+  if (node.sites.some(site => site.callKind === 'registered')) popup.append(el('div', 'condition detail-warning', 'Registered candidate: an explicit registration and local alias suggest this callback target. This is not proof of invocation.'));
   if (node.callKind === 'macro') popup.append(el('div', 'condition detail-warning', 'Macro invocation: expansion is unavailable, incomplete, or leaves this recursive call.'));
   if (node.callKind === 'indirect') popup.append(el('div', 'condition detail-warning', 'Indirect call: the runtime function target has not been resolved.'));
   if (node.callKind === 'unresolved') popup.append(el('div', 'condition detail-warning', 'Unresolved call: no matching function or macro was found in the analyzed scope.'));
@@ -211,7 +227,7 @@ function showDetails(node: GraphNode, anchor: HTMLButtonElement) {
       popup.append(el('div', 'condition', 'Passing a function does not prove that the receiving code invokes it.'));
     }
     if (site.inference) {
-      popup.append(el('strong', 'detail-label', `${site.callKind === 'ai-candidate' ? 'Copilot candidate' : site.argument ? 'Argument value' : 'Inferred call'} · ${site.inference.expression}`));
+      popup.append(el('strong', 'detail-label', `${site.callKind === 'ai-candidate' ? 'Copilot candidate' : site.callKind === 'registered' ? 'Registered candidate' : site.argument ? 'Argument value' : 'Inferred call'} · ${site.inference.expression}`));
       popup.append(condition(site.inference.expression));
       if (site.inference.incomplete) popup.append(el('div', 'condition detail-warning', 'Other targets may exist. ' + site.inference.reasons.join(' · ')));
       for (const [i, frame] of site.inference.evidence.entries()) {
@@ -264,6 +280,7 @@ function drawNode(node: GraphNode): HTMLElement {
   title.dataset.preview = openId;
   title.append(icon(node), el('span', 'symbol-name', node.symbolId ? node.name : node.sites[0]?.name ?? node.name));
   if (node.sites.some(site => site.callKind === 'ai-candidate')) title.append(el('span', 'badge', 'AI candidate'));
+  if (node.sites.some(site => site.callKind === 'registered')) title.append(el('span', 'badge', 'Registered candidate'));
   const accesses = [...new Set(node.sites.flatMap(site => site.access ? [site.access] : []))];
   for (const access of accesses) title.append(accessBadge(access, true));
   const status = [node.cycle ? 'Recursive' : '', node.ambiguous ? 'Candidate' : '', node.callKind === 'indirect' ? 'Indirect call' : node.callKind === 'unresolved' ? 'Unresolved call' : '', node.conditions.length || node.sites.some(s => s.conditions.length) ? 'Conditional' : ''].filter(Boolean).join(', ');
@@ -450,6 +467,7 @@ function render(state: ViewState) {
   graph.querySelectorAll<HTMLElement>('.node-title').forEach(title => title.classList.toggle('selected', title.dataset.preview === `${preview?.location.uri}#${preview?.location.start}` || title.dataset.preview === `${preview?.location.uri}@${preview?.location.start}`));
   footer.replaceChildren(el('span', '', `${state.status} · ${state.fileCount} files`), el('span', 'muted', 'Space Details · → Expand · ← Collapse · Shift+→ Levels · Enter Open source'));
   footer.append(button('Diagnostics', () => diagnostics?.open(), 'Show memory measurements for a screenshot'));
+  footer.append(copilotProgress); renderCopilot(state.diagnostics?.copilot);
   diagnostics?.update(state.diagnostics, state);
   if (state.graph?.truncated) footer.append(el('span', 'warning', 'Limited to 300 nodes'));
   if (state.issues.length) {
@@ -457,7 +475,7 @@ function render(state: ViewState) {
   }
 }
 window.addEventListener('message', event => {
-  if (event.data?.type === 'diagnostics') diagnostics?.update(event.data.diagnostics);
+  if (event.data?.type === 'diagnostics') { diagnostics?.update(event.data.diagnostics); renderCopilot(event.data.diagnostics?.copilot); }
   if (event.data?.type === 'state' && !contextOnly) render(event.data.state);
   if (event.data?.type === 'context' && contextOnly) renderContext(event.data.context);
 });

@@ -68,7 +68,8 @@ Agent search. It selects bounded source evidence from the local index.
 - Saved changes can analyze unresolved callbacks, up to five new requests per
   batch. No requests are made during unsaved editing. Diagnostics shows requests,
   cache hits, pending callbacks and failures.
-- Run **Analyze Callbacks with Copilot** again for remaining callbacks. Run
+- Use **Analyze next 5** in the footer, or run **Analyze Callbacks with Copilot**
+  again, for remaining callbacks. Run
   **Reanalyze Callback Candidates with Copilot** to bypass valid AI results for
   a bounded batch. Normal Rebuild does not force AI requests.
 - Source, relevant search results, settings, model and prompt versions determine
@@ -76,6 +77,13 @@ Agent search. It selects bounded source evidence from the local index.
 - **AI candidate** labels appear in Callers, Callees and both mode. Their details
   link to source evidence. They are suggestions, never proof of invocation. An
   empty answer means no candidate was found in the supplied bounded context.
+
+The Copilot footer shows processed/detected call sites, remaining sites, failures,
+candidate count, **No candidate in supplied context**, and **Context limited**.
+**Index ready** describes local indexing only. **All detected sites processed**
+means the detected unresolved call sites have been processed; it does not mean
+every source path or callback target was found. An empty bounded-context answer
+can count as processed while still leaving a callback unresolved.
 
 Local index records contain source and analysis data. AI cache records contain
 validated result identifiers and hashes, not source prompts. Both live in workspace
@@ -252,10 +260,15 @@ JSON setting: `"dynsight.includeFunctionArguments": true`.
 ### Callback analysis (separate option)
 
 **Settings → Analyze Callbacks** (`dynsight.analyzeCallbacks`, default **on**)
-controls function-pointer and structure callback target inference in Callers,
-Callees and Callers & Callees. It also controls callback candidate selection when
-clicking a callback call site. With it off, member clicks use ordinary variable
-navigation and indirect calls can remain unresolved.
+controls full function-pointer and structure callback propagation in Callers,
+Callees and Callers & Callees. With it off, a conservative **Registered candidate**
+pass still uses global designated initializers such as `.cb = target`, direct writes
+within the same function, and exact-object local pointer aliases such as
+`p = &table; p->cb()`. Alias chains are limited to 16 steps. This fallback does not
+infer through branches, loops, getter returns or interprocedural forwarding.
+Registered candidates are evidence of registration, not proof of runtime invocation;
+unresolved call sites remain visible. Clicking a call site can still open registered
+or Copilot candidates when static propagation is off.
 
 This is separate from **Include Function Arguments**. Turning callback analysis
 off skips propagation, while direct calls, macro expansion and literal function

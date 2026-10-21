@@ -618,6 +618,25 @@ export async function run() {
   await vscode.workspace.fs.delete(pointerUri);
   await new Promise(resolve=>setTimeout(resolve,500)); await api.workspace.whenIdle();
   assert.equal(api.workspace.index.symbols().some((symbol:any)=>symbol.name==='pointer_target'),false);
+  const registeredUri = vscode.Uri.joinPath(root, 'registered-review.c');
+  const registeredSource = 'void registered_target(void){}struct Registered{void(*cb_preprocess)(void);};' +
+    'static const struct Registered bbb={.cb_preprocess=registered_target};' +
+    'void registered_run(void){const struct Registered *ccc=&bbb;ccc->cb_preprocess();}';
+  await vscode.workspace.getConfiguration('dynsight').update('analyzeCallbacks', false, vscode.ConfigurationTarget.Workspace);
+  await vscode.workspace.fs.writeFile(registeredUri, Buffer.from(registeredSource));
+  await new Promise(resolve => setTimeout(resolve, 500)); await api.workspace.whenIdle();
+  const registeredDocument = await vscode.workspace.openTextDocument(registeredUri);
+  const registeredEditor = await vscode.window.showTextDocument(registeredDocument);
+  const registeredPosition = registeredDocument.positionAt(registeredSource.indexOf('ccc->cb_preprocess') + 5);
+  registeredEditor.selection = new vscode.Selection(registeredPosition, registeredPosition);
+  api.view.track(registeredEditor, true);
+  assert.equal(api.view.state.analyzeCallbacks, false);
+  assert.deepEqual(api.view.state.callback?.targets.map((symbol: any) => symbol.name), ['registered_target'], 'static OFF exposes explicit registrations at the actual call site');
+  await api.view.handleMessage({ type: 'choose', id: api.view.state.callback.targets[0].id });
+  assert.equal(api.view.state.graph.root.name, 'registered_target');
+  await vscode.workspace.fs.delete(registeredUri);
+  await vscode.workspace.getConfiguration('dynsight').update('analyzeCallbacks', true, vscode.ConfigurationTarget.Workspace);
+  await new Promise(resolve => setTimeout(resolve, 500)); await api.workspace.whenIdle();
   const sparseUri = vscode.Uri.joinPath(root, 'callback-effects.c');
   const sparseSource = 'typedef void(*SparseCB)(void);void sparse_target(void){}' +
     'struct Sparse{' + Array.from({length:270},(_,n)=>`unsigned status${n};`).join('') + 'SparseCB cb;};static struct Sparse sparse;' +

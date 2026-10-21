@@ -15,7 +15,7 @@ class Emitter {
   event = (listener: (...args: any[]) => void) => { this.listeners.add(listener); return { dispose: () => this.listeners.delete(listener) }; };
   fire(value?: any) { for (const listener of this.listeners) listener(value); }
 }
-async function harness(denied=false) {
+async function harness(denied=false, timeoutMs?:number) {
   const storage=await mkdtemp(path.join(tmpdir(),'dynsight-service-'));
   const parser=await createAnalyzer(path.resolve('node_modules/web-tree-sitter/web-tree-sitter.wasm'),path.resolve('node_modules/tree-sitter-c/tree-sitter-c.wasm'));
   const file=parser.analyze('file:///example.c','struct Ops{void(*cb_complete)(void);};void run(struct Ops*p){p->cb_complete();}'+(denied?'void run2(struct Ops*p){p->cb_complete();}':''));
@@ -23,17 +23,20 @@ async function harness(denied=false) {
   const calls:string[]=[],queries:unknown[]=[],messages:string[]=[];
   const commands=new Map<string,(...args:any[])=>Promise<void>>(),settings=new Emitter(),state=new Map<string,unknown>();
   const permissions=new Map<string,boolean>();let pick='model-a',pickCount=0;
-  let held: {id:string; started:()=>void; promise:Promise<void>} | undefined;
+  let held: {id:string; phase:string; started:()=>void; promise:Promise<void>} | undefined;
+  async function waitHeld(id:string,phase:string) {
+    if(held?.id===id && held.phase===phase){const waiting=held;held=undefined;waiting.started();await waiting.promise;}
+  }
   const tokens:{cancelled:boolean}[]=[];
   const models=['model-a','model-b'].map(id=>({id,vendor:'copilot',name:id,family:'test',version:'1',maxInputTokens:64000,
-    countTokens:async()=>100,sendRequest:async(_messages:unknown,_options:unknown,token:{cancelled:boolean})=>{
+    countTokens:async()=>{await waitHeld(id,'countTokens');return 100;},sendRequest:async(_messages:unknown,_options:unknown,token:{cancelled:boolean})=>{
       calls.push(id);permissions.set(id,!denied);if(denied)throw new Error('Access denied');
-      tokens.push(token);if(held?.id===id){const waiting=held;held=undefined;waiting.started();await waiting.promise;}
-      return{text:(async function*(){yield'{"status":"not-found","candidates":[]}';})()};
+      tokens.push(token);await waitHeld(id,'sendRequest');
+      return{text:(async function*(){await waitHeld(id,'stream');yield'{"status":"not-found","candidates":[]}';})()};
     }}));
   let available=models;
   async function update(key:string,value:unknown){config.set(key,value);settings.fire({affectsConfiguration:(name:string)=>name===`dynsight.${key}`});}
-  const vscode={lm:{selectChatModels:async(selector:unknown)=>{queries.push(selector);return available;}},
+  const vscode={lm:{selectChatModels:async(selector:{id?:string})=>{queries.push(selector);if(selector.id)await waitHeld(selector.id,'discovery');return available;}},
     commands:{registerCommand:(id:string,command:any)=>{commands.set(id,command);return{dispose(){}};}},
     workspace:{isTrusted:true,getConfiguration:()=>({get:(key:string,fallback:unknown)=>config.get(key)??fallback,update}),onDidChangeConfiguration:settings.event},
     ConfigurationTarget:{Workspace:2},window:{showQuickPick:async(items:any[])=>{pickCount++;return items.find(item=>item.value.id===pick);},showErrorMessage:async(value:string)=>{messages.push(value);},showInformationMessage:async(value:string)=>{messages.push(value);}},
@@ -44,9 +47,9 @@ async function harness(denied=false) {
     sourceChanged:new Emitter(),settled:new Emitter(),changed:new Emitter(),diagnosticsChanged:new Emitter(),whenIdle:async()=>{},copilotDiagnostics:undefined as any};
   workspace.index.update(file);
   function stop(){for(const item of context.subscriptions.splice(0))item.dispose();}
-  function start(){const module={exports:{}as any};runInNewContext(bundle,{module,exports:module.exports,process,Buffer,URL,AbortController,setTimeout,clearTimeout,setImmediate,require:(name:string)=>name==='vscode'?vscode:require(name)});return module.exports.registerCopilotCallbacks(context,workspace);}
+  function start(){const module={exports:{}as any};runInNewContext(bundle,{module,exports:module.exports,process,Buffer,URL,AbortController,setTimeout:(fn:()=>void,ms:number)=>setTimeout(fn,ms===60_000&&timeoutMs!==undefined?timeoutMs:ms),clearTimeout,setImmediate,require:(name:string)=>name==='vscode'?vscode:require(name)});return module.exports.registerCopilotCallbacks(context,workspace);}
   return{start,stop,config,commands,calls,queries,messages,workspace,update,state,tokens,
-    holdNext:(id:string)=>{let release!:()=>void,started!:()=>void;const observed=new Promise<void>(done=>{started=done;});const promise=new Promise<void>(done=>{release=done;});held={id,started,promise};return{started:observed,release};},
+    holdNext:(id:string,phase='sendRequest')=>{let release!:()=>void,reject!:(error:Error)=>void,started!:()=>void;const observed=new Promise<void>(done=>{started=done;});const promise=new Promise<void>((done,fail)=>{release=done;reject=fail;});held={id,phase,started,promise};return{started:observed,release,reject};},
     pick:(id:string)=>{pick=id;},pickCount:()=>pickCount,available:(ids:string[])=>{available=models.filter(model=>ids.includes(model.id));},
     dispose:async()=>{stop();await rm(storage,{recursive:true,force:true});}};
 }
@@ -101,4 +104,75 @@ test('changing the model cancels an active request and discards the old response
   await h.commands.get('dynsight.analyzeCallbacksWithCopilot')!();assert.deepEqual(h.calls,['model-a','model-b']);
   h.pick('model-a');await h.commands.get('dynsight.selectCopilotModel')!();assert.equal(h.workspace.copilotDiagnostics.cacheHits,0);
   await h.commands.get('dynsight.analyzeCallbacksWithCopilot')!();assert.deepEqual(h.calls,['model-a','model-b','model-a']);
+});
+
+test('Copilot progress is visible during a request and source changes clear completion',async t=>{
+  const h=await harness();t.after(h.dispose);await h.start().ready;
+  const held=h.holdNext('model-a'), pending=h.commands.get('dynsight.analyzeCallbacksWithCopilot')!();
+  await held.started;
+  try {
+    assert.equal(h.workspace.copilotDiagnostics.state,'analyzing');
+    assert.equal(h.workspace.copilotDiagnostics.total,1);
+    assert.equal(h.workspace.copilotDiagnostics.completed,0);
+    assert.equal(h.workspace.copilotDiagnostics.remaining,1);
+  } finally { held.release(); }
+  await pending;
+  assert.equal(h.workspace.copilotDiagnostics.completed,1);
+  assert.equal(h.workspace.copilotDiagnostics.notFound,1);
+  h.workspace.hasDirtySources=true;h.workspace.sourceChanged.fire('editor-change');
+  assert.equal(h.workspace.copilotDiagnostics.state,'waiting-for-saved-index');
+  assert.equal(h.workspace.copilotDiagnostics.completed,0);
+  assert.equal(h.workspace.copilotDiagnostics.total,0);
+});
+
+for(const phase of ['countTokens','sendRequest','stream'])test(`model picker cancels a held ${phase} without waiting for the provider`,async t=>{
+  const h=await harness();t.after(h.dispose);await h.start().ready;
+  const held=h.holdNext('model-a',phase),pending=h.commands.get('dynsight.analyzeCallbacksWithCopilot')!();
+  await held.started;h.pick('model-b');
+  const selecting=h.commands.get('dynsight.selectCopilotModel')!();
+  let timer:ReturnType<typeof setTimeout>|undefined;
+  try {
+    const finished=await Promise.race([selecting.then(()=>true),new Promise<boolean>(resolve=>{timer=setTimeout(()=>resolve(false),250);})]);
+    assert.equal(finished,true,'the previous provider must not block model selection after cancellation');
+    assert.equal(h.config.get('copilotModel'),'model-b');
+    assert.equal(h.workspace.copilotDiagnostics.state,'more-callbacks-available');
+  } finally {clearTimeout(timer);held.reject(new Error('late provider rejection'));await pending;await selecting;}
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(h.config.get('copilotModel'),'model-b');
+  assert.equal(h.workspace.copilotDiagnostics.failures,0,'a stale rejection must not replace the new model state');
+});
+
+for(const phase of ['countTokens','sendRequest','stream'])test(`provider timeout settles a held ${phase} even when cancellation is ignored`,async t=>{
+  const h=await harness(false,20);t.after(h.dispose);await h.start().ready;
+  const held=h.holdNext('model-a',phase),pending=h.commands.get('dynsight.analyzeCallbacksWithCopilot')!();
+  await held.started;let timer:ReturnType<typeof setTimeout>|undefined;
+  try {
+    const finished=await Promise.race([pending.then(()=>true),new Promise<boolean>(resolve=>{timer=setTimeout(()=>resolve(false),250);})]);
+    assert.equal(finished,true,'the timeout must reject the provider wait, not only cancel its token');
+    if(phase!=='countTokens')assert.equal(h.tokens[0].cancelled,true);
+    assert.equal(h.workspace.copilotDiagnostics.state,'request-failed');
+    assert.equal(h.workspace.copilotDiagnostics.failures,1);
+    assert.equal(h.workspace.copilotDiagnostics.completed,0);
+  } finally {clearTimeout(timer);held.release();await pending;}
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(h.calls.length,phase==='countTokens'?0:1,'a timed-out token count must not start a late request');
+  assert.equal(h.workspace.copilotDiagnostics.completed,0,'a late timeout response is not accepted');
+});
+
+test('model picker cancels provider model discovery after restart',async t=>{
+  const h=await harness();t.after(h.dispose);await h.start().ready;
+  await h.commands.get('dynsight.analyzeCallbacksWithCopilot')!();
+  h.stop();await h.start().ready;
+  const held=h.holdNext('model-a','discovery');
+  h.workspace.analysisKey='changed';h.workspace.generation++;h.workspace.sourceChanged.fire('editor-save');
+  await held.started;h.pick('model-b');
+  const selecting=h.commands.get('dynsight.selectCopilotModel')!();let timer:ReturnType<typeof setTimeout>|undefined;
+  try {
+    const finished=await Promise.race([selecting.then(()=>true),new Promise<boolean>(resolve=>{timer=setTimeout(()=>resolve(false),250);})]);
+    assert.equal(finished,true,'provider discovery must not block switching models');
+    assert.equal(h.config.get('copilotModel'),'model-b');
+  } finally {clearTimeout(timer);held.release();await selecting;}
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(h.calls,['model-a'],'late discovery must not request analysis with the old model');
+  assert.equal(h.workspace.copilotDiagnostics.state,'more-callbacks-available');
 });

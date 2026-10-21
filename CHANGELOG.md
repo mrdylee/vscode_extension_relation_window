@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.55 — 2026-10-21
+
+- Preserve simple explicit callback registrations and exact local pointer aliases
+  as Registered candidates when full static propagation is disabled or incomplete.
+  Keep evidence and unresolved calls; do not raise the existing analysis limits.
+- Include typed plain function-pointer calls in Copilot analysis and allow known
+  registered/AI candidates to be selected with static callback analysis off.
+- Show Copilot processed/total, remaining, failures and bounded-context outcomes
+  separately from Index ready, with an Analyze next 5 action.
+- Let model changes cancel a provider that ignores cancellation. Enforce the
+  existing 60-second deadline across discovery, token counting, requests and
+  streaming; discard late results without affecting the new model.
+- Replace repeated reference scans when restoring cached candidates with per-file
+  lookups. Model selection alone and normal Rebuild still make no new AI requests.
+
 ## 0.1.53 — 2026-10-21
 
 - Exclude proven unread scalar fields from callback mutation summaries. Retain

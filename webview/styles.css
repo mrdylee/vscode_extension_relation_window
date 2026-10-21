@@ -34,6 +34,8 @@ button[aria-pressed=true] { border-color: var(--accent); color: var(--accent); }
 .callback-candidates { flex-wrap: wrap; }.callback-note { flex-basis: 100%; overflow-wrap: anywhere; }
 .callback-diagnosis { flex-basis: 100%; overflow-wrap: anywhere; max-height: 160px; overflow: auto; }.callback-diagnosis summary { cursor: pointer; }
 footer { display: flex; gap: 14px; flex-wrap: wrap; padding: 7px 12px; border-top: 1px solid var(--border); font-size: 10px; } footer > .muted { margin-left: auto; }.warning { color: var(--vscode-editorWarning-foreground, #d6b36a); }details pre { max-height: 130px; overflow: auto; white-space: pre-wrap; }
+.copilot-progress { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.copilot-progress[hidden] { display: none; }
 @media (max-width: 640px) { .panes { grid-template-columns: 1fr; grid-template-rows: 45% 55%; }.divider { display: none; }.context { border-right: 0; border-bottom: 1px solid var(--border); }.brand { display: none; }.skip { margin-left: 0; } }
 
 .node-title.selected { background: var(--vscode-editor-selectionBackground, #284668); }

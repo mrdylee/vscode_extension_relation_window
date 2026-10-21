@@ -76,6 +76,20 @@ try {
   });
   await page.goto(`http://127.0.0.1:${server.address().port}`);
   await page.locator('[data-node-name="check_fault"]').waitFor({ timeout: 3000 });
+  const aiDiagnostics = { environment:'test', host:{at:Date.now(),heapUsed:1,heapLimit:100,external:0},
+    copilot:{state:'more-callbacks-available',total:7,completed:5,requests:5,cacheHits:0,remaining:2,failures:0,candidates:0,notFound:5,contextLimited:1} };
+  await page.locator('.graph > .branch').evaluate(node=>{node.dataset.aiProgress='retained';});
+  await page.evaluate(diagnostics=>window.dispatchEvent(new MessageEvent('message',{data:{type:'diagnostics',diagnostics}})),aiDiagnostics);
+  assert.equal(await page.locator('.copilot-progress').count(),1,'AI progress must be visible outside Diagnostics');
+  assert.match(await page.locator('.copilot-progress').textContent(),/5\/7 processed.*Remaining: 2/);
+  assert.equal(await page.locator('.graph > .branch').getAttribute('data-ai-progress'),'retained','progress does not rerender the graph');
+  await page.getByRole('button',{name:'Analyze next 5',exact:true}).click();
+  assert.ok(await page.evaluate(()=>window.sent.some(m=>m.type==='copilotAnalyze')));
+  Object.assign(aiDiagnostics.copilot,{state:'ready',completed:7,remaining:0,notFound:7});
+  await page.evaluate(diagnostics=>window.dispatchEvent(new MessageEvent('message',{data:{type:'diagnostics',diagnostics}})),aiDiagnostics);
+  assert.match(await page.locator('.copilot-progress').textContent(),/All detected sites processed.*7\/7/);
+  assert.match(await page.locator('.copilot-progress').textContent(),/No candidate in supplied context: 7/);
+  assert.equal(await page.getByRole('button',{name:'Analyze next 5',exact:true}).count(),0);
   assert.equal(await page.locator('option[value="both"]').textContent(), 'Callers & Callees');
   await page.getByRole('button', { name: 'Settings', exact: true }).click({ timeout: 3000 });
   assert.ok(await page.evaluate(() => window.sent.some(m => m.type === 'settings')), 'Settings button requests scope configuration');
@@ -354,6 +368,14 @@ try {
   assert.ok((await popup.textContent()).includes('This is not proof of invocation.'));
   assert.ok((await popup.textContent()).includes('Copilot candidate · callbacks.run'));
   await page.screenshot({ path: 'output/playwright/copilot-candidates.png', fullPage: true });
+  await page.keyboard.press('Escape');
+  aiTarget.callKind = 'registered'; aiTarget.sites.forEach(site => site.callKind = 'registered');
+  await configure({ graph: aiGraph });
+  assert.ok((await pointerTarget.textContent()).includes('Registered candidate'));
+  await pointerTarget.focus(); await pointerTarget.press('Space');
+  assert.ok((await popup.textContent()).includes('Registered candidate · callbacks.run'));
+  assert.ok((await popup.textContent()).includes('This is not proof of invocation.'));
+  assert.ok(await popup.locator('.evidence').count());
   await page.keyboard.press('Escape');
   preview(fixture.pointerGraph.root.children.find(node => node.name === 'callback_target').sites[0].id);
   await configure({ graph: undefined, callback: fixture.callback });

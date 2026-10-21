@@ -4,6 +4,7 @@ import { aggregateId, declaredType, declarator, initializerMember, typedExpressi
 import { clearMacroCache, deriveMacroCalls } from './project-analysis';
 import { flowFacts } from './flow-parser';
 import { clearPointerCache, inferPointerCalls } from './pointer-targets';
+import { suggestExplicitCallbacks } from './explicit-callbacks';
 
 function ancestor(node: Node, type: string): Node | null {
   for (let current = node.parent; current; current = current.parent) if (current.type === type) return current;
@@ -298,7 +299,8 @@ export async function createAnalyzer(runtime: string, grammar: string) {
     phase?.('macros');
     const expanded = deriveMacroCalls(files, analyzer.analyze, analyzer.calls, analyzer.initializer, memoryPressure, analyzeCallbacks);
     phase?.('callbacks');
-    return inferPointerCalls(expanded, memoryPressure, analyzer.analyze, analyzeCallbacks);
+    const derived = inferPointerCalls(expanded, memoryPressure, analyzer.analyze, analyzeCallbacks);
+    return memoryPressure?.() ? derived : suggestExplicitCallbacks(files, derived);
   } };
   return analyzer;
 }

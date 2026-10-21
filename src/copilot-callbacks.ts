@@ -9,8 +9,9 @@ export interface CallbackHint {
   key: string; callsite: Location; expression: string; status: 'candidates' | 'not-found';
   candidates: {targetId: string; evidence: Location[]; reason: string}[]; cached: boolean; contextLimited?: boolean;
 }
-export interface CopilotRunResult { hints: CallbackHint[]; requested: number; cached: number; remaining: number; failures: number; stale: boolean }
-interface Options { cacheDir: string; provider: CopilotProvider; isCurrent: (snapshot: CopilotSnapshot) => boolean; onHints?: (hints: CallbackHint[]) => void; maxRequests?: number }
+export interface CopilotProgress { total: number; completed: number; requested: number; cached: number; remaining: number; failures: number; candidates: number; notFound: number; contextLimited: number }
+export interface CopilotRunResult extends CopilotProgress { hints: CallbackHint[]; stale: boolean }
+interface Options { cacheDir: string; provider: CopilotProvider; isCurrent: (snapshot: CopilotSnapshot) => boolean; onHints?: (hints: CallbackHint[]) => void; onProgress?: (progress: CopilotProgress) => void; maxRequests?: number }
 const version = 'copilot-callbacks-1';
 const maxReplyBytes = 64 * 1024;
 interface Reply { status: 'candidates'|'not-found'; candidates: {targetId:string; evidenceIds:string[]; reason:string}[] }
@@ -53,9 +54,23 @@ export class CopilotCallbackController {
   private async run(snapshot: CopilotSnapshot, reason?: 'enabled'|'saved-change'|'force'): Promise<CopilotRunResult> {
     this.invalidate(); const revision = this.revision, abort = this.abort = new AbortController();
     const current = () => !this.disposed && !abort.signal.aborted && this.revision === revision && this.options.isCurrent(snapshot);
-    const result: CopilotRunResult = {hints:[],requested:0,cached:0,remaining:0,failures:0,stale:false};
+    const result: CopilotRunResult = {hints:[],total:0,completed:0,requested:0,cached:0,remaining:0,failures:0,candidates:0,notFound:0,contextLimited:0,stale:false};
     if (!current()) return {...result,stale:true};
     const builder = await prepareCallbackContexts(snapshot.files,current);
+    if (!current()) return {...result,stale:true};
+    const progress = () => {
+      if (!current()) return;
+      const { hints, stale, ...value } = result;
+      this.options.onProgress?.(value);
+    };
+    const accept = (value: CallbackHint) => {
+      result.hints.push(value); result.completed++; result.remaining--;
+      result.candidates += value.candidates.length;
+      result.notFound += Number(value.status === 'not-found');
+      result.contextLimited += Number(value.contextLimited === true);
+      progress();
+    };
+    result.total = result.remaining = builder.sites.length; progress();
     const maximum = Math.max(0,Math.min(20,Math.floor(this.options.maxRequests ?? 5)));
     if(reason === 'force') for(const site of builder.sites) {
       if(!current())break;
@@ -77,13 +92,13 @@ export class CopilotCallbackController {
       } catch { /* Missing or invalid cache is a miss, never a new request during restore. */ }
       if (!current()) { result.stale = true; break; }
       // Do not construct prompts for the unrequested remainder or cache misses on startup.
-      if (!saved && (!reason || result.requested >= maximum)) { result.remaining++; continue; }
+      if (!saved && (!reason || result.requested >= maximum)) continue;
       const context=builder.context(site);
       const digest = callbackDigest(JSON.stringify([version,this.options.provider.modelKey,snapshot.settingsKey,context.fingerprint]));
       if (saved?.digest === digest) try { reply=validate(saved.reply,context); } catch { /* Invalid evidence is a cache miss. */ }
-      if (reply) { result.cached++; result.hints.push(hint(context,reply,true)); continue; }
-      if (!reason || result.requested >= maximum) { result.remaining++; continue; }
-      result.requested++;
+      if (reply) { result.cached++; accept(hint(context,reply,true)); continue; }
+      if (!reason || result.requested >= maximum) continue;
+      result.requested++; progress();
       try {
         const request=prompt(context);
         if(Buffer.byteLength(request)>64*1024)throw new Error('Context size limit');
@@ -100,10 +115,10 @@ export class CopilotCallbackController {
         } catch { /* A storage failure must not discard a validated in-memory hint. */ }
         finally { await rm(temporary,{force:true}).catch(()=>{}); }
         if (!current()) { result.stale = true; break; }
-        result.hints.push(hint(context,reply,false));
+        accept(hint(context,reply,false));
       } catch {
         if (!current()) { result.stale = true; break; }
-        result.failures++; result.remaining++;
+        result.failures++; progress();
       }
     }
     if(reason && current()) {

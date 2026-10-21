@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { WorkspaceIndex } from './workspace';
-import { CopilotCallbackController, CopilotRunResult, CopilotSnapshot } from './copilot-callbacks';
+import { CopilotCallbackController, CopilotProgress, CopilotRunResult, CopilotSnapshot } from './copilot-callbacks';
 import { applyCallbackHints } from './copilot-relations';
 
 interface SavedModel { id: string; version: string }
@@ -12,15 +12,20 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
   let disposed = false, userAction = false, pendingChange = false, running: Promise<void> | undefined;
   let observedGeneration = -1;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const activity = { state: 'off', requests: 0, cacheHits: 0, remaining: 0, failures: 0, candidates: 0, notFound: 0, contextLimited: 0 };
+  const activity = { state: 'off', total: 0, completed: 0, requests: 0, cacheHits: 0, remaining: 0, failures: 0, candidates: 0, notFound: 0, contextLimited: 0 };
   const enabled = () => vscode.workspace.isTrusted && vscode.workspace.getConfiguration('dynsight').get('copilotCallbacks', false);
   const configuredModel = () => vscode.workspace.getConfiguration('dynsight').get('copilotModel', '').trim();
   function status(value: string) { activity.state = value; workspace.copilotDiagnostics = { ...activity }; workspace.diagnosticsChanged.fire(); }
-  function clear() { controller?.invalidate(); applyCallbackHints(workspace.index, []); workspace.changed.fire(); }
+  function clearProgress() {
+    activity.total = activity.completed = activity.cacheHits = activity.remaining = activity.failures = activity.candidates = activity.notFound = activity.contextLimited = 0;
+  }
+  function clear() {
+    controller?.invalidate(); applyCallbackHints(workspace.index, []); clearProgress();
+    status(enabled() ? 'waiting-for-saved-index' : 'off'); workspace.changed.fire();
+  }
   function resetModel() {
     clear(); controller?.dispose(); controller = undefined; model = undefined; userAction = false;
     pendingChange = false; clearTimeout(timer); observedGeneration = workspace.generation;
-    activity.cacheHits = activity.candidates = activity.notFound = activity.contextLimited = activity.remaining = 0;
   }
   function snapshot(): CopilotSnapshot {
     return { generation: workspace.generation, settingsKey: workspace.analysisKey,
@@ -34,43 +39,58 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
     controller = new CopilotCallbackController({ cacheDir: path.join(context.storageUri.fsPath, 'copilot-callbacks', cacheKey),
       isCurrent: value => !disposed && enabled() && configuredModel() === selected.id && workspace.stable && !workspace.hasDirtySources && value.generation === workspace.generation && value.settingsKey === workspace.analysisKey,
       onHints: hints => { applyCallbackHints(workspace.index, hints); workspace.changed.fire(); },
+      onProgress: value => { recordProgress(value); status(activity.state); },
       provider: { modelKey: `copilot:${selected.id}:${selected.version}`, complete: async (prompt, signal) => {
         if (!enabled() || signal.aborted) throw new Error('Cancelled');
-        const selectedModel = model?.id === selected.id && model.version === selected.version ? model :
-          (await vscode.lm.selectChatModels({ vendor: 'copilot', id: selected.id })).find(item => item.id === selected.id && item.version === selected.version);
-        if (signal.aborted || configuredModel() !== selected.id) throw new Error('Cancelled');
-        if (!selectedModel) { status('model-unavailable'); throw new Error('Copilot model unavailable'); }
-        model = selectedModel;
-        if (!userAction && context.languageModelAccessInformation?.canSendRequest(selectedModel) !== true) {
-          status('permission-required'); throw new Error('Use Analyze Callbacks with Copilot to grant access');
-        }
         const cancellation = new vscode.CancellationTokenSource();
-        const abort = () => cancellation.cancel(); signal.addEventListener('abort', abort, { once: true });
-        const timeout = setTimeout(abort, 60_000);
+        let cancelled = false, rejectWait!: (error: Error) => void;
+        const interrupted = new Promise<never>((_, reject) => { rejectWait = reject; });
+        const interrupt = (error: Error) => { cancelled = true; cancellation.cancel(); rejectWait(error); };
+        const abort = () => interrupt(new Error('Cancelled'));
+        signal.addEventListener('abort', abort, { once: true });
+        const timeout = setTimeout(() => interrupt(new Error('Callback request timed out')), 60_000);
+        const checkCancelled = () => { if (cancelled || signal.aborted || !enabled() || configuredModel() !== selected.id) throw new Error('Cancelled'); };
         try {
-          const message = vscode.LanguageModelChatMessage.User(prompt);
-          if (await selectedModel.countTokens(message, cancellation.token) > selectedModel.maxInputTokens - 1024) throw new Error('Callback context exceeds model input limit');
-          if (signal.aborted || !enabled()) throw new Error('Cancelled');
-          activity.requests++;
-          userAction = false;
-          const response = await selectedModel.sendRequest([message], {}, cancellation.token);
-          let text = '';
-          for await (const fragment of response.text) {
-            if (signal.aborted || !enabled()) throw new Error('Cancelled');
-            text += fragment;
-            if (text.length > 64 * 1024) { abort(); throw new Error('Callback response too large'); }
-          }
-          return text;
+          return await Promise.race([interrupted, (async () => {
+            checkCancelled();
+            const selectedModel = model?.id === selected.id && model.version === selected.version ? model :
+              (await vscode.lm.selectChatModels({ vendor: 'copilot', id: selected.id })).find(item => item.id === selected.id && item.version === selected.version);
+            checkCancelled();
+            if (!selectedModel) { status('model-unavailable'); throw new Error('Copilot model unavailable'); }
+            model = selectedModel;
+            if (!userAction && context.languageModelAccessInformation?.canSendRequest(selectedModel) !== true) {
+              status('permission-required'); throw new Error('Use Analyze Callbacks with Copilot to grant access');
+            }
+            const message = vscode.LanguageModelChatMessage.User(prompt);
+            const tokens = await selectedModel.countTokens(message, cancellation.token);
+            checkCancelled();
+            if (tokens > selectedModel.maxInputTokens - 1024) throw new Error('Callback context exceeds model input limit');
+            activity.requests++;
+            status(activity.state);
+            userAction = false;
+            const response = await selectedModel.sendRequest([message], {}, cancellation.token);
+            checkCancelled();
+            let text = '';
+            for await (const fragment of response.text) {
+              checkCancelled();
+              text += fragment;
+              if (text.length > 64 * 1024) { cancellation.cancel(); throw new Error('Callback response too large'); }
+            }
+            checkCancelled();
+            return text;
+          })()]);
         } finally { clearTimeout(timeout); signal.removeEventListener('abort', abort); cancellation.dispose(); }
       } } });
   }
+  function recordProgress(result: CopilotProgress) {
+    activity.total = result.total; activity.completed = result.completed; activity.cacheHits = result.cached;
+    activity.remaining = result.remaining; activity.failures = result.failures;
+    activity.candidates = result.candidates; activity.notFound = result.notFound; activity.contextLimited = result.contextLimited;
+  }
   function account(result: CopilotRunResult) {
-    activity.cacheHits = result.cached;
-    activity.remaining = result.remaining; activity.failures += result.failures;
-    activity.candidates = result.hints.reduce((count, hint) => count + hint.candidates.length, 0);
-    activity.notFound = result.hints.filter(hint => hint.status === 'not-found').length;
-    activity.contextLimited = result.hints.filter(hint => hint.contextLimited).length;
-    if (!result.stale && !['permission-required', 'model-unavailable'].includes(activity.state))
+    if (result.stale) return;
+    recordProgress(result);
+    if (!['permission-required', 'model-unavailable'].includes(activity.state))
       status(result.failures ? 'request-failed' : result.remaining ? 'more-callbacks-available' : 'ready');
     else status(activity.state);
   }
@@ -80,6 +100,7 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
     setup();
     if (!controller) { status('model-selection-required'); return; }
     if (running) return running;
+    clearProgress();
     status(reason ? 'analyzing' : 'restoring-cache');
     const active = controller;
     observedGeneration = workspace.generation;

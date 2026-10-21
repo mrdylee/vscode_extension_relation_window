@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createAnalyzer } from '../src/analyzer';
 import { CopilotCallbackController, CopilotSnapshot, CopilotProvider } from '../src/copilot-callbacks';
-import { callbackContexts } from '../src/copilot-context';
+import { callbackContexts, prepareCallbackContexts } from '../src/copilot-context';
 
 let analyzer: Awaited<ReturnType<typeof createAnalyzer>>;
 before(async () => { analyzer = await createAnalyzer(path.resolve('node_modules/web-tree-sitter/web-tree-sitter.wasm'), path.resolve('node_modules/tree-sitter-c/tree-sitter-c.wasm')); });
@@ -164,3 +164,76 @@ test('scope-limited not-found is marked and prompt size stays bounded', async ()
   const result=await c.analyzeUnresolved(many,{reason:'enabled'});
   assert.ok(size<64*1024);assert.equal(result.hints[0].contextLimited,true);
 }));
+
+test('raw identifier callback sites bind typedef, global, local and parameter declarations without static propagation', () => {
+  const s=snapshot([`typedef void(*CB)(void);typedef void FN(void);
+    void target(void){} CB global_cb=target;
+    void run(CB arg,FN function_arg){CB local=target;void(*explicit_cb)(void)=target;
+      global_cb();arg();function_arg();local();(local)();explicit_cb();}`]);
+  assert.deepEqual(callbackContexts(s.files).map(site=>site.expression),
+    ['global_cb','arg','function_arg','local','local','explicit_cb']);
+});
+
+test('raw identifier callback sites resolve types from later headers regardless of snapshot order', async () => {
+  const main=analyzer.analyze('file:///demo/main.c','#include "callbacks.h"\nvoid run(CB cb){cb();}');
+  const header=analyzer.analyze('file:///demo/callbacks.h','typedef void(*CB)(void);');
+  for(const files of [[main,header],[header,main]]) {
+    assert.deepEqual(callbackContexts(files).map(site=>site.expression),['cb']);
+    assert.deepEqual((await prepareCallbackContexts(files,()=>true)).sites.map(site=>site.expression),['cb']);
+  }
+});
+
+test('identifier binding excludes direct and unknown calls, scalar shadows and unevaluated or inactive calls', () => {
+  const s=snapshot([`typedef void(*CB)(void);void target(void){}void direct(void){}
+    void run(CB cb){cb();direct();missing();
+      {int cb=0;cb();}
+      {CB direct=target;direct();}
+      direct();sizeof(cb());
+      #if 0
+      cb();
+      #endif
+    }`]);
+  assert.deepEqual(callbackContexts(s.files).map(site=>site.expression),['cb','direct']);
+});
+
+test('fully resolved static identifier calls are not offered again to Copilot', () => {
+  const raw=analyzer.analyze('file:///demo/resolved.c','typedef void(*CB)(void);void target(void){}void run(void){CB cb=target;cb();}');
+  const files=analyzer.derive([{...raw,expandMacros:false}],()=>false,undefined,true);
+  assert.ok(files[0].references.some(call=>call.callKind==='inferred'&&!call.inference?.incomplete));
+  assert.equal(callbackContexts(files).length,0);
+});
+
+test('identifier-site discovery yields and stops when a snapshot is superseded', async () => {
+  const s=snapshot(Array.from({length:40},(_,n)=>`typedef void(*CB${n})(void);void run${n}(CB${n} cb){cb();}`));
+  let current=true, yielded=false;
+  const preparing=prepareCallbackContexts(s.files,()=>current);
+  setImmediate(()=>{yielded=true;current=false;});
+  const builder=await preparing;
+  assert.equal(yielded,true);
+  assert.ok(builder.sites.length<40,'cancelled discovery must not collect the complete stale snapshot');
+});
+
+test('raw bound identifier sites reach the provider with static propagation disabled', async () => temporary(async cacheDir => {
+  const raw=analyzer.analyze('file:///demo/plain.c','typedef void(*CB)(void);void target(void){}void run(void){CB cb=target;(cb)();}');
+  const files=analyzer.derive([{...raw,expandMacros:false}],()=>false,undefined,false);
+  const s={generation:1,settingsKey:'callbacks-off',files};let requests=0;
+  const c=controller(cacheDir,{modelKey:'model-1',complete:async prompt=>{requests++;assert.ok(prompt.includes('CB cb=target'));return validReply(s);}});
+  const result=await c.analyzeUnresolved(s,{reason:'enabled'});
+  assert.equal(requests,1);assert.equal(result.hints[0].expression,'cb');
+  assert.equal(result.hints[0].candidates[0].targetId,files[0].symbols.find(symbol=>symbol.name==='target')!.id);
+}));
+
+test('raw bbb registration and ccc member calls retain original source evidence in both contexts', () => {
+  const s=snapshot([`struct xxx{void(*cb_preprocess)(void);void(*cb_process)(void);};
+    static void example_preprocess(void){}static void example_process(void){}
+    static const struct xxx bbb={.cb_preprocess=example_preprocess,.cb_process=example_process};
+    static void run_callbacks(void){const struct xxx *ccc=&bbb;ccc->cb_preprocess();ccc->cb_process();}`]);
+  const contexts=callbackContexts(s.files);
+  assert.deepEqual(contexts.map(site=>site.expression),['ccc->cb_preprocess','ccc->cb_process']);
+  for(const context of contexts) {
+    const field=context.expression.split('->')[1], target=field.replace('cb_','example_');
+    assert.ok(context.targets.some(candidate=>candidate.name===target));
+    assert.ok(context.snippets.some(snippet=>snippet.text.includes(`.${field}=${target}`)));
+    assert.ok(context.snippets.some(snippet=>snippet.text.includes('const struct xxx *ccc=&bbb')));
+  }
+});

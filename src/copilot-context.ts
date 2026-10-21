@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { FileAnalysis, Location, ReferenceRecord, SymbolRecord } from './model';
+import { RelationIndex } from './relations';
 
 export interface CallbackContext {
   key: string; callsite: Location; expression: string; fingerprint: string;
@@ -23,8 +24,11 @@ export class CallbackContextBuilder {
   private digests = new Map<string, string>();
   private ordered = new Map<string, ReferenceRecord[]>();
   private seen = new Set<string>();
+  private bindings = new RelationIndex();
   addFile(file: FileAnalysis) {
     this.fileByUri.set(file.uri, file);
+    // Binding needs declarations/includes, not another index of every reference.
+    this.bindings.update({...file,references:[],functionArguments:undefined});
     const names = new Set<string>();
     for (const symbol of file.symbols) {
       this.symbols.set(symbol.id,symbol); names.add(symbol.name);
@@ -32,19 +36,25 @@ export class CallbackContextBuilder {
         const entries = this.definitions.get(symbol.name) ?? []; entries.push(symbol); this.definitions.set(symbol.name,entries);
       }
     }
+    for (const call of file.references) names.add(call.name);
+    for (const name of names) {
+      const entries = this.filesByName.get(name) ?? new Set<FileAnalysis>(); entries.add(file); this.filesByName.set(name,entries);
+    }
+  }
+  collectSites(file: FileAnalysis) {
     for (const call of file.references) {
-      names.add(call.name);
       // Non-evaluated expressions (sizeof, _Generic controls) have no access.
-      if (call.kind !== 'call' || !call.access || (!call.indirect && call.callKind !== 'indirect' && !call.inference?.incomplete)) continue;
+      if (call.kind !== 'call' || !call.access) continue;
       if (call.inference && !call.inference.incomplete) continue;
       if (file.inactive?.some(range => call.location.start >= range.start && call.location.start < range.end)) continue;
+      if (!call.indirect && call.callKind !== 'indirect' && !call.inference?.incomplete &&
+        !this.bindings.resolveReference(call).some(symbol=>symbol.kind==='variable' &&
+          this.bindings.layout(symbol).some(type=>type.layers[0]==='function' ||
+            (type.layers[0]==='pointer' && type.layers[1]==='function')))) continue;
       const key = `${file.uri}:${call.location.start}:${call.location.end}`;
       if (this.seen.has(key)) continue;
       this.seen.add(key);
       this.sites.push({key,file,call,expression:call.inference?.expression ?? call.name});
-    }
-    for (const name of names) {
-      const entries = this.filesByName.get(name) ?? new Set<FileAnalysis>(); entries.add(file); this.filesByName.set(name,entries);
     }
   }
   private range(file: FileAnalysis, start: number, end: number) {
@@ -125,10 +135,16 @@ export async function prepareCallbackContexts(files: readonly FileAnalysis[], cu
     if(!current())break;builder.addFile(files[n]);
     if(n%8===7)await pause();
   }
+  // A call's typedef can be declared in a header appearing later in the snapshot.
+  for(let n=0;n<files.length;n++){
+    if(!current())break;builder.collectSites(files[n]);
+    if(n%8===7)await pause();
+  }
   return builder;
 }
 /** Synchronous helper for small pure fixtures. Runtime uses the yielding builder. */
 export function callbackContexts(files:readonly FileAnalysis[]) {
   const builder=new CallbackContextBuilder();for(const file of files)builder.addFile(file);
+  for(const file of files)builder.collectSites(file);
   return builder.sites.map(site=>builder.context(site));
 }

@@ -101,7 +101,8 @@ export class RelationView implements vscode.Disposable {
     const word = editor.document.getWordRangeAtPosition(position, /[A-Za-z_][A-Za-z0-9_]*/);
     if (!word) return false;
     const uri = editor.document.uri.toString(), offset = editor.document.offsetAt(word.start);
-    const callback = this.state.analyzeCallbacks ? this.workspace.index.callbackAt(uri, offset) : undefined;
+    const foundCallback = this.workspace.index.callbackAt(uri, offset);
+    const callback = this.state.analyzeCallbacks || foundCallback?.targets.length ? foundCallback : undefined;
     if (callback) {
       if (this.callbackFocus?.uri === uri && this.callbackFocus.offset === offset && this.state.callback) return false;
       this.activity.fire('callback-selection');
@@ -208,6 +209,7 @@ export class RelationView implements vscode.Disposable {
     switch (m.type) {
       case 'diagnostics': this.workspace.refreshDiagnostics(); break;
       case 'reportIssue': await vscode.commands.executeCommand('dynsight.reportIssue'); break;
+      case 'copilotAnalyze': await vscode.commands.executeCommand('dynsight.analyzeCallbacksWithCopilot'); break;
       case 'ready': this.refresh(); this.track(vscode.window.activeTextEditor); break;
       case 'readyContext': void this.contextView?.webview.postMessage({ type: 'context', context: this.state.context }); break;
       case 'settings': await vscode.commands.executeCommand('dynsight.openSettings'); break;

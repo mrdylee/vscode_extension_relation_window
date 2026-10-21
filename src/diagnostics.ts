@@ -30,5 +30,5 @@ export interface Diagnostics {
   worker?: WorkerDiagnostics;
   workerError?: string;
   index?: IndexDiagnostics;
-  copilot?: { state: string; requests: number; cacheHits: number; remaining: number; failures: number; candidates: number; notFound: number; contextLimited: number };
+  copilot?: { state: string; total?: number; completed?: number; requests: number; cacheHits: number; remaining: number; failures: number; candidates: number; notFound: number; contextLimited: number };
 }

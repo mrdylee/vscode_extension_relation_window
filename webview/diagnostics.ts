@@ -64,9 +64,9 @@ export function createDiagnostics(version: string, refresh: () => void, reportIs
     }
     if (data.copilot) {
       const ai = data.copilot;
-      body.append(el('div', `Copilot callbacks: ${ai.state} · Requests: ${ai.requests} · Cache hits: ${ai.cacheHits} · Pending: ${ai.remaining} · Failures: ${ai.failures}`));
+      body.append(el('div', `Copilot callbacks: ${ai.state} · Processed: ${ai.completed ?? 0}/${ai.total ?? 0} · Requests this session: ${ai.requests} · Cache hits: ${ai.cacheHits} · Remaining (includes failed): ${ai.remaining} · Failures: ${ai.failures}`));
       body.append(el('div', `AI candidates: ${ai.candidates} · No candidate in supplied context: ${ai.notFound} · Context limited: ${ai.contextLimited}`));
-      body.append(el('div', 'AI candidates are suggestions. Use Analyze Callbacks with Copilot to process pending candidates; normal Rebuild preserves valid AI results.', 'diagnostics-note muted'));
+      body.append(el('div', 'Coverage is limited to detected callback sites in the saved index, not proof of all runtime targets. Use Analyze next 5 to process remaining sites; normal Rebuild preserves valid AI results.', 'diagnostics-note muted'));
     }
     if (worker) {
       const sample = worker.sample, cards = el('div', '', 'diagnostics-metrics');
