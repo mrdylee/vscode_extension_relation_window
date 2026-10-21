@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.59 — 2026-10-21
+
+- Keep unrelated callback calls complete when the ordered region summary reaches
+  its 256-object limit. Preserve the warning and track omitted storage effects
+  as bounded uncertainty through helpers, including no-argument global writes.
+- Retain project-wide uncertainty when reachable-object traversal or omitted-effect
+  tracking cannot safely describe the affected scope. Existing budgets remain.
+
 ## 0.1.58 — 2026-10-21
 
 - Ship the 0.1.57 changes below. Update the extension-host regression to expect

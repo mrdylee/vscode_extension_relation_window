@@ -9,8 +9,8 @@ interface Value {
 }
 interface Effect { value: Value; definite: boolean }
 interface OrderedChange { stamp: number; definite: boolean; exported?: boolean }
-interface Summary { params: Value[]; returns: Value; effects: Map<string, Effect>; regions: Map<string, boolean>; version: number; incomplete?: boolean }
-interface State { memory: Map<string, Value>; effects: Map<string, Effect>; alive: boolean; incomplete?: boolean; regions?: Map<string, OrderedChange>; writes?: Map<string, OrderedChange> }
+interface Summary { params: Value[]; returns: Value; effects: Map<string, Effect>; regions: Map<string, boolean>; omittedRegions?: Set<string>; version: number; incomplete?: boolean }
+interface State { memory: Map<string, Value>; effects: Map<string, Effect>; alive: boolean; incomplete?: boolean; regions?: Map<string, OrderedChange>; writes?: Map<string, OrderedChange>; omittedRegions?: Map<string, boolean> }
 interface Context { program: FlowProgram; locals: Map<string, FlowLocal>; exits: State[]; returned: Value }
 interface Observation { value: Value; expression: string; kind: 'variable' | 'unknown' }
 interface ArgumentObservation { call: Extract<Expr, { kind: 'call' }>; values: Map<number, Value> }
@@ -102,7 +102,7 @@ function covers(a: Value, b: Value) {
 }
 const joined = (a: Value, b: Value): Value => a === b || covers(a, b) ? a : covers(b, a) ? b : union(a, b);
 const clone = (s: State): State => ({ memory: new Map(s.memory), effects: new Map(s.effects), alive: s.alive, incomplete: s.incomplete,
-  regions: s.regions && new Map(s.regions), writes: s.writes && new Map(s.writes) });
+  regions: s.regions && new Map(s.regions), writes: s.writes && new Map(s.writes), omittedRegions: s.omittedRegions && new Map(s.omittedRegions) });
 function expressionText(expr: Expr): string {
   if (expr.kind === 'name') return expr.name;
   if (expr.kind === 'member') return expressionText(expr.object) + (expr.arrow ? '->' : '.') + expr.field;
@@ -168,9 +168,9 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
   const details = new Map<string, CallbackDiagnostic>();
   const omitted = new Set<string>();
   let projectIncomplete = false;
-  function notice(message: string, slots?: number) {
+  function notice(message: string, slots?: number, scoped = false) {
     notices.add(message);
-    if (!message.includes('mutation limit')) projectIncomplete = true;
+    if (!scoped && !message.includes('mutation limit')) projectIncomplete = true;
     const key = `${message}:${stage}:${activeSymbol?.id ?? ''}`;
     if (details.has(key)) return;
     if (details.size >= 64) { omitted.add(message); return; }
@@ -236,7 +236,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     }
     node.root = root;
   }
-  function matchingRegions(regions: Set<string> | Map<string, OrderedChange>, slot: string): Iterable<string> {
+  function matchingRegions(regions: Set<string> | Map<string, unknown>, slot: string): Iterable<string> {
     let index = regionRoots.get(regions);
     if (!index) {
       regionRoots.set(regions, index = { children: new Map() });
@@ -281,16 +281,28 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
         uncertain = true;
       }
     }
+    if (state.omittedRegions) for (const root of matchingRegions(state.omittedRegions, slot))
+      if (containsRegion(root, slot)) uncertain = true;
     const local = state.memory.get(slot); if (local) return uncertain ? union(local, unknown(opaqueReason)) : local;
     if (dependencies && dependencies.regions === undefined) dependencies.regions = regionRevision;
     for (const root of matchingRegions(heapRegions, slot)) if (containsRegion(root, slot)) { uncertain = true; break; }
     const value = heapValue(slot);
     return uncertain ? union(value ?? defaultValue(slot), unknown(opaqueReason)) : value;
   }
+  // Retain omitted effects as uncertainty only, without expanding the traversal
+  // or ordered-region budgets. If this bounded record fills too, fall back to
+  // project uncertainty rather than silently discarding an affected object.
+  function omitRegion(root: string, state: State, exported = true) {
+    state.omittedRegions ??= new Map();
+    if (!state.omittedRegions.has(root) && state.omittedRegions.size >= 256) { projectIncomplete = true; return; }
+    state.omittedRegions.set(root, exported || state.omittedRegions.get(root) === true);
+    registerRegion(state.omittedRegions, root);
+  }
   function markRegion(root: string, state: State, definite: boolean, exported = true) {
     state.regions ??= new Map(); state.writes ??= new Map();
     if (!state.regions.has(root) && state.regions.size >= 256) {
-      state.incomplete = true; notice('Callback region limit: 256 reachable objects; targets may be incomplete'); return;
+      state.incomplete = true; omitRegion(root, state, exported);
+      notice('Callback region limit: 256 reachable objects; targets may be incomplete', undefined, true); return;
     }
     state.regions.set(root, { stamp: ++stamp, definite, exported: exported || state.regions.get(root)?.exported === true });
     registerRegion(state.regions, root);
@@ -444,6 +456,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
         markRegion(key, result, !!a.regions?.get(key)?.definite && !!b.regions?.get(key)?.definite,
           a.regions?.get(key)?.exported === true || b.regions?.get(key)?.exported === true);
     }
+    for (const source of [a, b]) for (const [root, exported] of source.omittedRegions ?? []) omitRegion(root, result, exported);
     for (const key of new Set([...a.memory.keys(), ...b.memory.keys()])) {
       result.memory.set(key, joined(read(key, a), read(key, b)));
       result.writes?.set(key, { stamp: ++stamp, definite: true });
@@ -740,6 +753,11 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
         });
         returns.push(instantiate(target.returns, fn, args));
         const targetRegions = new Map<string, boolean>();
+        for (const root of target.omittedRegions ?? []) {
+          const part = formal(root);
+          for (const key of part?.fn === fn ? [...(args[part.index]?.objects ?? [])].map(actual => actual + part.suffix) : [root])
+            invalidate([key], state, ctx, false);
+        }
         for (const [root, definite] of target.regions) {
           const part = formal(root);
           for (const key of part?.fn === fn ? [...(args[part.index]?.objects ?? [])].map(actual => actual + part.suffix) : [root]) {
@@ -863,11 +881,23 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
       target.returns = nextReturns;
       const all = exits.length ? exits.slice(1).reduce((a, b) => joinStates(a, b), exits[0]) : undefined;
       if (all?.incomplete && !target.incomplete) { target.incomplete = true; target.version++; changed = true; }
+      function omitSummaryRegion(root: string) {
+        target.omittedRegions ??= new Set();
+        if (target.omittedRegions.has(root)) return;
+        if (target.omittedRegions.size >= 256) { projectIncomplete = true; return; }
+        target.omittedRegions.add(root); target.version++; changed = true;
+      }
+      for (const [root, exported] of all?.omittedRegions ?? []) {
+        if (exported && !list.some(program => localSlot(root, { program, locals: new Map(program.locals.map(local => [local.id, local])), exits: [], returned: blank() })))
+          omitSummaryRegion(root);
+      }
       for (const [root, change] of all?.regions ?? []) {
         if (!change.exported) continue;
         if (list.some(program => localSlot(root, { program, locals: new Map(program.locals.map(local => [local.id, local])), exits: [], returned: blank() }))) continue;
         if (target.regions.get(root) !== change.definite) {
-          if (!target.regions.has(root) && target.regions.size >= 256) { notice('Callback region limit: 256 reachable objects; targets may be incomplete'); target.incomplete = true; continue; }
+          if (!target.regions.has(root) && target.regions.size >= 256) {
+            omitSummaryRegion(root); notice('Callback region limit: 256 reachable objects; targets may be incomplete', undefined, true); target.incomplete = true; continue;
+          }
           target.regions.set(root, change.definite); target.version++; changed = true;
         }
       }
@@ -876,7 +906,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
           if (!target.incomplete) { target.incomplete = true; target.version++; changed = true; }
           if (!target.regions.has(key)) {
             if (target.regions.size < 256) { target.regions.set(key, false); target.version++; changed = true; }
-            else notice('Callback region limit: 256 reachable objects; targets may be incomplete');
+            else { omitSummaryRegion(key); notice('Callback region limit: 256 reachable objects; targets may be incomplete', undefined, true); }
           }
           notice('Callback mutation limit: 256 slots per function; targets may be incomplete', 256); continue;
         }

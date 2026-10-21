@@ -215,3 +215,38 @@ test('discarded derived responses are retried until the caller acknowledges them
     assert.deepEqual(deleted.files.find(file=>file.uri==='file:///callbacks.c').functionArguments??[],[],'dependency deletion clears argument targets');
   } finally { await worker.terminate(); }
 });
+
+test('Worker keeps region-limit warnings scoped while transferring affected callback uncertainty', async () => {
+  const worker = new Worker(path.resolve('dist/analysis-worker.cjs'), { workerData: { assets: path.resolve('dist') } });
+  let serial = 0; const pending = new Map();
+  worker.on('message', message => {
+    const job = pending.get(message.id); pending.delete(message.id);
+    if (message.error) job?.reject(new Error(message.error)); else job?.resolve(message.result);
+  });
+  worker.on('error', error => { for (const job of pending.values()) job.reject(error); pending.clear(); });
+  const request = data => {
+    const id = ++serial;
+    return { id, result: new Promise((resolve, reject) => { pending.set(id, { resolve, reject }); worker.postMessage({ ...data, id }); }) };
+  };
+  try {
+    const fields = Array.from({ length: 257 }, (_, n) => `int status${n};`).join('');
+    const escapes = Array.from({ length: 257 }, (_, n) => `opaque(&data.status${n});`).join('');
+    const uri = 'file:///limits.c';
+    const source = request({ uri, skip: true, text: `typedef void(*CB)(void);static void target(void){}struct Ops{CB cb;};
+      static const struct Ops registered={.cb=target};static const struct Ops *active;static CB selected;
+      static const struct Ops* get_ops(void){return &registered;}
+      static void init(const struct Ops*p){active=p;}void setup(void){init(get_ops());}
+      struct Data{${fields}};static struct Data data;void opaque(void*);
+      static void heavy(void){${escapes}opaque(&selected);}
+      void run(void){selected=target;heavy();active->cb();selected();}` });
+    await source.result;
+    const result = await request({ type: 'derive', versions: [[uri, source.id, -source.id]], analyzeCallbacks: true }).result;
+    const file = result.files.find(file => file.uri === uri);
+    assert.ok(file.callbackDiagnostics.some(detail => detail.message.includes('region limit')));
+    const normal = file.references.filter(ref => ref.callKind === 'inferred' && ref.inference?.expression === 'active->cb');
+    assert.equal(normal.length, 1);
+    assert.equal(normal[0].inference.incomplete, false);
+    assert.equal(file.references.some(ref => ref.callKind === 'indirect' && ref.inference?.expression === 'active->cb'), false);
+    assert.ok(file.references.some(ref => ref.callKind === 'indirect' && ref.inference?.expression === 'selected' && ref.inference.incomplete));
+  } finally { await worker.terminate(); }
+});
