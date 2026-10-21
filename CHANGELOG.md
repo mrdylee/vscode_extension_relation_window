@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.58 — 2026-10-21
+
+- Ship the 0.1.57 changes below. Update the extension-host regression to expect
+  the new registration relationship; the 0.1.57 CI gate prevented publication.
+- Explain Copilot wait reasons and preserve explicit Analyze/Reanalyze requests
+  until saved sources and the index are ready. Keep startup cache-only.
+
 ## 0.1.57 — 2026-10-21
 
 - Show literal function assignments and named field initializers as Registration

@@ -657,7 +657,11 @@ export async function run() {
     assert.equal(api.view.state.callbackDiagnostics.some((detail:any)=>detail.location?.uri===sparseUri.toString()),false);
   }
   const sparseTarget = api.workspace.index.symbols().find((symbol:any)=>symbol.name==='sparse_target');
-  assert.deepEqual(api.workspace.index.relations(sparseTarget.id,'callers').map((group:any)=>group.name).sort(),['sparse_array','sparse_run']);
+  const sparseCallers = api.workspace.index.relations(sparseTarget.id,'callers');
+  assert.deepEqual(sparseCallers.map((group:any)=>group.name).sort(),['sparse_array','sparse_configure','sparse_run']);
+  const registration = sparseCallers.find((group:any)=>group.name==='sparse_configure');
+  assert.ok(registration.sites.length > 0);
+  assert.ok(registration.sites.every((site:any)=>site.callKind === 'registered' && site.kind !== 'call'));
   await vscode.workspace.fs.delete(sparseUri);
   await new Promise(resolve=>setTimeout(resolve,500)); await api.workspace.whenIdle();
   const limitUri = vscode.Uri.joinPath(root, 'callback-limits.c');
