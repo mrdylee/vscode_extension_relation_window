@@ -4,6 +4,8 @@
 
 C 소스 폴더만 열어 함수의 호출·참조 관계, 변수의 읽기·쓰기 위치와 해당 코드를 함께 보는 VS Code 확장입니다. Source Insight의 Relation/Context 작업 흐름을 참고한 독립 구현입니다.
 
+구현 구조는 [Tree-sitter·관계·콜백·캐시 알고리즘 설명](docs/architecture/2026-10-21-dynsight-analysis-algorithm.md)에 정리했습니다. [Python 최적화 설계 검토](docs/superpowers/specs/2026-10-21-python-analysis-optimization-design.md)는 아직 구현하지 않은 비교 제안입니다.
+
 ## 설치와 시작
 
 1. [GitHub Releases](https://github.com/mrdylee/vscode_extension_relation_window/releases/latest)에서 Windows / macOS / WSL용 VSIX를 받고, VS Code 명령 팔레트의 **Extensions: Install from VSIX…**로 설치합니다. 세 파일은 동일한 범용 패키지이며 이름만 구분합니다.
