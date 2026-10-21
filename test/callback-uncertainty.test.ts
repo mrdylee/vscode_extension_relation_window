@@ -233,3 +233,14 @@ test('deadline registration recovery skips large bodies, preserves uncertainty a
   assert.ok(calls(index).some(group => group.callKind === 'indirect'));
   assert.strictEqual(analyzer.derive([raw], undefined, undefined, true)[0], files[0]);
 });
+
+test('region diagnostics distinguish retained ordered regions from traversal limits', () => {
+  const globals = Array.from({ length: 257 }, (_, n) => `static CB cb${n};`).join('');
+  const addresses = Array.from({ length: 257 }, (_, n) => `opaque(&cb${n});`).join('');
+  const index = project({ 'regions.c': prelude + globals + `void opaque(void*);void heavy(void){${addresses}}void run(void){cb256();}` });
+  const detail = [...index.files.values()].flatMap(file => file.callbackDiagnostics ?? [])
+    .find(detail => detail.message.includes('region limit') && detail.symbol === 'heavy')!;
+  assert.equal(detail.storage?.operation, 'ordered-region');
+  assert.equal(detail.storage?.retained, 256);
+  assert.match(detail.storage?.omitted ?? '', /cb256$/);
+});

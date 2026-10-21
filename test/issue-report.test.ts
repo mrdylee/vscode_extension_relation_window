@@ -29,6 +29,11 @@ test('report projects allowed fields instead of leaking source, paths, symbols o
   value.state.context = { text: 'SECRET_SOURCE', path: 'SECRET_PATH' } as any;
   (value.scopes[0] as any).patterns = ['SECRET_INCLUDE'];
   value.state.issues.push('SECRET_UNKNOWN_ERROR');
+  value.state.callbackDiagnostics = [{kind:'mutation',stage:'propagation',message:'Callback mutation limit',
+    elapsedMs:1,scopeElapsedMs:1,evaluations:1,scopeEvaluations:1,
+    storage:{operation:'write',retained:256,omitted:'SECRET_STORAGE',sample:['SECRET_RETAINED']},
+    costs:[{symbol:'SECRET_FUNCTION',runs:3,cacheHits:2,evaluations:10,elapsedMs:1,
+      location:{uri:'file:///SECRET_PATH',start:0,end:1,line:0,column:0,endLine:0,endColumn:1}}]}];
   const report = createIssueReport(value);
   assert.doesNotMatch(report, /secret|SECRET/);
   assert.match(report, /other/);

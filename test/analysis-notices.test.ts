@@ -18,3 +18,15 @@ test('located limits precede syntax notices and project limits have no arbitrary
   assert.equal(result.filter(s=>s.includes('mutation limit')).length,1);
   assert.ok(result.slice(0,100).some(s=>s.includes('10 seconds')));
 });
+
+test('local notices expose storage samples and distinguish cumulative function cost from stop location', () => {
+  const detail: CallbackDiagnostic = { kind:'mutation',stage:'propagation',message:'Callback mutation limit',
+    elapsedMs:500,scopeElapsedMs:20,evaluations:900,scopeEvaluations:300,
+    storage:{operation:'write',retained:256,omitted:'data.cb256',sample:['data.cb0','data.cb1']},
+    costs:[{symbol:'configure',location:{uri:'file:///actual.c',start:0,end:1,line:2,column:0,endLine:2,endColumn:1},
+      runs:3,cacheHits:1,evaluations:800,elapsedMs:70}] };
+  const result = analysisNotices([{uri:'file:///actual.c',text:'',symbols:[],references:[],includes:[],issues:[],callbackDiagnostics:[detail]}] as FileAnalysis[],uri=>uri.replace('file:///',''));
+  assert.match(result[0], /write.*retained=256.*first omitted=data.cb256/);
+  assert.match(result[0], /sample.*data.cb0.*data.cb1/);
+  assert.match(result[0], /configure.*runs=3.*cache hits=1.*evaluations=800.*total=70ms/);
+});

@@ -76,6 +76,9 @@ export interface CallbackDiagnostic {
   message: string; location?: Location; symbol?: string;
   elapsedMs: number; scopeElapsedMs: number;
   evaluations: number; scopeEvaluations: number; slots?: number;
+  storage?: { operation: 'write' | 'branch-join' | 'call-effects' | 'function-effects' | 'ordered-region' | 'reachable-regions' | 'function-regions';
+    retained: number; omitted: string; sample: string[] };
+  costs?: { symbol: string; location?: Location; runs: number; cacheHits: number; evaluations: number; elapsedMs: number }[];
 }
 export interface FileAnalysis {
   uri: string; text: string; symbols: SymbolRecord[]; references: ReferenceRecord[];

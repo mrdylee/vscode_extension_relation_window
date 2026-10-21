@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.62 — 2026-10-21
+
+- Show the overflow operation, first omitted storage location and a bounded
+  retained-location sample in local callback limit notices.
+- Add cumulative per-function propagation evaluations, actual runs, cache hits
+  and elapsed time to identify repeated analysis on offline workspaces.
+- Keep names and storage samples out of Report issue. This diagnostic release
+  retains existing limits and does not resolve Partial index by itself.
+
 ## 0.1.61 — 2026-10-21
 
 - Explain indirect calls that were not evaluated before callback analysis stopped.

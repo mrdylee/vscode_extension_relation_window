@@ -627,6 +627,8 @@ try {
   await page.locator('footer summary').click();
   assert.match(await page.locator('footer pre').textContent(), /update.*Callback mutation limit/);
   assert.match(await page.locator('footer pre').textContent(), /stage=propagation.*evaluations=/s);
+  assert.match(await page.locator('footer pre').textContent(), /first omitted=.*data\[256\]/);
+  assert.match(await page.locator('footer pre').textContent(), /update.*runs=\d+.*cache hits=\d+/);
   await page.screenshot({path:'output/playwright/callback-limit-locations.png',fullPage:true});
   await configure({issues:[]});
   const MiB = 1024 * 1024, at = Date.now();

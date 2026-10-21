@@ -225,3 +225,27 @@ for (const storage of ['array element', 'pointer dereference']) test(`relevant s
   assert.deepEqual(inferred(index, 'run').map(group => group.name), ['second']);
   assert.ok(inferred(index, 'run').every(group => group.sites.every(site => site.inference?.incomplete === false)));
 });
+
+test('mutation diagnostics identify the first omitted storage and the retained sample', () => {
+  const fields = Array.from({ length: 257 }, (_, n) => `CB cb${n};`).join('');
+  const writes = Array.from({ length: 257 }, (_, n) => `data.cb${n}=target;`).join('');
+  const index = project(`typedef void(*CB)(void);void target(void){}struct Data{${fields}};static struct Data data;
+    void configure(void){${writes}}void run(void){configure();data.cb256();}`);
+  const diagnostics = [...index.files.values()].flatMap(file => file.callbackDiagnostics ?? []);
+  const detail = diagnostics.find(detail => detail.kind === 'mutation' && detail.symbol === 'configure')!;
+  assert.ok(detail);
+  assert.equal(detail.storage?.operation, 'write');
+  assert.equal(detail.storage?.retained, 256);
+  assert.match(detail.storage?.omitted ?? '', /data\.cb256$/);
+  assert.ok(detail.storage!.sample.length <= 8);
+  assert.match(detail.storage!.sample[0], /data\.cb0$/);
+  const costs = diagnostics.flatMap(detail => detail.costs ?? []);
+  assert.ok(costs.length > 0 && costs.length <= 8);
+  const configure = costs.find(cost => cost.symbol === 'configure')!;
+  assert.ok(configure.runs >= 1);
+  assert.ok(configure.evaluations > 257);
+  assert.ok(configure.elapsedMs >= 0);
+  const cached = costs.find(cost => cost.symbol === 'target')!;
+  assert.equal(cached.runs, 1, 'cache hits must not be counted as body evaluations');
+  assert.ok(cached.cacheHits >= 1);
+});

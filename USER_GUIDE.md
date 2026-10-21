@@ -417,7 +417,7 @@ It does not determine build-specific `#ifdef`, `#ifndef`, `defined(...)` or macr
 
 ## If results are missing or slow
 
-### Locate callback limits (v0.1.52)
+### Locate callback limits (v0.1.62)
 
 **Analysis notices** shows callback/macro limits before syntax notices. Callback
 details include the observed file, line and function, followed by `stage`,
@@ -431,6 +431,30 @@ at** identifies where a time/memory check stopped it; that function did not
 necessarily consume the whole budget. A setup or project-wide limit has no
 arbitrary file attribution. The 256-slot limit applies to function mutation
 summaries; global initializers no longer build that unused summary.
+
+Mutation slots count distinct storage locations retained in a function summary,
+including effects imported from helpers. Repeated writes to the same exact slot
+reuse one entry. Structure members and separately tracked array elements can
+consume separate entries; this is not a count of files or callback functions.
+
+Overflow details now show the operation (`write`, `branch-join`, `call-effects`,
+`function-effects`, or a region operation), retained count, first omitted location
+and up to eight retained examples. These examples describe the first recorded
+overflow, not all omitted locations. Region records track possible mutation of
+objects and pointees; they have separate limits from exact storage effects.
+
+The first detailed notice also lists up to eight functions with the highest
+cumulative propagation expression-evaluation counts. `runs` counts actual
+function-analysis visits; `cache hits` counts visits reused without reevaluating
+the body. `total` is accumulated wall time for noncached visits, including summary
+processing, and can be affected by GC/system load. This list excludes setup and
+global initialization and is not a CPU profiler. It can identify repeated work
+without blaming the function where the project deadline happened to expire.
+
+Names and storage examples stay in the local notice view/cache; Report issue
+continues to exclude them. Diagnostics do not automatically send anything.
+On an offline WSL host, install the VSIX, keep Analyze Callbacks enabled, reload,
+and run **Dynsight: Rebuild Index**, then expand **Analysis notices** locally.
 
 Capture the expanded warning to share its location. **Report issue** includes
 `callbackLimits` categories and cost counters but omits function names and paths.

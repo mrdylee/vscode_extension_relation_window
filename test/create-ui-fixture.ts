@@ -38,7 +38,7 @@ async function main() {
   analyzer.derive([analyzer.analyze('file:///demo/arguments.c', 'typedef void (*CB)(void);\nvoid arg_leaf(void){}\nvoid arg_target(void){arg_leaf();}\nvoid arg_svc(CB cb);\nvoid arg_origin(void){arg_svc(arg_target);}\nvoid arg_mixed(void){arg_svc(arg_target);arg_target();}\n')]).forEach(file => index.update(file));
   const argumentGraph = index.graph(index.symbols().find(s => s.name === 'arg_origin')!.id, 'callees', 2, {}, 'all', 'source', true);
   const argumentBothGraph = index.graph(index.symbols().find(s => s.name === 'arg_target')!.id, 'both', 1, {}, 'all', 'name', true);
-  const limitFile = analyzer.analyze('file:///demo/limits.c', 'void target(void){}int data[300];void update(void){'+Array.from({length:270},(_,n)=>`data[${n}]=${n};`).join('\n')+'}void run(void){void(*cb)(void)=target;cb();}');
+  const limitFile = analyzer.analyze('file:///demo/limits.c', 'void target(void){}void(*data[300])(void);void update(void){'+Array.from({length:270},(_,n)=>`data[${n}]=target;`).join('\n')+'}void run(void){void(*cb)(void)=target;cb();}');
   const limitNotices = analysisNotices(analyzer.derive([limitFile]), uri => uri.replace('file:///demo/', ''));
   await mkdir('test-results', { recursive: true });
   await writeFile('test-results/ui-fixture.json', JSON.stringify({ limitNotices, graph, expandedGraph, calleeGraph, macroGraph, pointerGraph, registrationGraph, callback, memberGraph, variableGraphs, navigation, argumentGraph, argumentBothGraph, files: [...index.files.values()].map(file => ({ ...file, tokens: highlightC(file.text) })) }));
