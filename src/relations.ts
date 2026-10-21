@@ -43,6 +43,7 @@ export class RelationIndex {
   private references = new FileBuckets<ReferenceRecord>();
   private outgoing = new Map<string, ReferenceRecord[]>();
   private functionArguments = new FileBuckets<ReferenceRecord>();
+  private callbackRegistrations = new FileBuckets<ReferenceRecord>();
   private outgoingArguments = new Map<string, ReferenceRecord[]>();
   private members = new Map<string, Map<string, SymbolRecord[]>>();
   private anonymousMembers = new Map<string, SymbolRecord[]>();
@@ -64,6 +65,7 @@ export class RelationIndex {
     this.files.clear(); this.byName.clear(); this.byId.clear(); this.references.clear();
     this.fileOrder.clear(); this.nextOrder = 0; this.targets.clear(); this.outgoing.clear();
     this.functionArguments.clear(); this.outgoingArguments.clear();
+    this.callbackRegistrations.clear();
     this.members.clear(); this.anonymousMembers.clear(); this.filesByName.clear(); this.visibility.clear();
     this.layouts.clear();
   }
@@ -94,15 +96,16 @@ export class RelationIndex {
     this.byName.add(file.uri, file.symbols);
     this.references.add(file.uri, file.references);
     this.functionArguments.add(file.uri, file.functionArguments ?? []);
+    this.callbackRegistrations.add(file.uri, file.callbackRegistrations ?? []);
     for (const ref of file.functionArguments ?? []) {
       if (!ref.functionId) continue;
       let argumentsFound = this.outgoingArguments.get(ref.functionId);
       if (!argumentsFound) this.outgoingArguments.set(ref.functionId, argumentsFound = []);
       argumentsFound.push(ref);
     }
-    for (const ref of file.references) {
+    for (const ref of [...file.references, ...(file.callbackRegistrations ?? [])]) {
       // The analyzer leaves access unset inside unevaluated sizeof/alignof expressions.
-      if (ref.kind !== 'call' || !ref.functionId || !ref.access) continue;
+      if (!ref.functionId || (ref.callKind !== 'registered' && (ref.kind !== 'call' || !ref.access))) continue;
       let calls = this.outgoing.get(ref.functionId);
       if (!calls) this.outgoing.set(ref.functionId, calls = []);
       calls.push(ref);
@@ -124,6 +127,7 @@ export class RelationIndex {
     this.byName.remove(file.uri, file.symbols);
     this.references.remove(file.uri, file.references);
     this.functionArguments.remove(file.uri, file.functionArguments ?? []);
+    this.callbackRegistrations.remove(file.uri, file.callbackRegistrations ?? []);
   }
   symbols(): SymbolRecord[] { return [...this.byId.values()]; }
   symbol(id: string) { return this.byId.get(id); }
@@ -259,6 +263,7 @@ export class RelationIndex {
         const group: RelationGroup = groups.get(key) ?? { key, symbol, name: symbol?.name ?? ref.name,
           kind: symbol?.kind ?? ref.unresolvedKind ?? 'unknown', sites: [], callKind };
         group.callKind ??= callKind;
+        if (group.callKind === 'registered' && ref.kind === 'call') group.callKind = callKind;
         group.sites.push({ ...ref, access: undefined, candidates: candidateIds, ambiguous });
         groups.set(key, group);
       }
@@ -273,14 +278,15 @@ export class RelationIndex {
     const groups = new Map<string, RelationGroup>();
     const argumentsFound = includeFunctionArguments && target.kind === 'function' && (mode === 'callers' || mode === 'both')
       ? this.functionArguments.get(target.name, this.fileOrder) : [];
-    const references = this.references.get(target.name, this.fileOrder);
+    const references = [...this.references.get(target.name, this.fileOrder),
+      ...(target.kind === 'function' && (mode === 'callers' || mode === 'both') ? this.callbackRegistrations.get(target.name, this.fileOrder) : [])];
     for (const ref of argumentsFound.length ? [...references, ...argumentsFound] : references) {
       const variable = target.kind === 'variable';
       if (variable) {
         if (!ref.access || (filter !== 'all' && ref.access !== filter &&
           !(ref.access === 'readwrite' && (filter === 'read' || filter === 'write')))) continue;
       } else {
-        if ((mode === 'callers' || mode === 'both') && (((ref.kind !== 'call' || !ref.access) && !ref.argument) || target.kind !== 'function')) continue;
+        if ((mode === 'callers' || mode === 'both') && (((ref.kind !== 'call' || !ref.access) && !ref.argument && ref.callKind !== 'registered') || target.kind !== 'function')) continue;
         if (ref.location.start === target.location.start && ref.location.uri === target.location.uri) continue;
       }
       const candidates = this.resolve(ref);

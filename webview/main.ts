@@ -1,6 +1,7 @@
 import type { Access, GraphNode, Kind } from '../src/model';
 import type { ViewState } from '../src/view-state';
 import type { Diagnostics } from '../src/diagnostics';
+import { copilotWaitMessage } from '../src/diagnostics';
 import { highlightC } from '../src/syntax';
 import { createDiagnostics } from './diagnostics';
 declare const __EXTENSION_VERSION__: string;
@@ -37,6 +38,11 @@ function renderCopilot(ai: Diagnostics['copilot']) {
   copilotProgress.hidden = !ai;
   copilotProgress.replaceChildren();
   if (!ai) return;
+  if (ai.state === 'waiting-for-saved-index') {
+    copilotProgress.append(el('span', '', `Copilot paused: ${copilotWaitMessage(ai.waitReason)}`));
+    copilotProgress.title = 'Current callback counts are unavailable while the saved index is not ready. This is not a model response wait.';
+    return;
+  }
   const total = ai.total ?? 0, completed = ai.completed ?? 0;
   const busy = ['analyzing', 'restoring-cache', 'waiting-for-saved-index'].includes(ai.state);
   const ready = ai.state === 'ready';
@@ -214,7 +220,8 @@ function showDetails(node: GraphNode, anchor: HTMLButtonElement) {
   if (node.cycle) popup.append(el('div', 'condition detail-warning', 'Recursion: further expansion stopped on this path.'));
   if (node.ambiguous) popup.append(el('div', 'condition detail-warning', 'Candidate: inferred targets, conditions or multiple definitions prevent a unique match.'));
   if (node.sites.some(site => site.callKind === 'ai-candidate')) popup.append(el('div', 'condition detail-warning', 'Copilot candidate: source evidence suggests a possible callback target. This is not proof of invocation.'));
-  if (node.sites.some(site => site.callKind === 'registered')) popup.append(el('div', 'condition detail-warning', 'Registered candidate: an explicit registration and local alias suggest this callback target. This is not proof of invocation.'));
+  if (node.sites.some(site => site.callKind === 'registered' && site.kind === 'reference')) popup.append(el('div', 'condition', 'Registration: this function is explicitly assigned here. This is not proof of invocation.'));
+  if (node.sites.some(site => site.callKind === 'registered' && site.kind === 'call')) popup.append(el('div', 'condition detail-warning', 'Registered candidate: an explicit registration and local alias suggest this callback target. This is not proof of invocation.'));
   if (node.callKind === 'macro') popup.append(el('div', 'condition detail-warning', 'Macro invocation: expansion is unavailable, incomplete, or leaves this recursive call.'));
   if (node.callKind === 'indirect') popup.append(el('div', 'condition detail-warning', 'Indirect call: the runtime function target has not been resolved.'));
   if (node.callKind === 'unresolved') popup.append(el('div', 'condition detail-warning', 'Unresolved call: no matching function or macro was found in the analyzed scope.'));
@@ -227,7 +234,7 @@ function showDetails(node: GraphNode, anchor: HTMLButtonElement) {
       popup.append(el('div', 'condition', 'Passing a function does not prove that the receiving code invokes it.'));
     }
     if (site.inference) {
-      popup.append(el('strong', 'detail-label', `${site.callKind === 'ai-candidate' ? 'Copilot candidate' : site.callKind === 'registered' ? 'Registered candidate' : site.argument ? 'Argument value' : 'Inferred call'} · ${site.inference.expression}`));
+      popup.append(el('strong', 'detail-label', `${site.callKind === 'ai-candidate' ? 'Copilot candidate' : site.callKind === 'registered' ? site.kind === 'reference' ? 'Registration' : 'Registered candidate' : site.argument ? 'Argument value' : 'Inferred call'} · ${site.inference.expression}`));
       popup.append(condition(site.inference.expression));
       if (site.inference.incomplete) popup.append(el('div', 'condition detail-warning', 'Other targets may exist. ' + site.inference.reasons.join(' · ')));
       for (const [i, frame] of site.inference.evidence.entries()) {
@@ -246,7 +253,7 @@ function showDetails(node: GraphNode, anchor: HTMLButtonElement) {
       popup.append(condition(site.expansion.text));
     }
     const b = button('', () => send('preview', { id: site.id }));
-    const kind = el('span', 'site-kind', site.argument ? 'Function argument' : site.kind === 'call' ? 'Call' : site.kind === 'declaration' ? 'Declaration' : 'Reference'); kind.dataset.kind = site.argument ? 'argument' : site.kind;
+    const kind = el('span', 'site-kind', site.argument ? 'Function argument' : site.callKind === 'registered' && site.kind === 'reference' ? 'Registration' : site.kind === 'call' ? 'Call' : site.kind === 'declaration' ? 'Declaration' : 'Reference'); kind.dataset.kind = site.argument ? 'argument' : site.kind;
     b.append(site.access ? accessBadge(site.access) : kind, el('span', 'detail-path', filename(site.location.uri)),
       el('span', 'detail-location', `:${site.location.line + 1}:${site.location.column + 1}`));
     b.className = 'site'; b.dataset.site = site.id;
@@ -272,15 +279,17 @@ function showDetails(node: GraphNode, anchor: HTMLButtonElement) {
 function drawNode(node: GraphNode): HTMLElement {
   const branch = el('div', 'branch');
   if (node.sites.length && node.sites.every(site => site.argument)) branch.classList.add('function-argument');
+  if (node.sites.length && node.sites.every(site => site.callKind === 'registered' && site.kind === 'reference')) branch.classList.add('function-registration');
   const card = el('article', 'node'); card.dataset.nodeName = node.name;
-  const openId = node.callKind || node.direction || node.sites.some(site => site.argument) || node.sites[0]?.access ? node.sites[0].id : node.symbolId ?? node.sites[0]?.id;
+  const openId = node.callKind || node.direction || node.sites.some(site => site.argument || site.callKind === 'registered') || node.sites[0]?.access ? node.sites[0].id : node.symbolId ?? node.sites[0]?.id;
   const title = button('', event => { if (event.detail <= 1) send('selectNode', { key: node.key }); }, '');
   title.className = 'node-title'; title.dataset.key = node.key;
   if (node.symbolId) title.dataset.symbolId = node.symbolId;
   title.dataset.preview = openId;
   title.append(icon(node), el('span', 'symbol-name', node.symbolId ? node.name : node.sites[0]?.name ?? node.name));
   if (node.sites.some(site => site.callKind === 'ai-candidate')) title.append(el('span', 'badge', 'AI candidate'));
-  if (node.sites.some(site => site.callKind === 'registered')) title.append(el('span', 'badge', 'Registered candidate'));
+  if (node.sites.some(site => site.callKind === 'registered' && site.kind === 'reference')) title.append(el('span', 'badge', 'Registration'));
+  if (node.sites.some(site => site.callKind === 'registered' && site.kind === 'call')) title.append(el('span', 'badge', 'Registered candidate'));
   const accesses = [...new Set(node.sites.flatMap(site => site.access ? [site.access] : []))];
   for (const access of accesses) title.append(accessBadge(access, true));
   const status = [node.cycle ? 'Recursive' : '', node.ambiguous ? 'Candidate' : '', node.callKind === 'indirect' ? 'Indirect call' : node.callKind === 'unresolved' ? 'Unresolved call' : '', node.conditions.length || node.sites.some(s => s.conditions.length) ? 'Conditional' : ''].filter(Boolean).join(', ');

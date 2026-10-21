@@ -17,6 +17,95 @@ function project(sources: Record<string, string>, callbacks = false) {
   return { raw, derived, files, index, refs: files.flatMap(file => file.references.filter(ref => ref.callKind === 'registered')) };
 }
 
+for (const callbacks of [false, true]) {
+  test(`assignments without calls appear as registrations (full analysis ${callbacks})`, () => {
+    const source = prelude + 'void run(void){void (*fp)(void)=example_preprocess;struct xxx local;local.cb_process=&example_process;}';
+    const { files, index } = project({ 'main.c': source }, callbacks);
+    const registrations = files[0].callbackRegistrations ?? [];
+    assert.deepEqual(registrations.map(ref => ref.name), ['example_preprocess', 'example_process']);
+    assert.ok(registrations.every(ref => ref.kind === 'reference' && ref.callKind === 'registered'));
+    assert.deepEqual(registrations.map(ref => source.slice(ref.location.start, ref.location.end)), ['example_preprocess', '&example_process']);
+    const run = index.symbols().find(symbol => symbol.name === 'run')!;
+    const groups = index.relations(run.id, 'callees');
+    assert.deepEqual(groups.map(group => group.name), ['example_preprocess', 'example_process']);
+    assert.ok(groups.every(group => group.callKind === 'registered' && group.sites.every(site => site.kind !== 'call')));
+    for (const name of ['example_preprocess', 'example_process']) {
+      const target = index.symbols().find(symbol => symbol.name === name)!;
+      assert.deepEqual(index.relations(target.id, 'callers').map(group => group.name), ['run']);
+      assert.equal(index.graph(target.id, 'both', 1)?.callers?.[0].sites[0].kind, 'reference');
+    }
+  });
+}
+
+test('global pointer and aggregate initializers retain registration owners without calls', () => {
+  const { files, index } = project({ 'main.c': prelude + table + 'static void (*fp)(void)=&example_preprocess;' });
+  assert.deepEqual(files[0].callbackRegistrations?.map(ref => ref.name), ['example_preprocess', 'example_process', 'example_preprocess']);
+  const target = index.symbols().find(symbol => symbol.name === 'example_preprocess')!;
+  assert.deepEqual(index.relations(target.id, 'callers').map(group => group.name), ['bbb', 'fp']);
+});
+
+test('simple local/global pointers and local struct members resolve with full analysis off', () => {
+  for (const body of [
+    'void (*fp)(void)=example_preprocess;fp();',
+    'void (*fp)(void);fp=&example_preprocess;fp();',
+    'global=example_preprocess;global();',
+    'struct xxx local={.cb_preprocess=example_preprocess};local.cb_preprocess();',
+    'struct xxx local;local.cb_preprocess=example_preprocess;local.cb_preprocess();',
+    'struct xxx local;struct xxx *p=&local;p->cb_preprocess=example_preprocess;p->cb_preprocess();'
+  ]) {
+    const { refs } = project({ 'main.c': prelude + 'void (*global)(void);void run(void){' + body + '}' });
+    assert.deepEqual(refs.map(ref => ref.name), ['example_preprocess'], body);
+  }
+});
+
+test('written registrations survive branches and loops without asserting later call targets', () => {
+  const source = prelude + 'void run(int flag){void (*fp)(void);if(flag)fp=example_preprocess;while(flag){fp=&example_process;break;}fp();}';
+  const { files, refs } = project({ 'main.c': source });
+  assert.deepEqual(files[0].callbackRegistrations?.map(ref => ref.name), ['example_preprocess', 'example_process']);
+  assert.deepEqual(refs, []);
+});
+
+test('direct writes through a structure pointer parameter are traceable without full analysis', () => {
+  const source = prelude + 'void run(struct xxx *p){p->cb_preprocess=example_preprocess;p->cb_preprocess();}';
+  const { refs } = project({ 'main.c': source });
+  assert.deepEqual(refs.map(ref => ref.name), ['example_preprocess']);
+});
+
+test('static local initializers and pointers to local aggregate storage remain traceable', () => {
+  for (const body of [
+    'static void (*fp)(void)=example_preprocess;fp();',
+    'struct xxx local={.cb_preprocess=example_preprocess};struct xxx *p=&local;p->cb_preprocess();'
+  ]) {
+    const { files, refs } = project({ 'main.c': prelude + 'void run(void){' + body + '}' });
+    assert.deepEqual(refs.map(ref => ref.name), ['example_preprocess']);
+    assert.deepEqual(files[0].callbackRegistrations?.map(ref => ref.name), ['example_preprocess']);
+  }
+});
+
+test('unknown writes and address escapes remove simple pointer candidates but retain registration facts', () => {
+  for (const middle of ['fp=0;', 'fp=get_unknown();', 'mutate(&fp);', 'if(flag)fp=0;']) {
+    const source = prelude + 'void run(void){void (*fp)(void)=example_preprocess;' + middle + 'fp();}';
+    const { files, refs } = project({ 'main.c': source });
+    assert.deepEqual(files[0].callbackRegistrations?.map(ref => ref.name), ['example_preprocess']);
+    assert.deepEqual(refs, [], middle);
+  }
+});
+
+test('RHS calls, local shadows, inactive and unevaluated assignments are not literal registrations', () => {
+  const source = prelude + 'void run(void){void (*fp)(void);fp=example_preprocess();fp=0;sizeof(fp=example_process);\n#if 0\nfp=example_process;\n#endif\n{int example_process=0;fp=example_process;}}';
+  const { files } = project({ 'main.c': source });
+  assert.deepEqual(files[0].callbackRegistrations ?? [], []);
+});
+
+test('registration projection is idempotent and removing a file removes its graph relationships', () => {
+  const { raw, files, index } = project({ 'main.c': prelude + 'void run(void){void (*fp)(void)=example_preprocess;}' });
+  assert.equal(suggestExplicitCallbacks(raw, files)[0], files[0]);
+  const target = index.symbols().find(symbol => symbol.name === 'example_preprocess')!;
+  assert.equal(index.relations(target.id, 'callers').length, 1);
+  index.update({ ...files[0], callbackRegistrations: undefined });
+  assert.deepEqual(index.relations(target.id, 'callers'), []);
+});
+
 test('literal registrations resolve the original bbb/ccc example without static propagation', () => {
   const source = prelude + table + 'static void run_callbacks(void){const struct xxx *ccc=&bbb;ccc->cb_preprocess();ccc->cb_process();}';
   const { files, index, refs } = project({ 'callback_example.c': source });
@@ -27,7 +116,7 @@ test('literal registrations resolve the original bbb/ccc example without static 
   assert.ok(files[0].references.some(ref => ref.indirect && ref.name === 'ccc->cb_preprocess'));
   assert.deepEqual(files[0].issues, []);
   const target = index.symbols().find(symbol => symbol.name === 'example_preprocess')!;
-  assert.deepEqual(index.relations(target.id, 'callers').map(group => group.name), ['run_callbacks']);
+  assert.deepEqual(index.relations(target.id, 'callers').map(group => group.name), ['bbb', 'run_callbacks']);
   assert.deepEqual(index.callbackAt(files[0].uri, source.indexOf('ccc->cb_preprocess') + 5)?.targets.map(symbol => symbol.name), ['example_preprocess']);
 });
 

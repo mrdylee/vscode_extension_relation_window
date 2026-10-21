@@ -89,6 +89,52 @@ test('cache startup validates content, additions and removals made while the edi
 });
 
 const latest = 'typedef void(*CB)(void);void new_target(void){}void task(void){CB cb=new_target;cb();}';
+test('Copilot readiness identifies blockers without blocking stable partial results', async t => {
+  const { workspace, adapter } = fixture(t);
+  await workspace.ready; await bounded(workspace.whenIdle());
+  assert.equal(workspace.copilotWaitReason, undefined);
+  adapter.textDocuments = [{ uri: uri('dirty.c'), isClosed: false, isDirty: true }];
+  assert.equal(workspace.copilotWaitReason, 'unsaved-sources');
+  adapter.textDocuments[0].isDirty = false;
+  workspace.indexing = true; assert.equal(workspace.copilotWaitReason, 'indexing'); workspace.indexing = false;
+  workspace.jobs.add('pending'); assert.equal(workspace.copilotWaitReason, 'source-update'); workspace.jobs.clear();
+  workspace.derivedRevision--;
+  assert.equal(workspace.copilotWaitReason, 'relations'); workspace.derivedRevision = workspace.revision;
+  workspace.failures.set('derived', 'failed'); assert.equal(workspace.copilotWaitReason, 'analysis-failed'); workspace.failures.clear();
+  workspace.workerError = new Error('stopped'); assert.equal(workspace.copilotWaitReason, 'worker-unavailable'); workspace.workerError = undefined;
+  workspace.cacheBlocked = true; assert.equal(workspace.copilotWaitReason, 'cache-rebuild-required'); workspace.cacheBlocked = false;
+  assert.equal(workspace.copilotWaitReason, undefined);
+});
+test('Copilot waiting diagnostics reflect a Worker failure after the wait began', async t => {
+  const { workspace, adapter } = fixture(t);
+  await workspace.ready;
+  adapter.textDocuments = [{ uri: uri('dirty.c'), isClosed: false, isDirty: true }];
+  workspace.copilotDiagnostics = { state: 'waiting-for-saved-index', waitReason: 'unsaved-sources',
+    requests: 0, cacheHits: 0, remaining: 0, failures: 0, candidates: 0, notFound: 0, contextLimited: 0 };
+  assert.equal(workspace.diagnostics.copilot.waitReason, 'unsaved-sources');
+  await workspace.worker.terminate();
+  assert.ok(workspace.workerError);
+  assert.equal(workspace.copilotWaitReason, 'worker-unavailable');
+  assert.equal(workspace.diagnostics.copilot.waitReason, 'worker-unavailable');
+});
+
+test('saving an already indexed dirty buffer clears the Copilot blocker without changing generation', async t => {
+  const file = uri('save.c'), { workspace, adapter, edited } = fixture(t, [file]);
+  await workspace.ready;
+  const document = { uri: file, isClosed: false, isDirty: true, getText: () => 'void updated(void) {}' };
+  adapter.textDocuments = [document];
+  edited.fire({ document, contentChanges: [{}] });
+  await bounded(workspace.whenIdle());
+  assert.equal(workspace.stable, true);
+  assert.equal(workspace.copilotWaitReason, 'unsaved-sources');
+  const generation = workspace.generation;
+  document.isDirty = false;
+  workspace.schedule(file, 'editor-save');
+  await bounded(workspace.whenIdle());
+  assert.equal(workspace.generation, generation);
+  assert.equal(workspace.copilotWaitReason, undefined);
+});
+
 test('analysis limits report a partial index while ordinary syntax notices retain ready status', async t => {
   const { workspace } = fixture(t);
   await workspace.ready;
@@ -486,13 +532,13 @@ test('callback setting changes reuse source facts and discard in-flight results 
   await workspace.enqueue(file); await workspace.derive();
   const parses = workspace.diagnostics.index.sourceParses;
   const task = workspace.index.symbols().find(s => s.name === 'task');
-  const hasTarget = () => workspace.index.relations(task.id, 'callees').some(g => g.name === 'new_target');
-  assert.equal(hasTarget(), true);
+  const targetKind = () => workspace.index.relations(task.id, 'callees').find(g => g.name === 'new_target')?.callKind;
+  assert.equal(targetKind(), 'inferred');
   let enabled = false;
   adapter.getConfiguration = () => ({ get: (key, fallback) => key === 'analyzeCallbacks' ? enabled : fallback });
   const event = { affectsConfiguration: key => key === 'dynsight.analyzeCallbacks' };
   configuration.fire(event); await bounded(workspace.whenIdle());
-  assert.equal(hasTarget(), false);
+  assert.equal(targetKind(), 'registered', 'simple assignments remain available with full analysis disabled');
   assert.equal(workspace.diagnostics.index.sourceParses, parses);
   const request = workspace.request, held = deferred(), entered = deferred();
   workspace.request = function (message) {
@@ -505,10 +551,10 @@ test('callback setting changes reuse source facts and discard in-flight results 
   enabled = true; configuration.fire(event); await bounded(entered.promise);
   enabled = false; configuration.fire(event); held.resolve();
   await bounded(workspace.whenIdle());
-  assert.equal(hasTarget(), false, 'an obsolete enabled result must never replace disabled relationships');
+  assert.equal(targetKind(), 'registered', 'an obsolete enabled result must never replace disabled relationships');
   workspace.request = request;
   enabled = true; configuration.fire(event); await bounded(workspace.whenIdle());
-  assert.equal(hasTarget(), true);
+  assert.equal(targetKind(), 'inferred');
   assert.equal(workspace.diagnostics.index.sourceParses, parses);
 });
 

@@ -44,6 +44,7 @@ async function harness(denied=false, timeoutMs?:number) {
   };
   const context={storageUri:{fsPath:storage},subscriptions:[]as{dispose():void}[],workspaceState:{get:(key:string)=>state.get(key),update:async(key:string,value:unknown)=>{state.set(key,value);}},languageModelAccessInformation:{canSendRequest:(model:{id:string})=>permissions.get(model.id)}};
   const workspace={index:new RelationIndex(),ready:Promise.resolve(),stable:true,generation:1,analysisKey:'key',hasDirtySources:false,
+    copilotWaitReason:undefined as string|undefined,
     sourceChanged:new Emitter(),settled:new Emitter(),changed:new Emitter(),diagnosticsChanged:new Emitter(),whenIdle:async()=>{},copilotDiagnostics:undefined as any};
   workspace.index.update(file);
   function stop(){for(const item of context.subscriptions.splice(0))item.dispose();}
@@ -54,6 +55,15 @@ async function harness(denied=false, timeoutMs?:number) {
     dispose:async()=>{stop();await rm(storage,{recursive:true,force:true});}};
 }
 const settle=()=>new Promise(done=>setTimeout(done,1100));
+test('disabled Copilot stays off while dirty sources or local analysis block the index',async t=>{
+  const h=await harness();t.after(h.dispose);await h.start().ready;
+  h.workspace.hasDirtySources=true;h.workspace.stable=false;
+  h.workspace.sourceChanged.fire('editor-change');await settle();
+  assert.equal(h.workspace.copilotDiagnostics.state,'off');
+  assert.equal(h.workspace.copilotDiagnostics.waitReason,undefined);
+  assert.equal(h.calls.length,0);
+});
+
 for(const denied of [false,true])test(`Copilot command and restart respect cached results and consent (denied=${denied})`,async t=>{
   const h=await harness(denied);t.after(h.dispose);await h.start().ready;
   assert.equal(h.queries.length,0);assert.equal(h.calls.length,0);
@@ -121,8 +131,73 @@ test('Copilot progress is visible during a request and source changes clear comp
   assert.equal(h.workspace.copilotDiagnostics.notFound,1);
   h.workspace.hasDirtySources=true;h.workspace.sourceChanged.fire('editor-change');
   assert.equal(h.workspace.copilotDiagnostics.state,'waiting-for-saved-index');
+  assert.equal(h.workspace.copilotDiagnostics.waitReason,'unsaved-sources');
   assert.equal(h.workspace.copilotDiagnostics.completed,0);
   assert.equal(h.workspace.copilotDiagnostics.total,0);
+});
+
+test('saving dirty sources resumes Copilot after the local index settles',async t=>{
+  const h=await harness();t.after(h.dispose);await h.start().ready;
+  await h.commands.get('dynsight.analyzeCallbacksWithCopilot')!();
+  h.workspace.hasDirtySources=true;h.workspace.stable=false;
+  h.workspace.sourceChanged.fire('editor-change');
+  await settle();assert.equal(h.calls.length,1);
+  assert.equal(h.workspace.copilotDiagnostics.waitReason,'unsaved-sources');
+  h.workspace.hasDirtySources=false;h.workspace.copilotWaitReason='relations';
+  h.workspace.analysisKey='changed';h.workspace.generation++;
+  h.workspace.sourceChanged.fire('editor-save');await settle();
+  assert.equal(h.calls.length,1);assert.equal(h.workspace.copilotDiagnostics.waitReason,'relations');
+  h.workspace.stable=true;h.workspace.copilotWaitReason=undefined;
+  h.workspace.settled.fire();await settle();
+  assert.equal(h.calls.length,2);assert.equal(h.workspace.copilotDiagnostics.state,'ready');
+  assert.equal(h.workspace.copilotDiagnostics.waitReason,undefined);
+});
+
+for(const force of [false,true])test(`Analyze requested while dirty resumes after saving an already indexed buffer (force=${force})`,async t=>{
+  const h=await harness();t.after(h.dispose);await h.start().ready;
+  if(force)await h.commands.get('dynsight.analyzeCallbacksWithCopilot')!();
+  const before=h.calls.length;
+  h.workspace.hasDirtySources=true;h.workspace.sourceChanged.fire('editor-change');
+  await h.commands.get(force?'dynsight.reanalyzeCallbacksWithCopilot':'dynsight.analyzeCallbacksWithCopilot')!();
+  assert.equal(h.workspace.copilotDiagnostics.waitReason,'unsaved-sources');
+  await settle();assert.equal(h.calls.length,before,'dirty sources must never be sent');
+  // WorkspaceIndex already parsed this buffer before save, so its generation stays unchanged.
+  h.workspace.hasDirtySources=false;h.workspace.stable=false;h.workspace.copilotWaitReason='relations';
+  h.workspace.sourceChanged.fire('editor-save');await settle();
+  assert.equal(h.calls.length,before,'local analysis must settle before resuming');
+  h.workspace.stable=true;h.workspace.copilotWaitReason=undefined;h.workspace.settled.fire();await settle();
+  assert.equal(h.calls.length,before+1,'saving must resume the requested analysis, including forced cache bypass');
+  assert.equal(h.workspace.copilotDiagnostics.state,'ready');
+  h.workspace.settled.fire();await settle();
+  assert.equal(h.calls.length,before+1,'the deferred command must only run once');
+});
+
+for(const cancel of ['disable','model'])test(`a deferred Analyze is cancelled by ${cancel}`,async t=>{
+  const h=await harness();t.after(h.dispose);await h.start().ready;
+  h.workspace.hasDirtySources=true;
+  await h.commands.get('dynsight.analyzeCallbacksWithCopilot')!();
+  if(cancel==='disable') {
+    await h.update('copilotCallbacks',false);
+    assert.equal(h.workspace.copilotDiagnostics.state,'off');
+    await h.update('copilotCallbacks',true);
+  } else {
+    h.pick('model-b');await h.commands.get('dynsight.selectCopilotModel')!();
+  }
+  h.workspace.hasDirtySources=false;h.workspace.sourceChanged.fire('editor-save');h.workspace.settled.fire();
+  await settle();
+  assert.equal(h.calls.length,0,'cancelled commands must not send source after saving');
+  assert.equal(h.workspace.copilotDiagnostics.state,'more-callbacks-available');
+  assert.equal(h.workspace.copilotDiagnostics.failures,0);
+});
+
+test('stable partial analysis can run Copilot while a failed local analysis reports its blocker',async t=>{
+  const h=await harness();t.after(h.dispose);await h.start().ready;
+  const file=[...h.workspace.index.files.values()][0];
+  h.workspace.index.update({...file,issues:['Callback region limit: 256 reachable objects; targets may be incomplete']});
+  await h.commands.get('dynsight.analyzeCallbacksWithCopilot')!();assert.equal(h.calls.length,1);
+  h.workspace.stable=false;h.workspace.copilotWaitReason='analysis-failed';
+  h.workspace.sourceChanged.fire('editor-save');await settle();
+  assert.equal(h.workspace.copilotDiagnostics.waitReason,'analysis-failed');assert.equal(h.calls.length,1);
 });
 
 for(const phase of ['countTokens','sendRequest','stream'])test(`model picker cancels a held ${phase} without waiting for the provider`,async t=>{

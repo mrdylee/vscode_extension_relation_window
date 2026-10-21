@@ -42,8 +42,10 @@ int origin(void *ctx, unsigned char rack, unsigned char state){
   assert.equal(sites[0].inference!.incomplete, true);
   assert.ok(sites[0].inference!.reasons.some(reason => /Macro include traversal limit/.test(reason)));
   const callees = relations(index, 'origin', 'callees');
-  assert.ok(callees.find(group => group.name === 'priv_mode_change')!.sites.every(site => site.ambiguous));
-  assert.equal(relations(index, 'origin', 'callees', false).some(group => group.name === 'priv_mode_change'), false);
+  assert.ok(callees.find(group => group.name === 'priv_mode_change')!.sites.filter(site => site.argument).every(site => site.ambiguous));
+  const registration = relations(index, 'origin', 'callees', false).find(group => group.name === 'priv_mode_change')!;
+  assert.equal(registration.callKind, 'registered');
+  assert.ok(registration.sites.every(site => site.kind === 'reference'));
   assert.deepEqual(relations(index, 'priv_mode_change', 'callers').map(group => group.name), ['origin']);
   assert.equal(files.some(file => file.references.some(ref => ref.name === 'priv_mode_change' && ref.callKind === 'inferred')), false);
 });

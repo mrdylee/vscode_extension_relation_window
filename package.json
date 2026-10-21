@@ -2,7 +2,7 @@
   "name": "dynsight",
   "displayName": "Dynsight — C Code Explorer",
   "description": "Build-free C references, caller/callee graphs and a linked Context preview.",
-  "version": "0.1.56",
+  "version": "0.1.57",
   "publisher": "dylee",
   "author": "dylee",
   "license": "MIT",
@@ -108,7 +108,7 @@
           "type": "boolean",
           "default": true,
           "scope": "window",
-          "description": "Infer function-pointer and structure callback targets in Callers, Callees and Callers & Callees, and trace callbacks when clicking their call sites. Turning off skips full callback propagation. Simple explicit registrations and available Copilot candidates remain selectable; unresolved sites use ordinary symbol navigation. Direct calls, macro expansion and literal function arguments remain available; alias-derived arguments require this option. Changes recalculate relationships without reparsing source files, after any running analysis finishes."
+          "description": "Infer function-pointer and structure callback targets in Callers, Callees and Callers & Callees, and trace callbacks when clicking their call sites. Turning off skips full callback propagation. Literal function assignments appear as Registration even without calls. Simple function-pointer and local structure-member assignments remain traceable, and available Copilot candidates remain selectable; unresolved sites use ordinary symbol navigation. Direct calls, macro expansion and literal function arguments remain available; alias-derived arguments require this option. Changes recalculate relationships without reparsing source files, after any running analysis finishes."
         },
         "dynsight.includeFunctionArguments": {
           "type": "boolean",
@@ -188,7 +188,7 @@
     "test:freertos": "npm run build && node scripts/test-freertos.mjs",
     "test:ui": "npm run build && tsx test/create-ui-fixture.ts && node test/ui.mjs",
     "vscode:prepublish": "npm run build",
-    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license --out artifacts/dynsight-0.1.56.vsix"
+    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license --out artifacts/dynsight-0.1.57.vsix"
   },
   "dependencies": {
     "minimatch": "10.2.6",

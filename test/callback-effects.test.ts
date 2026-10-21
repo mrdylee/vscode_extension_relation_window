@@ -103,8 +103,12 @@ test('lane and group callback copies retain actual targets and reverse callers w
   const graph = index.graph(symbol(index, 'complete_group').id, 'both', 1)!;
   assert.deepEqual(graph.root.children.filter(node => node.callKind === 'inferred').map(node => node.name).sort(), ['rack_complete', 'rbms_complete']);
   for (const name of ['rack_complete', 'rbms_complete']) {
-    assert.deepEqual(index.relations(symbol(index, name).id, 'callers').map(group => group.name), ['complete_group']);
-    assert.equal(index.relations(symbol(index, 'configure').id, 'callees').some(group => group.name === name), false);
+    assert.deepEqual(index.relations(symbol(index, name).id, 'callers').map(group => group.name), ['complete_group', 'configure']);
+    const registration = index.relations(symbol(index, 'configure').id, 'callees').find(group => group.name === name)!;
+    assert.equal(registration.callKind, 'registered');
+    assert.ok(registration.sites.every(site => site.kind === 'reference'));
   }
-  assert.deepEqual(index.relations(symbol(index, 'unrelated_complete').id, 'callers'), []);
+  const unrelated = index.relations(symbol(index, 'unrelated_complete').id, 'callers');
+  assert.deepEqual(unrelated.map(group => group.name), ['unrelated_group']);
+  assert.ok(unrelated[0].sites.every(site => site.kind === 'reference' && site.callKind === 'registered'));
 });

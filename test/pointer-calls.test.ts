@@ -14,7 +14,8 @@ function project(sources: Record<string,string>) {
 }
 const prelude = 'typedef void (*CB)(void); void foo(void){} void bar(void){}\n';
 const calls = (index: RelationIndex, name = 'run') => index.relations(index.symbols().find(s => s.name === name && s.kind === 'function' && s.definition)!.id, 'callees');
-const inferred = (index: RelationIndex, name = 'run') => calls(index,name).filter(g => g.callKind === 'inferred');
+const inferred = (index: RelationIndex, name = 'run') => calls(index,name).filter(g => g.callKind === 'inferred')
+  .map(group => ({ ...group, sites: group.sites.filter(site => site.kind === 'call') }));
 
 function callbackTableProject(withType: boolean, withRegistration = true, argumentPosition = 3) {
   const params = ['int ctx', 'void *data'], args = ['0', '0'];

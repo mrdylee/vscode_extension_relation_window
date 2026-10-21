@@ -7,7 +7,7 @@ import { FileAnalysis } from './model';
 import { RelationIndex } from './relations';
 import { Minimatch } from 'minimatch';
 import { getHeapStatistics } from 'node:v8';
-import { Diagnostics, IndexDiagnostics, RebuildReason, RebuildRecord, SourceEvent, WorkerDiagnostics } from './diagnostics';
+import { CopilotWaitReason, Diagnostics, IndexDiagnostics, RebuildReason, RebuildRecord, SourceEvent, WorkerDiagnostics } from './diagnostics';
 
 const builtInExcludes = ['**/node_modules/**', '**/.git/**', '**/.vscode-test/**'];
 const maxFiles = 10_000;
@@ -51,11 +51,23 @@ export class WorkspaceIndex implements vscode.Disposable {
   get generation() { return this.revision; }
   get stable() { return !this.disposed && !this.cacheBlocked && !this.workerError && !this.indexing && !this.jobs.size && !this.timers.size && this.derivedRevision === this.revision; }
   get hasDirtySources() { return vscode.workspace.textDocuments.some(doc => !doc.isClosed && doc.isDirty && this.eligible(doc.uri)); }
+  get copilotWaitReason(): CopilotWaitReason | undefined {
+    if (this.disposed) return 'closed';
+    if (this.cacheBlocked) return 'cache-rebuild-required';
+    if (this.workerError) return 'worker-unavailable';
+    if (this.failures.has('derived')) return 'analysis-failed';
+    if (this.hasDirtySources) return 'unsaved-sources';
+    if (this.indexing) return 'indexing';
+    if (this.jobs.size || this.timers.size) return 'source-update';
+    if (this.derivedRevision !== this.revision) return 'relations';
+    return undefined;
+  }
   get diagnostics(): Diagnostics {
     const heap = getHeapStatistics();
     return { environment: `${process.platform} ${process.arch} · ${vscode.env.remoteName ?? 'local'} · VS Code ${vscode.version}`,
       host: { at: Date.now(), heapUsed: heap.used_heap_size, heapLimit: heap.heap_size_limit, external: heap.external_memory },
-      copilot: this.copilotDiagnostics,
+      copilot: this.copilotDiagnostics?.state === 'waiting-for-saved-index'
+        ? { ...this.copilotDiagnostics, waitReason: this.copilotWaitReason } : this.copilotDiagnostics,
       index: { ...this.indexDiagnostics, cache: this.indexDiagnostics.cache && { ...this.indexDiagnostics.cache }, rebuilds: this.indexDiagnostics.rebuilds.map(record => ({ ...record,
         files: record.files ? { ...record.files } : undefined })) },
       worker: this.workerDiagnostics, workerError: this.workerError
@@ -115,7 +127,7 @@ export class WorkspaceIndex implements vscode.Disposable {
   }
   get analysisKey() {
     const version = JSON.parse(readFileSync(path.join(this.extensionPath, 'package.json'), 'utf8')).version;
-    return createHash('sha256').update(JSON.stringify({ version, schema: 1, remote: vscode.env.remoteName ?? '', skip: this.skipInactive, callbacks: this.analyzeCallbacks,
+    return createHash('sha256').update(JSON.stringify({ version, schema: 2, remote: vscode.env.remoteName ?? '', skip: this.skipInactive, callbacks: this.analyzeCallbacks,
       folders: (vscode.workspace.workspaceFolders ?? []).map(folder => { const scope = this.scope(folder); return [folder.uri.toString(), scope.include, scope.exclude, scope.macros.map(m => m.pattern)]; }) })).digest('hex');
   }
   private options(uri: vscode.Uri) {

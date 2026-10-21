@@ -89,6 +89,7 @@ export interface FileAnalysis {
   programs?: FlowProgram[]; initializers?: GlobalInitializer[];
   argumentPrograms?: FlowProgram[];
   functionArguments?: ReferenceRecord[];
+  callbackRegistrations?: ReferenceRecord[];
   callbackDiagnostics?: CallbackDiagnostic[];
   statementConditions?: { start: number; conditions: string[] }[];
 }

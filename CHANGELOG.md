@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.57 — 2026-10-21
+
+- Show literal function assignments and named field initializers as Registration
+  relationships in Callers/Callees even when no invocation exists. Keep source
+  locations and distinguish registrations from actual calls and call candidates.
+- Resolve simple function-pointer and local structure-member assignments with
+  full callback analysis disabled, including direct writes through a structure
+  pointer parameter. Preserve invalidation after unknown writes and escapes.
+- Include registration relationships in persistent analysis snapshots and
+  invalidate older snapshots so the updated relationships are rebuilt.
+
 ## 0.1.56 — 2026-10-21
 
 - Ship the callback and Copilot fixes below. Correct the new progress test to

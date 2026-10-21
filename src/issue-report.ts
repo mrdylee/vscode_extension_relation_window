@@ -1,4 +1,5 @@
 import type { AnalysisPhase, Diagnostics, MemorySample, RebuildRecord } from './diagnostics';
+import { copilotWaitMessages } from './diagnostics';
 import type { ViewState } from './view-state';
 
 export const ISSUE_URL = 'https://github.com/mrdylee/vscode_extension_relation_window/issues/new?' + new URLSearchParams({
@@ -80,6 +81,7 @@ export function createIssueReport(input: IssueReportInput): string {
     diskCache: index?.cache ? { state: choice(index.cache.state, ['disabled', 'checking', 'restored', 'updated', 'missing', 'invalid', 'deferred', 'error']),
       restored: number(index.cache.restored), saved: number(index.cache.saved) } : null,
     copilot: diagnostics.copilot ? { state: choice(diagnostics.copilot.state, ['off', 'model-unavailable', 'model-selection-required', 'permission-required', 'ready', 'more-callbacks-available', 'request-failed', 'waiting-for-saved-index', 'analyzing', 'restoring-cache']),
+      waitReason: choice(diagnostics.copilot.waitReason ?? '', Object.keys(copilotWaitMessages)),
       requests: number(diagnostics.copilot.requests), cacheHits: number(diagnostics.copilot.cacheHits), remaining: number(diagnostics.copilot.remaining), failures: number(diagnostics.copilot.failures),
       candidates: number(diagnostics.copilot.candidates), notFound: number(diagnostics.copilot.notFound), contextLimited: number(diagnostics.copilot.contextLimited) } : null,
     index: index ? {

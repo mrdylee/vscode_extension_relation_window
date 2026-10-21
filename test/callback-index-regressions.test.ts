@@ -25,7 +25,7 @@ for (const order of ['reader-first', 'writer-first']) test(`later wildcard assig
     (order === 'reader-first' ? reader + writer : writer + reader) + 'void start(void){set(0);run();}');
   assert.deepEqual(calls(index).filter(group => group.callKind === 'inferred').map(group => group.name).sort(), ['bar', 'foo']);
   const target = index.symbols().find(symbol => symbol.kind === 'function' && symbol.definition && symbol.name === 'bar')!;
-  assert.deepEqual(index.relations(target.id, 'callers').map(group => group.name), ['run']);
+  assert.deepEqual(index.relations(target.id, 'callers').map(group => group.name), ['run', 'set']);
 });
 
 test('late wildcard writes invalidate nested array callback reads', () => {

@@ -32,6 +32,7 @@ try {
   collect(fixture.memberGraph.root);
   collect(fixture.macroGraph.root);
   collect(fixture.pointerGraph.root);
+  collect(fixture.registrationGraph.root);
   collect(fixture.argumentGraph.root);
   collect(fixture.argumentBothGraph.root); fixture.argumentBothGraph.callers.forEach(collect);
   collect(fixture.navigation.both.root);
@@ -49,7 +50,7 @@ try {
     if (message.type === 'selectNode') {
       const find = node => node.key === message.key ? node : node.children.map(find).find(Boolean);
       const node = find(state.graph.root) ?? state.graph.callers?.map(find).find(Boolean);
-      preview(node.callKind || node.direction || node.sites.some(s => s.argument) || node.sites[0]?.access ? node.sites[0].id : node.symbolId ?? node.sites[0]?.id);
+      preview(node.callKind || node.direction || node.sites.some(s => s.argument || s.callKind === 'registered') || node.sites[0]?.access ? node.sites[0].id : node.symbolId ?? node.sites[0]?.id);
       if (node.name === 'control_task') state.graph = fixture.expandedGraph;
       if (node.name === 'entry') state.graph = fixture.navigation.bothExpanded;
     }
@@ -90,6 +91,34 @@ try {
   assert.match(await page.locator('.copilot-progress').textContent(),/All detected sites processed.*7\/7/);
   assert.match(await page.locator('.copilot-progress').textContent(),/No candidate in supplied context: 7/);
   assert.equal(await page.getByRole('button',{name:'Analyze next 5',exact:true}).count(),0);
+  await page.getByRole('button', { name: 'Diagnostics', exact: true }).click();
+  for (const [waitReason, message] of [
+    ['unsaved-sources', 'Save all modified C/H files'],
+    ['indexing', 'Waiting for local indexing'],
+    ['source-update', 'Waiting for source changes'],
+    ['relations', 'Waiting for local relation analysis'],
+    ['cache-rebuild-required', 'Saved index is unavailable'],
+    ['worker-unavailable', 'Analysis Worker stopped'],
+    ['analysis-failed', 'Local relation analysis failed'],
+    ['closed', 'Workspace analysis has closed']
+  ]) {
+    Object.assign(aiDiagnostics.copilot,{state:'waiting-for-saved-index',waitReason,total:0,completed:0});
+    await page.evaluate(diagnostics=>window.dispatchEvent(new MessageEvent('message',{data:{type:'diagnostics',diagnostics}})),aiDiagnostics);
+    const footer = await page.locator('.copilot-progress').textContent();
+    assert.ok(footer.includes(message));
+    assert.doesNotMatch(footer,/0\/0|Remaining:|Failed:/);
+    const details = await page.locator('.memory-diagnostics').textContent();
+    assert.ok(details.includes(message));
+    assert.match(details,/Requests this session: 5/);
+    assert.doesNotMatch(details,/Processed: 0\/0/);
+    assert.equal(await page.getByRole('button',{name:'Analyze next 5',exact:true}).count(),0);
+  }
+  await page.screenshot({ path: 'output/playwright/copilot-waiting.png' });
+  Object.assign(aiDiagnostics.copilot,{state:'ready',waitReason:undefined,total:7,completed:7});
+  await page.evaluate(diagnostics=>window.dispatchEvent(new MessageEvent('message',{data:{type:'diagnostics',diagnostics}})),aiDiagnostics);
+  assert.match(await page.locator('.copilot-progress').textContent(),/7\/7 processed/);
+  assert.doesNotMatch(await page.locator('.memory-diagnostics').textContent(),/Copilot paused/);
+  await page.getByRole('button',{name:'Close',exact:true}).click();
   assert.equal(await page.locator('option[value="both"]').textContent(), 'Callers & Callees');
   await page.getByRole('button', { name: 'Settings', exact: true }).click({ timeout: 3000 });
   assert.ok(await page.evaluate(() => window.sent.some(m => m.type === 'settings')), 'Settings button requests scope configuration');
@@ -376,6 +405,20 @@ try {
   assert.ok((await popup.textContent()).includes('Registered candidate · callbacks.run'));
   assert.ok((await popup.textContent()).includes('This is not proof of invocation.'));
   assert.ok(await popup.locator('.evidence').count());
+  await page.keyboard.press('Escape');
+  await configure({ graph: fixture.registrationGraph });
+  const registrationTarget = page.locator('[data-node-name="registration_target"] .node-title');
+  assert.ok((await registrationTarget.textContent()).includes('Registration'));
+  assert.ok(!(await registrationTarget.textContent()).includes('Registered candidate'));
+  assert.equal(await page.locator('.branch.function-registration').count(), 1);
+  assert.equal(await page.locator('.branch.function-registration').evaluate(node => getComputedStyle(node, '::after').borderTopStyle), 'dotted');
+  await registrationTarget.click();
+  assert.ok((await page.locator('.code-line.highlight').textContent()).includes('fp)(void)=registration_target'));
+  await registrationTarget.focus(); await registrationTarget.press('Space');
+  assert.ok((await popup.textContent()).includes('Registration · fp'));
+  assert.ok((await popup.textContent()).includes('This is not proof of invocation.'));
+  assert.equal(await popup.locator('.site-kind[data-kind="reference"]').textContent(), 'Registration');
+  await page.screenshot({ path: 'output/playwright/callback-registration.png', fullPage: true });
   await page.keyboard.press('Escape');
   preview(fixture.pointerGraph.root.children.find(node => node.name === 'callback_target').sites[0].id);
   await configure({ graph: undefined, callback: fixture.callback });

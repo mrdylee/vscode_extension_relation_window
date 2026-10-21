@@ -163,7 +163,7 @@ export class RelationView implements vscode.Disposable {
       this.nodes.set(node.key, node);
       if (node.symbolId) this.locations.set(node.symbolId, { location: node.location, label: node.name });
       for (const site of node.sites) {
-        this.locations.set(site.id, { location: site.location, label: `${site.name} · ${site.argument ? `Function argument #${site.argument.position} via ${site.argument.callee}` : site.kind}` });
+        this.locations.set(site.id, { location: site.location, label: `${site.name} · ${site.argument ? `Function argument #${site.argument.position} via ${site.argument.callee}` : site.callKind === 'registered' && site.kind === 'reference' ? 'Registration' : site.kind}` });
         site.inference?.evidence.forEach((frame, i) => this.locations.set(site.id + ':evidence:' + i, { location: frame.location, label: frame.reason }));
       }
       node.children.forEach(visit);
@@ -219,7 +219,7 @@ export class RelationView implements vscode.Disposable {
         const node = typeof m.key === 'string' ? this.nodes.get(m.key) : undefined;
         if (!node) return;
         this.selectedNodeKey = node.key;
-        this.selection = node.callKind || node.direction || node.sites.some(site => site.argument) || node.sites[0]?.access ? node.sites[0].id : node.symbolId ?? node.sites[0]?.id;
+        this.selection = node.callKind || node.direction || node.sites.some(site => site.argument || site.callKind === 'registered') || node.sites[0]?.access ? node.sites[0].id : node.symbolId ?? node.sites[0]?.id;
         if (node.symbolId && !node.cycle && (!node.callKind || ['direct', 'expanded', 'inferred'].includes(node.callKind))) {
           // Preserve a deeper inherited expansion, including explicit ancestor overrides.
           let levels = this.state.depth, path = '';

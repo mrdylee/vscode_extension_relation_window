@@ -61,6 +61,7 @@ test('unchanged restart restores full callback results without source or relatio
   }
   assert.equal((await second.request({ type: 'cache-validate', versions: restored }).promise).valid, true);
   assert.ok(actual[0].references.some(reference => reference.name === 'one' && reference.callKind === 'inferred'));
+  assert.ok(actual[1].callbackRegistrations.some(reference => reference.name === 'one' && reference.kind === 'reference' && reference.callKind === 'registered'));
   assert.ok(actual.every(file => !file.programs && !file.initializers));
   assert.deepEqual(second.diagnostics.phases, {}, 'restoring does not parse or rederive');
   assert.equal(second.diagnostics.counts.files, 3);

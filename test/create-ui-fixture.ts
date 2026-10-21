@@ -27,6 +27,8 @@ async function main() {
   const macroGraph = index.graph(index.symbols().find(s => s.name === 'macro_run')!.id, 'callees', 2);
   analyzer.derive([analyzer.analyze('file:///demo/pointer.c', 'typedef void (*CB)(void);\nvoid callback_leaf(void){} void callback_target(void){callback_leaf();}\nstruct CallbackOps{CB run;};struct CallbackOps callbacks={.run=callback_target};\nvoid pointer_run(void){callbacks.run();}\n')]).forEach(file=>index.update(file));
   const pointerGraph = index.graph(index.symbols().find(s => s.name === 'pointer_run')!.id, 'callees', 2);
+  analyzer.derive([analyzer.analyze('file:///demo/registration.c', 'void registration_target(void){}\nvoid registration_run(void){void (*fp)(void)=registration_target;}\n')], undefined, undefined, false).forEach(file => index.update(file));
+  const registrationGraph = index.graph(index.symbols().find(s => s.name === 'registration_run')!.id, 'callees', 1);
   const pointerFile = index.files.get('file:///demo/pointer.c')!;
   const callback = index.callbackAt(pointerFile.uri, pointerFile.text.indexOf('callbacks.run()') + 'callbacks.'.length);
   index.update(analyzer.analyze('file:///demo/navigation.c', 'void nav_leaf(void){} void alpha(void){nav_leaf();} void zulu(void){} void pivot(void){zulu();alpha();zulu();} void entry(void){pivot();} void launch(void){entry();}'));
@@ -39,6 +41,6 @@ async function main() {
   const limitFile = analyzer.analyze('file:///demo/limits.c', 'void target(void){}int data[300];void update(void){'+Array.from({length:270},(_,n)=>`data[${n}]=${n};`).join('\n')+'}void run(void){void(*cb)(void)=target;cb();}');
   const limitNotices = analysisNotices(analyzer.derive([limitFile]), uri => uri.replace('file:///demo/', ''));
   await mkdir('test-results', { recursive: true });
-  await writeFile('test-results/ui-fixture.json', JSON.stringify({ limitNotices, graph, expandedGraph, calleeGraph, macroGraph, pointerGraph, callback, memberGraph, variableGraphs, navigation, argumentGraph, argumentBothGraph, files: [...index.files.values()].map(file => ({ ...file, tokens: highlightC(file.text) })) }));
+  await writeFile('test-results/ui-fixture.json', JSON.stringify({ limitNotices, graph, expandedGraph, calleeGraph, macroGraph, pointerGraph, registrationGraph, callback, memberGraph, variableGraphs, navigation, argumentGraph, argumentBothGraph, files: [...index.files.values()].map(file => ({ ...file, tokens: highlightC(file.text) })) }));
 }
 void main();

@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { WorkspaceIndex } from './workspace';
 import { CopilotCallbackController, CopilotProgress, CopilotRunResult, CopilotSnapshot } from './copilot-callbacks';
 import { applyCallbackHints } from './copilot-relations';
+import { CopilotWaitReason } from './diagnostics';
 
 interface SavedModel { id: string; version: string }
 export function registerCopilotCallbacks(context: vscode.ExtensionContext, workspace: WorkspaceIndex) {
@@ -11,11 +12,17 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
   let savedModel = context.workspaceState.get<SavedModel>('copilotCallbackModel');
   let disposed = false, userAction = false, pendingChange = false, running: Promise<void> | undefined;
   let observedGeneration = -1;
+  let deferredReason: 'enabled' | 'force' | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const activity = { state: 'off', total: 0, completed: 0, requests: 0, cacheHits: 0, remaining: 0, failures: 0, candidates: 0, notFound: 0, contextLimited: 0 };
+  const activity = { state: 'off', waitReason: undefined as CopilotWaitReason | undefined, total: 0, completed: 0, requests: 0, cacheHits: 0, remaining: 0, failures: 0, candidates: 0, notFound: 0, contextLimited: 0 };
   const enabled = () => vscode.workspace.isTrusted && vscode.workspace.getConfiguration('dynsight').get('copilotCallbacks', false);
   const configuredModel = () => vscode.workspace.getConfiguration('dynsight').get('copilotModel', '').trim();
-  function status(value: string) { activity.state = value; workspace.copilotDiagnostics = { ...activity }; workspace.diagnosticsChanged.fire(); }
+  function status(value: string) {
+    activity.state = value;
+    activity.waitReason = value === 'waiting-for-saved-index'
+      ? workspace.copilotWaitReason ?? (workspace.hasDirtySources ? 'unsaved-sources' : 'source-update') : undefined;
+    workspace.copilotDiagnostics = { ...activity }; workspace.diagnosticsChanged.fire();
+  }
   function clearProgress() {
     activity.total = activity.completed = activity.cacheHits = activity.remaining = activity.failures = activity.candidates = activity.notFound = activity.contextLimited = 0;
   }
@@ -25,6 +32,7 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
   }
   function resetModel() {
     clear(); controller?.dispose(); controller = undefined; model = undefined; userAction = false;
+    deferredReason = undefined;
     pendingChange = false; clearTimeout(timer); observedGeneration = workspace.generation;
   }
   function snapshot(): CopilotSnapshot {
@@ -96,10 +104,14 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
   }
   async function run(reason?: 'enabled' | 'saved-change' | 'force') {
     if (disposed || !enabled()) { status('off'); return; }
-    if (!workspace.stable || workspace.hasDirtySources) { status('waiting-for-saved-index'); return; }
+    if (!workspace.stable || workspace.hasDirtySources) {
+      if (reason === 'enabled' || reason === 'force') deferredReason = reason;
+      status('waiting-for-saved-index'); return;
+    }
     setup();
     if (!controller) { status('model-selection-required'); return; }
     if (running) return running;
+    reason = deferredReason ?? reason; deferredReason = undefined;
     clearProgress();
     status(reason ? 'analyzing' : 'restoring-cache');
     const active = controller;
@@ -115,8 +127,9 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
     if (disposed) return;
     clearTimeout(timer);
     timer = setTimeout(() => {
+      if (!enabled()) { status('off'); return; }
       if (running) { void running.then(schedule); return; }
-      if (!workspace.stable || workspace.hasDirtySources) return;
+      if (!workspace.stable || workspace.hasDirtySources) { status('waiting-for-saved-index'); return; }
       const changed = pendingChange && observedGeneration !== workspace.generation; pendingChange = false;
       void run(changed ? 'saved-change' : undefined);
     }, 1000);
@@ -166,7 +179,7 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
         schedule(); return;
       }
       if (!event.affectsConfiguration('dynsight.copilotCallbacks')) return;
-      clear(); if (!enabled()) { pendingChange = false; clearTimeout(timer); status('off'); } else schedule();
+      clear(); if (!enabled()) { pendingChange = false; deferredReason = undefined; userAction = false; clearTimeout(timer); status('off'); } else schedule();
     }),
     { dispose: () => { disposed = true; clearTimeout(timer); controller?.dispose(); } });
   const ready = workspace.ready.then(() => run());

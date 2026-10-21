@@ -41,7 +41,7 @@ test('a limited no-argument callee invalidates an omitted global callback effect
     void run(void){selected=foo;heavy();selected();}`);
   assert.ok([...index.files.values()].some(file => file.issues.some(issue => issue.includes('mutation limit'))));
   assert.ok(calls(index).some(group => group.callKind === 'indirect'), 'omitted global mutation must retain an unknown target');
-  assert.ok(calls(index).filter(group => group.callKind === 'inferred').every(group => group.sites.every(site => site.inference?.incomplete)));
+  assert.ok(calls(index).filter(group => group.callKind === 'inferred').every(group => group.sites.filter(site => site.kind === 'call').every(site => site.inference?.incomplete)));
 });
 
 test('a conditional opaque helper preserves the untouched callback as an incomplete candidate', () => {

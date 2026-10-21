@@ -6,6 +6,7 @@ interface Storage { root: string; path: string[]; evidence: Evidence; address: b
 interface Registration { targetId: string; evidence: Evidence }
 const storageKey = (storage: Storage) => JSON.stringify([storage.root, storage.path]);
 const maxAliasDepth = 16;
+const projectionCache = new WeakMap<FileAnalysis, { signature: string; result: FileAnalysis }>();
 
 // A written registration is useful evidence even when full pointer propagation is
 // disabled or incomplete. This deliberately does not prove a runtime invocation.
@@ -40,6 +41,51 @@ export function suggestExplicitCallbacks(raw: FileAnalysis[], derived: FileAnaly
     return symbols.map(symbol => ({ targetId: symbol.id,
       evidence: [{ location: value.location, reason: `Explicit function registration: ${value.name}` }] }));
   }
+  const registrations = new Map<string, Map<string, ReferenceRecord>>();
+  const functionNames = new Set(index.symbols().filter(symbol => symbol.kind === 'function').map(symbol => symbol.name));
+  const sourceConditions = new Map(raw.flatMap(file => file.references.filter(ref => ref.kind === 'reference' && functionNames.has(ref.name))
+    .map(ref => [`${file.uri}:${ref.location.start}`, ref.conditions] as const)));
+  function register(value: Expr, ownerId: string, functionId: string | undefined, expression: string) {
+    if (value.kind === 'initializer') {
+      for (const entry of value.entries) {
+        if (!entry.path.length || entry.path.some(part => typeof part !== 'string' || part === '*')) continue;
+        register(entry.value, ownerId, functionId, expression + '.' + entry.path.join('.'));
+      }
+      return;
+    }
+    for (const registration of direct(value)) {
+      const target = index.symbol(registration.targetId)!;
+      const file = index.files.get(value.location.uri)!;
+      const conditions = sourceConditions.get(`${file.uri}:${registration.evidence[0].location.start}`) ?? [];
+      const refs = registrations.get(file.uri) ?? new Map<string, ReferenceRecord>();
+      const id = `${file.uri}@${value.location.start}:registration:${target.id}`;
+      refs.set(id, { id, name: target.name, kind: 'reference', callKind: 'registered', targetId: target.id,
+        ownerId, functionId, location: value.location, conditions,
+        inference: { expression, evidence: registration.evidence, incomplete: false,
+          reasons: ['Explicit function registration; not proof of invocation.'] } });
+      registrations.set(file.uri, refs);
+    }
+  }
+  function collect(value: Expr, functionId: string) {
+    if (value.kind === 'assign') {
+      if (value.operator === '=') register(value.right, functionId, functionId,
+        index.files.get(value.left.location.uri)!.text.slice(value.left.location.start, value.left.location.end));
+      collect(value.left, functionId); collect(value.right, functionId);
+    } else if (value.kind === 'call') { collect(value.callee, functionId); value.args.forEach(arg => collect(arg, functionId)); }
+    else if (value.kind === 'initializer') value.entries.forEach(entry => collect(entry.value, functionId));
+    else if (value.kind === 'sequence' || value.kind === 'choice') value.values.forEach(part => collect(part, functionId));
+    else if (value.kind === 'unknown') value.children?.forEach(part => collect(part, functionId));
+    else if (value.kind === 'index') { collect(value.object, functionId); collect(value.index, functionId); }
+    else if (value.kind === 'cast' || value.kind === 'address' || value.kind === 'dereference' || value.kind === 'member') collect(value.object, functionId);
+  }
+  function collectStatements(body: FlowStatement[], functionId: string) {
+    for (const statement of body) {
+      if (statement.kind === 'branch') {
+        collect(statement.condition, functionId); collectStatements(statement.then, functionId); collectStatements(statement.otherwise, functionId);
+      } else if (statement.kind === 'loop') { collect(statement.condition, functionId); collectStatements(statement.body, functionId); }
+      else { collect(statement.value, functionId); if (statement.kind === 'return') break; }
+    }
+  }
   function initializer(storage: Storage, value: Expr, bindings: Map<string, Registration[]>) {
     if (value.kind !== 'initializer') return;
     for (const entry of value.entries) {
@@ -50,10 +96,21 @@ export function suggestExplicitCallbacks(raw: FileAnalysis[], derived: FileAnaly
       else bindings.set(keyFor(field), direct(entry.value));
     }
   }
+  const persistentOwners = new Map<string, { functionId: string; name: string }>();
+  for (const file of raw) for (const program of file.programs ?? []) for (const local of program.locals)
+    if (local.persistent) persistentOwners.set(local.id, { functionId: program.id, name: local.name });
   for (const file of raw) for (const init of file.initializers ?? []) {
-    if (index.symbol(init.id)?.kind === 'variable') initializer({ root: init.id, path: [], evidence: [], address: false }, init.value, initial);
+    const symbol = index.symbol(init.id);
+    const local = persistentOwners.get(init.id);
+    if (symbol?.kind === 'variable' || local) {
+      register(init.value, local?.functionId ?? init.id, local?.functionId, symbol?.name ?? local!.name);
+      const object = { root: init.id, path: [], evidence: [], address: false };
+      if (init.value.kind === 'initializer') initializer(object, init.value, initial);
+      else initial.set(keyFor(object), direct(init.value));
+    }
   }
   for (const file of raw) for (const program of file.programs ?? []) {
+    collectStatements(program.body, program.id);
     const aliases = new Map<string, Storage>(), bindings = new Map<string, Registration[]>();
     let useInitial = true;
     const clear = () => { aliases.clear(); bindings.clear(); useInitial = false; };
@@ -66,13 +123,16 @@ export function suggestExplicitCallbacks(raw: FileAnalysis[], derived: FileAnaly
         return { ...object, address: value.kind === 'address' };
       }
       if (value.kind === 'name') {
-        if (value.localId) return aliases.get(value.localId);
+        if (value.localId) return aliases.get(value.localId) ?? { root: value.localId, path: [], evidence: [], address: false };
         const symbols = resolve(value);
         if (symbols.length === 1 && symbols[0].kind === 'variable') return { root: symbols[0].id, path: [], evidence: [], address: false };
       }
       if (value.kind === 'member') {
         const object = storage(value.object);
-        if (object && object.address === value.arrow) return { ...object, path: [...object.path, value.field], address: false };
+        // A direct p->field write can be tracked within this function even
+        // when the pointee supplied to a local pointer/parameter is unknown.
+        const localPointer = value.arrow && value.object.kind === 'name' && value.object.localId && !aliases.has(value.object.localId);
+        if (object && (object.address === value.arrow || localPointer)) return { ...object, path: [...object.path, value.field], address: false };
       }
       return undefined;
     }
@@ -85,6 +145,12 @@ export function suggestExplicitCallbacks(raw: FileAnalysis[], derived: FileAnaly
         visit(value.right); visit(value.left);
         if (value.left.kind === 'name' && value.left.localId) {
           const object = value.operator === '=' ? storage(value.right) : undefined;
+          const own = { root: value.left.localId, path: [], evidence: [], address: false };
+          discardObject(own);
+          if (value.operator === '=') {
+            if (value.right.kind === 'initializer') initializer(own, value.right, bindings);
+            else bindings.set(keyFor(own), direct(value.right));
+          }
           aliases.delete(value.left.localId);
           if (object?.address && object.evidence.length < maxAliasDepth) aliases.set(value.left.localId, { ...object, evidence: [...object.evidence,
             { location: value.location, reason: `Local object alias: ${value.left.name}` }] });
@@ -92,7 +158,10 @@ export function suggestExplicitCallbacks(raw: FileAnalysis[], derived: FileAnaly
           const object = storage(value.left);
           if (object) {
             discardObject(object);
-            if (value.operator === '=' && object.path.length) bindings.set(keyFor(object), direct(value.right));
+            if (value.operator === '=') {
+              if (value.right.kind === 'initializer') initializer(object, value.right, bindings);
+              else bindings.set(keyFor(object), direct(value.right));
+            }
           }
         }
         return;
@@ -125,7 +194,14 @@ export function suggestExplicitCallbacks(raw: FileAnalysis[], derived: FileAnaly
       if (value.kind === 'initializer') { value.entries.forEach(entry => visit(entry.value)); return; }
       if (value.kind === 'choice' || value.kind === 'unknown') { clear(); return; }
       // An unsupported pointer-to-pointer alias can later replace this pointer.
-      if (value.kind === 'address' && value.object.kind === 'name' && value.object.localId) aliases.delete(value.object.localId);
+      if (value.kind === 'address' && value.object.kind === 'name' && value.object.localId) {
+        const localId = value.object.localId;
+        aliases.delete(localId);
+        const local = program.locals.find(local => local.id === localId);
+        const symbol = local && index.symbol(`${local.location.uri}#${local.location.start}`);
+        if (symbol && index.layout(symbol).some(layout => layout.layers[0] === 'pointer'))
+          discardObject({ root: value.object.localId, path: [], evidence: [], address: false });
+      }
       if (value.kind === 'cast' || value.kind === 'address' || value.kind === 'dereference' || value.kind === 'member' || value.kind === 'index') visit(value.object);
       if (value.kind === 'index') visit(value.index);
     }
@@ -139,6 +215,14 @@ export function suggestExplicitCallbacks(raw: FileAnalysis[], derived: FileAnaly
   }
   return derived.map(file => {
     const refs = added.get(file.uri);
-    return refs?.length ? { ...file, references: [...file.references, ...refs] } : file;
+    const written = [...(registrations.get(file.uri)?.values() ?? [])];
+    const same = JSON.stringify(written) === JSON.stringify(file.callbackRegistrations ?? []);
+    if (!refs?.length && same) return file;
+    const signature = JSON.stringify([refs, written]), previous = projectionCache.get(file);
+    if (previous?.signature === signature) return previous.result;
+    const result = { ...file, references: refs?.length ? [...file.references, ...refs] : file.references,
+      callbackRegistrations: same ? file.callbackRegistrations : written.length ? written : undefined };
+    projectionCache.set(file, { signature, result });
+    return result;
   });
 }
