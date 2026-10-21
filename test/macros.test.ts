@@ -14,6 +14,32 @@ function project(sources: Record<string, string>) {
 }
 const calls = (index: RelationIndex, name = 'run') => index.relations(index.symbols().find(s => s.name === name && s.kind === 'function' && s.definition)!.id, 'callees');
 
+test('disabled callback analysis skips initializer expansion while toggles retain ordinary macro and argument relations', () => {
+  const text = '#define CHOSEN target\n#define INVOKE() direct();submit(target)\n' +
+    'typedef void(*CB)(void);void target(void){}void direct(void){}void submit(CB cb){}' +
+    'static CB saved=CHOSEN;void run(void){static CB local=CHOSEN;saved();local();INVOKE();}';
+  const raw = [analyzer.analyze('file:///demo/initializer-mode.c', text)];
+  const rawInitializers = raw[0].initializers, parseInitializer = analyzer.initializer;
+  let parsed = 0;
+  analyzer.initializer = (...args) => { parsed++; return parseInitializer(...args); };
+  try {
+    for (const enabled of [false, true, false, true]) {
+      const before = parsed, files = analyzer.derive(raw, undefined, undefined, enabled), index = new RelationIndex();
+      files.forEach(file => index.update(file));
+      assert.equal(parsed > before, enabled, 'only enabled inference expands initializer expressions');
+      assert.equal(calls(index).some(group => group.name === 'target' && group.callKind === 'inferred'), enabled);
+      assert.ok(calls(index).some(group => group.name === 'direct' && group.callKind === 'expanded'));
+      assert.ok(files[0].functionArguments?.some(ref => ref.name === 'target' && !ref.argument?.inferred));
+      assert.ok(files[0].references.some(ref => ref.name === 'saved'), 'ordinary variable references remain');
+      if (!enabled) assert.equal(files[0].initializers?.length ?? 0, 0, 'expanded static/local initializer IR is not retained');
+      assert.equal(raw[0].initializers, rawInitializers, 'raw initializer facts remain available for re-enabling');
+      const after = parsed;
+      assert.equal(analyzer.derive(raw, undefined, undefined, enabled)[0], files[0], 'unchanged mode reuses its derived result');
+      assert.equal(parsed, after);
+    }
+  } finally { analyzer.initializer = parseInitializer; }
+});
+
 test('selected sources expand unchecked header macros while unchecked bodies retain source relations', () => {
   const sources = {
     'SDK/api.h': '#define API() target()\nvoid plain(void);void svc(void (*cb)(void));',

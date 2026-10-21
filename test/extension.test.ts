@@ -41,7 +41,11 @@ export async function run() {
   assert.ok((await vscode.commands.getCommands()).includes('dynsight.checkForUpdates'));
   assert.ok((await vscode.commands.getCommands()).includes('dynsight.openSettings'), 'scope settings command registered');
   assert.ok((await vscode.commands.getCommands()).includes('dynsight.help'), 'offline help command registered');
+  assert.ok((await vscode.commands.getCommands()).includes('dynsight.selectCopilotModel'), 'Copilot model picker command registered');
+  assert.equal(vscode.workspace.getConfiguration('dynsight').get('copilotModel'), '', 'model choice is visible in Settings');
+  assert.equal(vscode.workspace.getConfiguration('dynsight').get('copilotCallbacks'), false, 'AI requests are opt-in');
   assert.equal(api.workspace.index.files.size, 93, 'all files indexed beyond the document cache limit');
+  assert.equal(api.workspace.diagnostics.index.cache.saved, 93, 'native workspace writes the saved index');
   assert.equal(api.workspace.diagnostics.index.rebuilds[0].reason, 'startup');
   let openedByReindex = 0;
   const opening = vscode.workspace.onDidOpenTextDocument(() => openedByReindex++);

@@ -35,6 +35,7 @@ export function createDiagnostics(version: string, refresh: () => void, reportIs
     body.append(el('div', `${state?.mode ?? 'references'} · ${state?.graph?.root.name ?? 'No symbol selected'} · ${state?.fileCount ?? 0} indexed files`, 'diagnostics-selection'));
     if (data.index) {
       const index = data.index;
+      if (index.cache) body.append(el('div', `Disk cache: ${index.cache.state} · Restored: ${index.cache.restored} files · Saved: ${index.cache.saved} files`));
       const latest = index.rebuilds.at(-1);
       const trigger = (record: typeof latest) => record ? `${rebuildNames[record.reason]}${record.settings?.length ? ` (${record.settings.join(', ')})` : ''}` : '';
       if (latest) body.append(el('div', `Last rebuild: #${latest.number} · ${time(latest.at)} · ${trigger(latest)} · ${latest.outcome}`));
@@ -60,6 +61,12 @@ export function createDiagnostics(version: string, refresh: () => void, reportIs
       if (latest?.files) history.append(el('div', 'Search results may include duplicates/non-C files. Selected is unique C/H files within the limit. Indexed/Failed/Unaccounted are selected-file snapshots at rebuild end; unfinished runs may have no results. Discovery is unfinished on errors or file limits. These counts cannot prove search found every file.', 'diagnostics-note muted'));
       if (index.lastSourceEvent) history.append(el('div', `Last source event: ${index.lastSourceEvent.kind} · ${time(index.lastSourceEvent.at)} (may reuse unchanged source)`, 'muted'));
       body.append(history);
+    }
+    if (data.copilot) {
+      const ai = data.copilot;
+      body.append(el('div', `Copilot callbacks: ${ai.state} · Requests: ${ai.requests} · Cache hits: ${ai.cacheHits} · Pending: ${ai.remaining} · Failures: ${ai.failures}`));
+      body.append(el('div', `AI candidates: ${ai.candidates} · No candidate in supplied context: ${ai.notFound} · Context limited: ${ai.contextLimited}`));
+      body.append(el('div', 'AI candidates are suggestions. Use Analyze Callbacks with Copilot to process pending candidates; normal Rebuild preserves valid AI results.', 'diagnostics-note muted'));
     }
     if (worker) {
       const sample = worker.sample, cards = el('div', '', 'diagnostics-metrics');

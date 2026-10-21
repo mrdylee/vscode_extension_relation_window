@@ -296,7 +296,7 @@ export async function createAnalyzer(runtime: string, grammar: string) {
     clearMacroCache(analyzer.analyze); clearPointerCache(analyzer.analyze);
   }, derive(files: FileAnalysis[], memoryPressure?: () => boolean, phase?: (value: 'macros' | 'callbacks') => void, analyzeCallbacks = true): FileAnalysis[] {
     phase?.('macros');
-    const expanded = deriveMacroCalls(files, analyzer.analyze, analyzer.calls, analyzer.initializer, memoryPressure);
+    const expanded = deriveMacroCalls(files, analyzer.analyze, analyzer.calls, analyzer.initializer, memoryPressure, analyzeCallbacks);
     phase?.('callbacks');
     return inferPointerCalls(expanded, memoryPressure, analyzer.analyze, analyzeCallbacks);
   } };

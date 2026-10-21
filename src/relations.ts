@@ -208,7 +208,7 @@ export class RelationIndex {
     const contains = (s: { location: { start: number; end: number } }) => s.location.start <= offset && offset < s.location.end;
     const symbol = file.symbols.find(contains);
     if (symbol?.definition) return [symbol];
-    const ref = file.references.find(ref => !ref.indirect && ref.callKind !== 'inferred' && contains(ref));
+    const ref = file.references.find(ref => !ref.indirect && ref.callKind !== 'inferred' && ref.callKind !== 'ai-candidate' && contains(ref));
     return ref ? this.resolve(ref) : symbol ? [symbol] : [];
   }
   callbackAt(uri: string, offset: number): CallbackTargets | undefined {
@@ -216,11 +216,11 @@ export class RelationIndex {
     if (!file) return;
     const calls = file.references.filter(ref => ref.kind === 'call' && ref.access && !ref.expansion &&
       ref.location.start <= offset && offset < ref.location.end &&
-      (ref.callKind === 'inferred' || ref.indirect || this.resolve(ref).some(s => s.kind === 'variable')));
+      (ref.callKind === 'inferred' || ref.callKind === 'ai-candidate' || ref.indirect || this.resolve(ref).some(s => s.kind === 'variable')));
     const first = calls.sort((a, b) => (a.location.end - a.location.start) - (b.location.end - b.location.start))[0];
     if (!first) return;
     // In factory()(), selecting factory belongs to the inner direct call.
-    if (file.references.some(ref => ref.kind !== 'declaration' && !ref.indirect && ref.callKind !== 'inferred' &&
+    if (file.references.some(ref => ref.kind !== 'declaration' && !ref.indirect && ref.callKind !== 'inferred' && ref.callKind !== 'ai-candidate' &&
       ref.location.start <= offset && offset < ref.location.end &&
       ref.location.end - ref.location.start <= first.location.end - first.location.start &&
       this.resolve(ref).some(symbol => symbol.kind === 'function'))) return;

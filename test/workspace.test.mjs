@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import { buildSync } from 'esbuild';
 import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 
 const require = createRequire(import.meta.url);
 const bundle = buildSync({ entryPoints: ['src/workspace.ts'], bundle: true, write: false, platform: 'node', format: 'cjs', external: ['vscode'] }).outputFiles[0].text;
@@ -25,7 +28,7 @@ async function bounded(promise) {
   try { return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Workspace operation did not settle')), 3000); })]); }
   finally { clearTimeout(timer); }
 }
-function fixture(t, files = []) {
+function fixture(t, files = [], options = {}) {
   const folder = { uri: Uri.parse('file:///review'), name: 'review', index: 0 };
   const created = new Emitter(), changed = new Emitter(), deleted = new Emitter(), closed = new Emitter(), edited = new Emitter();
   const configuration = new Emitter(), folders = new Emitter();
@@ -37,15 +40,53 @@ function fixture(t, files = []) {
     createFileSystemWatcher: () => ({ dispose() {}, onDidCreate: created.event, onDidChange: changed.event, onDidDelete: deleted.event }),
     onDidChangeTextDocument: edited.event, onDidCloseTextDocument: closed.event,
     onDidChangeConfiguration: configuration.event, onDidChangeWorkspaceFolders: folders.event,
-    fs: { readFile: async () => Buffer.from('') }
+    fs: { readFile: async file => Buffer.from(options.sources?.get(file.toString()) ?? '') }
   };
   const vscode = { EventEmitter: Emitter, Uri, RelativePattern: class {}, env: {}, version: 'test', workspace: adapter };
   const module = { exports: {} };
   runInNewContext(bundle, { module, exports: module.exports, process, Buffer, URL, setTimeout, clearTimeout, require: name => name === 'vscode' ? vscode : require(name) });
-  const workspace = new module.exports.WorkspaceIndex(process.cwd());
+  const workspace = new module.exports.WorkspaceIndex(process.cwd(), options.storage);
   t.after(async () => { const worker = workspace.worker; workspace.dispose(); await worker.terminate(); });
   return { workspace, adapter, created, changed, deleted, closed, edited, configuration, folders };
 }
+
+test('disk cache restores unchanged startup without parses or relationship passes; one edit reparses one file', async t => {
+  const storage = await mkdtemp(path.join(os.tmpdir(), 'dynsight-workspace-cache-'));
+  t.after(() => rm(storage, { recursive: true, force: true }));
+  const files = ['cached.c', 'other.c'].map(uri);
+  const sources = new Map([[files[0].toString(), latest], [files[1].toString(), 'void other(void){}']]);
+  const first = fixture(t, files, { storage, sources }).workspace;
+  await first.ready; await bounded(first.whenIdle());
+  first.dispose();
+  const { workspace, changed } = fixture(t, files, { storage, sources });
+  await workspace.ready; await bounded(workspace.whenIdle());
+  assert.equal(workspace.diagnostics.index.sourceParses, 0);
+  assert.equal(workspace.diagnostics.index.relationPasses, 0);
+  assert.equal(workspace.diagnostics.index.rebuildCount, 0);
+  assert.equal(workspace.index.files.size, 2);
+  sources.set(files[0].toString(), latest.replaceAll('new_target', 'next_target'));
+  changed.fire(files[0]); await bounded(workspace.whenIdle());
+  assert.equal(workspace.diagnostics.index.sourceParses, 1);
+  const task = workspace.index.symbols().find(symbol => symbol.name === 'task');
+  assert.ok(workspace.index.relations(task.id, 'callees').some(group => group.name === 'next_target'));
+});
+
+test('cache startup validates content, additions and removals made while the editor was closed', async t => {
+  const storage = await mkdtemp(path.join(os.tmpdir(), 'dynsight-offline-cache-'));
+  t.after(() => rm(storage, { recursive: true, force: true }));
+  const files = ['cached.c', 'removed.c'].map(uri);
+  const sources = new Map([[files[0].toString(), latest], [files[1].toString(), 'void removed(void){}']]);
+  const first = fixture(t, files, { storage, sources }).workspace;
+  await first.ready; await bounded(first.whenIdle()); first.dispose();
+  sources.set(files[0].toString(), latest.replaceAll('new_target', 'old_target'));
+  const added = uri('added.c'); sources.set(added.toString(), 'void added(void){}');
+  const { workspace } = fixture(t, [files[0], added], { storage, sources });
+  await workspace.ready; await bounded(workspace.whenIdle());
+  assert.equal(workspace.diagnostics.index.sourceParses, 2);
+  assert.equal(workspace.index.files.has(files[1].toString()), false);
+  const task = workspace.index.symbols().find(symbol => symbol.name === 'task');
+  assert.ok(workspace.index.relations(task.id, 'callees').some(group => group.name === 'old_target'));
+});
 
 const latest = 'typedef void(*CB)(void);void new_target(void){}void task(void){CB cb=new_target;cb();}';
 test('analysis limits report a partial index while ordinary syntax notices retain ready status', async t => {
@@ -262,7 +303,7 @@ test('returning to indexed text while a changed Worker response is pending resto
   assert.equal(workspace.failures.size, 0);
 });
 
-test('diagnostics distinguish startup, automatic and manual rebuilds with bounded history', async t => {
+test('configuration reconciles files without a full rebuild and manual rebuild history stays bounded', async t => {
   const { workspace, configuration, folders } = fixture(t);
   await workspace.ready;
   assert.ok(workspace.diagnostics.index, 'rebuild diagnostics must be available without Worker errors');
@@ -273,18 +314,50 @@ test('diagnostics distinguish startup, automatic and manual rebuilds with bounde
   configuration.fire({ affectsConfiguration: key => key === 'dynsight.include' });
   await bounded(workspace.whenIdle());
   data = workspace.diagnostics.index;
-  assert.equal(data.rebuilds.at(-1).reason, 'configuration');
-  assert.deepEqual(Array.from(data.rebuilds.at(-1).settings), ['include']);
+  assert.equal(data.rebuildCount, 1);
   folders.fire({}); await bounded(workspace.whenIdle());
-  assert.equal(workspace.diagnostics.index.rebuilds.at(-1).reason, 'workspace-folders');
+  assert.equal(workspace.diagnostics.index.rebuildCount, 1);
   await workspace.reindex('toolbar');
   assert.equal(workspace.diagnostics.index.rebuilds.at(-1).reason, 'toolbar');
   for (let i = 0; i < 4; i++) await workspace.reindex();
   data = workspace.diagnostics.index;
-  assert.equal(data.rebuildCount, 8);
+  assert.equal(data.rebuildCount, 6);
   assert.equal(data.rebuilds.length, 5);
   assert.equal(data.rebuilds.at(-1).reason, 'command');
   assert.equal(data.sessionStartedAt, workspace.diagnostics.index.sessionStartedAt);
+});
+
+test('damaged manifest waits for explicit Rebuild and does not silently analyze', async t => {
+  const storage = await mkdtemp(path.join(os.tmpdir(), 'dynsight-damaged-cache-'));
+  t.after(() => rm(storage, { recursive: true, force: true }));
+  const files = [uri('cached.c')], sources = new Map([[files[0].toString(), latest]]);
+  const first = fixture(t, files, { storage, sources }).workspace;
+  await first.ready; await bounded(first.whenIdle()); first.dispose();
+  await writeFile(path.join(storage, 'analysis-cache', 'manifest.json'), 'damaged');
+  const { workspace, changed } = fixture(t, files, { storage, sources });
+  await workspace.ready;
+  assert.match(workspace.status, /Rebuild Index/);
+  changed.fire(files[0]); await bounded(workspace.whenIdle());
+  assert.equal(workspace.diagnostics.index.sourceParses, 0);
+  await workspace.reindex(); await bounded(workspace.whenIdle());
+  assert.equal(workspace.status, 'Index ready');
+  assert.equal(workspace.index.files.size, 1);
+});
+
+test('dirty editor overlays cannot replace the persisted saved generation', async t => {
+  const storage = await mkdtemp(path.join(os.tmpdir(), 'dynsight-dirty-cache-'));
+  t.after(() => rm(storage, { recursive: true, force: true }));
+  const file = uri('cached.c'), sources = new Map([[file.toString(), latest]]);
+  const first = fixture(t, [file], { storage, sources });
+  await first.workspace.ready; await bounded(first.workspace.whenIdle());
+  const document = { uri: file, isClosed: false, isDirty: true, getText: () => latest.replaceAll('new_target', 'unsaved_target') };
+  first.adapter.textDocuments = [document]; first.edited.fire({ document, contentChanges: [{}] });
+  await bounded(first.workspace.whenIdle()); first.workspace.dispose();
+  const second = fixture(t, [file], { storage, sources }).workspace;
+  await second.ready; await bounded(second.whenIdle());
+  assert.equal(second.diagnostics.index.sourceParses, 0);
+  assert.ok(second.index.symbols().some(s => s.name === 'new_target'));
+  assert.equal(second.index.symbols().some(s => s.name === 'unsaved_target'), false);
 });
 
 test('unchanged document events do not increase source or relation counters; edits do', async t => {
@@ -313,11 +386,12 @@ test('unchanged document events do not increase source or relation counters; edi
 test('overlapping rebuilds keep a completed latest record and mark obsolete runs superseded', async t => {
   const { workspace, adapter } = fixture(t);
   await workspace.ready;
-  const pending = deferred(); let first = true;
-  adapter.findFiles = () => first ? (first = false, pending.promise) : Promise.resolve([]);
+  const pending = deferred(), entered = deferred(); let first = true;
+  adapter.findFiles = () => first ? (first = false, entered.resolve(), pending.promise) : Promise.resolve([]);
   const previous = workspace.reindex('toolbar');
   assert.equal(workspace.diagnostics.index.rebuilds.at(-1).outcome, 'running');
-  await workspace.reindex('configuration', ['exclude']);
+  await bounded(entered.promise);
+  await bounded(workspace.reindex('configuration', ['exclude']));
   pending.resolve([]); await previous;
   assert.equal(workspace.diagnostics.index.rebuilds.at(-2).outcome, 'superseded');
   assert.equal(workspace.diagnostics.index.rebuilds.at(-1).outcome, 'completed');
@@ -392,10 +466,11 @@ test('unfinished discovery and superseded rebuilds do not claim analyzed file co
   adapter.findFiles = async () => { throw new Error('search unavailable'); };
   await workspace.reindex();
   assert.equal(workspace.diagnostics.index.rebuilds.at(-1).files.discoveryComplete, false);
-  const search = deferred(); let first = true;
-  adapter.findFiles = async () => first ? (first = false, search.promise) : [uri('current.c')];
+  const search = deferred(), entered = deferred(); let first = true;
+  adapter.findFiles = async () => first ? (first = false, entered.resolve(), search.promise) : [uri('current.c')];
   const old = workspace.reindex();
-  await workspace.reindex();
+  await bounded(entered.promise);
+  await bounded(workspace.reindex());
   search.resolve([uri('obsolete.c')]); await old;
   const records = workspace.diagnostics.index.rebuilds;
   assert.equal(records.at(-2).outcome, 'superseded');
@@ -453,4 +528,66 @@ test('Worker transfers located callback diagnostics and clears them when callbac
   await bounded(workspace.whenIdle());
   assert.equal(workspace.index.files.get(file.toString()).callbackDiagnostics,undefined);
   assert.equal(workspace.status,'Index ready');
+});
+
+test('a superseded rebuild waiting on save cannot erase a newer reconciliation', async t => {
+  const firstFile=uri('first.c'), nextFile=uri('next.c');
+  const {workspace,adapter,configuration}=fixture(t,[firstFile]);
+  await workspace.ready;
+  const saving=deferred(); workspace.saving=saving.promise;
+  const stale=workspace.reindex();
+  adapter.findFiles=async()=>[nextFile];
+  configuration.fire({affectsConfiguration:key=>key==='dynsight.include'});
+  const current=workspace.reconciling;
+  for(let i=0;i<100 && !workspace.index.files.has(nextFile.toString());i++) await new Promise(r=>setTimeout(r,2));
+  assert.equal(workspace.index.files.has(nextFile.toString()),true,'new reconciliation reached source acceptance');
+  workspace.saving=undefined; saving.resolve();
+  await stale; await current; await bounded(workspace.whenIdle());
+  assert.equal(workspace.index.files.has(nextFile.toString()),true,'superseded rebuild must not clear newer source');
+});
+
+test('scope reconciliation removes failures belonging to newly excluded files',async t=>{
+ const bad=uri('bad.c'),good=uri('good.c');
+ const sources=new Map([[bad.toString(),' '.repeat(2_000_001)],[good.toString(),'void good(void){}']]);
+ const {workspace,adapter,configuration}=fixture(t,[bad,good],{sources});
+ await workspace.ready;
+ assert.equal(workspace.failures.has(bad.toString()),true);
+ adapter.getConfiguration=()=>({get:(key,fallback)=>key==='include'?['good.c']:fallback});
+ adapter.findFiles=async()=>[good];
+ configuration.fire({affectsConfiguration:key=>key==='dynsight.include'});
+ await bounded(workspace.whenIdle());
+ assert.equal(workspace.failures.has(bad.toString()),false);
+ assert.equal(workspace.status,'Index ready');
+});
+
+test('a delete during disk-cache validation must not enqueue the now absent source as a failure',async t=>{
+ const storage=await mkdtemp(path.join(os.tmpdir(),'dynsight-delete-review-'));
+ t.after(()=>rm(storage,{recursive:true,force:true}));
+ const file=uri('deleted.c'),sources=new Map([[file.toString(),'void target(void){}']]);
+ const initial=fixture(t,[file],{storage,sources}).workspace;
+ await initial.ready;await bounded(initial.whenIdle());initial.dispose();
+ const {workspace,adapter,deleted}=fixture(t,[file],{storage,sources});
+ const read=deferred(),entered=deferred();let reads=0;
+ adapter.fs.readFile=()=>{ if(reads++===0){entered.resolve();return read.promise;} throw new Error('ENOENT'); };
+ await bounded(entered.promise);
+ adapter.findFiles=async()=>[];deleted.fire(file);read.resolve(Buffer.from(sources.get(file.toString())));
+ await workspace.ready;await bounded(workspace.whenIdle());
+ assert.equal(workspace.index.files.size,0);
+ assert.equal(workspace.failures.size,0,'deleted file must not become a read failure');
+ assert.equal(workspace.status,'Index ready');
+});
+
+test('failed scope discovery cannot later report excluded old source as a ready current index',async t=>{
+ const first=uri('old.c'),next=uri('new.c');
+ const sources=new Map([[first.toString(),'void old_function(void){}'],[next.toString(),'void new_function(void){}']]);
+ const {workspace,adapter,configuration,changed}=fixture(t,[first,next],{sources});
+ await workspace.ready;
+ adapter.getConfiguration=()=>({get:(key,fallback)=>key==='include'?['new.c']:fallback});
+ adapter.findFiles=async()=>{throw new Error('discovery unavailable');};
+ configuration.fire({affectsConfiguration:key=>key==='dynsight.include'});
+ await workspace.reconciling;
+ assert.match(workspace.status,/Index error/);
+ sources.set(next.toString(),'void changed_function(void){}');changed.fire(next);await bounded(workspace.whenIdle());
+ assert.equal(workspace.index.files.has(first.toString()) && workspace.status==='Index ready',false,
+  'excluded source must not silently remain in a current index after failed scope change');
 });

@@ -198,6 +198,7 @@ function showDetails(node: GraphNode, anchor: HTMLButtonElement) {
   popup.append(meta);
   if (node.cycle) popup.append(el('div', 'condition detail-warning', 'Recursion: further expansion stopped on this path.'));
   if (node.ambiguous) popup.append(el('div', 'condition detail-warning', 'Candidate: inferred targets, conditions or multiple definitions prevent a unique match.'));
+  if (node.sites.some(site => site.callKind === 'ai-candidate')) popup.append(el('div', 'condition detail-warning', 'Copilot candidate: source evidence suggests a possible callback target. This is not proof of invocation.'));
   if (node.callKind === 'macro') popup.append(el('div', 'condition detail-warning', 'Macro invocation: expansion is unavailable, incomplete, or leaves this recursive call.'));
   if (node.callKind === 'indirect') popup.append(el('div', 'condition detail-warning', 'Indirect call: the runtime function target has not been resolved.'));
   if (node.callKind === 'unresolved') popup.append(el('div', 'condition detail-warning', 'Unresolved call: no matching function or macro was found in the analyzed scope.'));
@@ -210,7 +211,7 @@ function showDetails(node: GraphNode, anchor: HTMLButtonElement) {
       popup.append(el('div', 'condition', 'Passing a function does not prove that the receiving code invokes it.'));
     }
     if (site.inference) {
-      popup.append(el('strong', 'detail-label', `${site.argument ? 'Argument value' : 'Inferred call'} · ${site.inference.expression}`));
+      popup.append(el('strong', 'detail-label', `${site.callKind === 'ai-candidate' ? 'Copilot candidate' : site.argument ? 'Argument value' : 'Inferred call'} · ${site.inference.expression}`));
       popup.append(condition(site.inference.expression));
       if (site.inference.incomplete) popup.append(el('div', 'condition detail-warning', 'Other targets may exist. ' + site.inference.reasons.join(' · ')));
       for (const [i, frame] of site.inference.evidence.entries()) {
@@ -262,6 +263,7 @@ function drawNode(node: GraphNode): HTMLElement {
   if (node.symbolId) title.dataset.symbolId = node.symbolId;
   title.dataset.preview = openId;
   title.append(icon(node), el('span', 'symbol-name', node.symbolId ? node.name : node.sites[0]?.name ?? node.name));
+  if (node.sites.some(site => site.callKind === 'ai-candidate')) title.append(el('span', 'badge', 'AI candidate'));
   const accesses = [...new Set(node.sites.flatMap(site => site.access ? [site.access] : []))];
   for (const access of accesses) title.append(accessBadge(access, true));
   const status = [node.cycle ? 'Recursive' : '', node.ambiguous ? 'Candidate' : '', node.callKind === 'indirect' ? 'Indirect call' : node.callKind === 'unresolved' ? 'Unresolved call' : '', node.conditions.length || node.sites.some(s => s.conditions.length) ? 'Conditional' : ''].filter(Boolean).join(', ');
@@ -371,7 +373,7 @@ function render(state: ViewState) {
     candidates.replaceChildren();
     candidates.classList.toggle('callback-candidates', !!state.callback);
     if (state.callback) {
-      const note = el('span', 'muted callback-note', `Callback targets · ${state.callback.expression} · Static candidates${state.callback.incomplete ? ' · Other targets may exist' : ''}`);
+      const note = el('span', 'muted callback-note', `Callback targets · ${state.callback.expression} · Candidates${state.callback.incomplete ? ' · Other targets may exist' : ''}`);
       note.title = state.callback.reasons.join('\n'); candidates.append(note);
       if (state.callback.reasons.length) {
         const diagnosis = el('details', 'callback-diagnosis');

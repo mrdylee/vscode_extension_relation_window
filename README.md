@@ -11,7 +11,37 @@ C 소스 폴더만 열어 함수의 호출·참조 관계, 변수의 읽기·쓰
 3. **Dynsight: Open Relation and Context**를 실행합니다.
 4. 메인 편집기에서 함수나 변수 이름을 클릭합니다. 하단에 Context(왼쪽)와 Relation(오른쪽)이 표시됩니다.
 
-VS Code 데스크톱 1.95 이상이 필요합니다. 분석은 로컬 WASM으로 수행하며 소스 코드를 외부로 전송하지 않습니다. 업데이트 확인을 켜면 GitHub에 릴리스 정보를 요청합니다. 릴리스 게시 전에 Windows/macOS/Ubuntu에서 단위 테스트와 Extension Host 통합 테스트를 실행합니다. WSL 원격 연결 및 원격 자동 설치는 실환경 미검증입니다. 웹 전용 VS Code는 지원하지 않습니다.
+VS Code 데스크톱 1.95 이상이 필요합니다. 기본 분석은 로컬 WASM으로 수행합니다. 선택 기능인 **Copilot 콜백 분석**을 켜면 관련 소스 일부를 기존 Copilot 계정으로 전송하며 계정 사용량 한도가 적용됩니다. 업데이트 확인을 켜면 GitHub에 릴리스 정보를 요청합니다. 릴리스 게시 전에 Windows/macOS/Ubuntu에서 단위 테스트와 Extension Host 통합 테스트를 실행합니다. WSL 원격 연결 및 원격 자동 설치는 실환경 미검증입니다. 웹 전용 VS Code는 지원하지 않습니다.
+
+## 디스크 캐시와 Copilot 콜백 후보 (v0.1.54)
+
+인덱스를 작업공간별 확장 저장소에 보관합니다. 재시작 시 파일 내용과 목록을 확인하고,
+변경이 없으면 파싱·관계 분석 없이 복원합니다. 수정된 파일만 다시 파싱하고 헤더·콜백
+등록 등으로 연결된 관계를 갱신합니다. 공통 헤더나 토큰 결합 매크로가 많으면 관계 갱신
+범위가 커질 수 있습니다. 미저장 편집은 디스크 캐시에 반영하지 않습니다.
+
+전체 로컬 분석을 새로 만들 때는 **Rebuild index**를 실행하세요. 캐시 손상이나 분석기
+버전 변경으로 호환되지 않으면 Rebuild 안내를 표시합니다. 첫 실행은 로컬 인덱스를 만듭니다.
+
+미해결 콜백을 AI로 보완하려면 명령 팔레트에서 **Dynsight: Analyze Callbacks with Copilot**을
+실행해 모델을 선택하고 VS Code 접근을 승인하세요. 별도 API 키는 필요 없습니다.
+**Settings → Copilot Model → Select Copilot Model**에서 사용 가능한 모델 목록을 열어
+모델을 바꿀 수 있습니다. 선택한 ID는 `dynsight.copilotModel`에 저장됩니다.
+모델 선택만으로 분석을 켜거나 AI 요청을 보내지 않으며, 모델별 캐시는 따로 보관합니다.
+
+- `dynsight.copilotCallbacks`는 기본 꺼짐입니다. 끄면 백그라운드 요청과 AI 후보 표시를 중단합니다.
+- 켠 상태에서 파일을 저장하면 필요한 미해결 콜백을 한 번에 최대 5건 분석합니다.
+- 재시작·함수 탐색·일반 Rebuild는 유효한 AI 캐시만 복원하며 새 요청을 하지 않습니다.
+- 남은 항목은 같은 명령을 다시 실행합니다. **Reanalyze Callback Candidates with Copilot**은
+  캐시를 우회하는 별도 명령이며, 역시 한 번에 최대 5건입니다.
+- 결과는 Callers/Callees에 **AI candidate**로 표시합니다. 근거 소스 위치를 볼 수 있으며,
+  실행 시 실제 호출을 보장하는 결과가 아닙니다. 코드가 바뀐 뒤 도착한 오래된 답변은 버립니다.
+
+**Diagnostics**에서 Disk cache 상태, 소스 파싱 횟수, Copilot 요청·캐시 적중·대기 건수를
+확인할 수 있습니다. 로컬 인덱스 캐시는 소스와 분석 자료를 포함하며 Git 저장소 밖에 저장합니다.
+Copilot 캐시는 결과 식별자와 해시를 저장하며 소스 프롬프트를 보관하지 않습니다.
+기존 정적 콜백 분석(`dynsight.analyzeCallbacks`)은 독립 옵션으로 유지합니다.
+Copilot은 미해결 결과를 보완하는 선택 기능이며, 기존 분석 엔진 전체를 대체하지 않습니다.
 
 **WSL 설치:** Windows의 VS Code에서 Microsoft WSL 확장을 설치한 뒤 **WSL: Reopen Folder in WSL**로 C 소스 폴더를 엽니다. 그 창에서 VSIX를 설치하고 확장 목록의 **WSL: 배포판 이름**에 Dynsight — C Code Explorer가 있는지 확인합니다. 필요하면 **Install in WSL**을 선택합니다. [VS Code WSL 안내](https://code.visualstudio.com/docs/remote/wsl#_managing-extensions)
 

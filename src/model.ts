@@ -1,7 +1,7 @@
 export type Kind = 'function' | 'variable' | 'type' | 'macro' | 'unknown';
 export type RelationMode = 'references' | 'callers' | 'callees' | 'both';
 export type CalleeSort = 'name' | 'source';
-export type CallKind = 'direct' | 'macro' | 'indirect' | 'unresolved' | 'expanded' | 'inferred';
+export type CallKind = 'direct' | 'macro' | 'indirect' | 'unresolved' | 'expanded' | 'inferred' | 'ai-candidate';
 export type Access = 'read' | 'write' | 'readwrite' | 'address';
 export type AccessFilter = 'all' | Access;
 export interface CType {

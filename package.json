@@ -2,7 +2,7 @@
   "name": "dynsight",
   "displayName": "Dynsight — C Code Explorer",
   "description": "Build-free C references, caller/callee graphs and a linked Context preview.",
-  "version": "0.1.53",
+  "version": "0.1.54",
   "publisher": "dylee",
   "author": "dylee",
   "license": "MIT",
@@ -22,6 +22,18 @@
   ],
   "contributes": {
     "commands": [
+      {
+        "command": "dynsight.selectCopilotModel",
+        "title": "Dynsight: Select Copilot Model"
+      },
+      {
+        "command": "dynsight.analyzeCallbacksWithCopilot",
+        "title": "Dynsight: Analyze Callbacks with Copilot"
+      },
+      {
+        "command": "dynsight.reanalyzeCallbacksWithCopilot",
+        "title": "Dynsight: Reanalyze Callback Candidates with Copilot"
+      },
       {
         "command": "dynsight.reportIssue",
         "title": "Dynsight: Report Issue"
@@ -80,6 +92,18 @@
     "configuration": {
       "title": "Dynsight",
       "properties": {
+        "dynsight.copilotCallbacks": {
+          "type": "boolean",
+          "default": false,
+          "scope": "window",
+          "markdownDescription": "Optional AI candidates for unresolved callbacks using your existing GitHub Copilot account. Start with [Analyze Callbacks with Copilot](command:dynsight.analyzeCallbacksWithCopilot) to select a model and grant access. Relevant source is sent to Copilot and account usage limits apply. Saved file changes can request up to 5 uncached analyses per batch. Startup and navigation only reuse the local cache. AI candidates are suggestions, not proven calls. Rebuild Index preserves valid AI cache."
+        },
+        "dynsight.copilotModel": {
+          "type": "string",
+          "default": "",
+          "scope": "window",
+          "markdownDescription": "Copilot model ID for callback candidates. [Select Copilot Model](command:dynsight.selectCopilotModel) lists models available to your Copilot account and saves the selected ID here. Selecting a model does not enable analysis or send source. An empty value asks you to choose when starting Analyze Callbacks with Copilot. Model changes reuse only that model's valid cache; unavailable models are not replaced automatically."
+        },
         "dynsight.analyzeCallbacks": {
           "type": "boolean",
           "default": true,
@@ -122,21 +146,21 @@
           "items": { "type": "string", "minLength": 1 },
           "default": [],
           "scope": "resource",
-          "description": "Workspace-relative glob patterns to include in C/H analysis, for example App/** or Drivers/**. Empty includes all C/H files. Exclude always takes priority. Uses forward slashes. Changes automatically rebuild the index."
+          "description": "Workspace-relative glob patterns to include in C/H analysis, for example App/** or Drivers/**. Empty includes all C/H files. Exclude always takes priority. Uses forward slashes. Changes reconcile selected files while reusing unchanged source analysis."
         },
         "dynsight.exclude": {
           "type": "array",
           "items": { "type": "string", "minLength": 1 },
           "default": [],
           "scope": "resource",
-          "description": "Workspace-relative glob patterns excluded from indexing and file watching, for example **/Tools/Polyspace/**. Exclude takes priority over Include. Uses forward slashes. Changes automatically rebuild the index. Independent of files.exclude, search.exclude and C_Cpp.files.exclude."
+          "description": "Workspace-relative glob patterns excluded from indexing and file watching, for example **/Tools/Polyspace/**. Exclude takes priority over Include. Uses forward slashes. Changes reconcile selected files while reusing unchanged source analysis. Independent of files.exclude, search.exclude and C_Cpp.files.exclude."
         },
         "dynsight.macroExpansionFolders": {
           "type": "array",
           "items": { "type": "string", "minLength": 1 },
           "default": ["**"],
           "scope": "resource",
-          "markdownDescription": "[Select folders…](command:dynsight.selectMacroExpansionFolders) with checkboxes, or enter workspace-relative glob patterns such as `App/**`. Default `[\"**\"]` expands all indexed sources; an empty list disables macro expansion. Unchecked sources keep basic analysis and header definitions remain available to checked sources. Include/Exclude still control which files are indexed. Changes automatically rebuild the index."
+          "markdownDescription": "[Select folders…](command:dynsight.selectMacroExpansionFolders) with checkboxes, or enter workspace-relative glob patterns such as `App/**`. Default `[\"**\"]` expands all indexed sources; an empty list disables macro expansion. Unchecked sources keep basic analysis and header definitions remain available to checked sources. Include/Exclude still control which files are indexed. Changes refresh affected source analysis and relationships."
         },
         "dynsight.skipInactive": {
           "type": "boolean",
@@ -155,16 +179,16 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test test/core.test.ts test/analysis-notices.test.ts test/macros.test.ts test/pointer-calls.test.ts test/callback-effects.test.ts test/callback-uncertainty.test.ts test/callback-safety.test.ts test/function-arguments.test.ts test/members.test.ts test/syntax.test.ts test/updates.test.ts test/issue-report.test.ts test/issue-report-service.test.ts test/diagnostic-history.test.ts test/branding-migration.test.ts",
+    "test": "tsx --test test/core.test.ts test/analysis-notices.test.ts test/macros.test.ts test/pointer-calls.test.ts test/callback-effects.test.ts test/callback-uncertainty.test.ts test/callback-safety.test.ts test/callback-index-regressions.test.ts test/analysis-cache.test.ts test/incremental-analysis.test.ts test/copilot-callbacks.test.ts test/copilot-relations.test.ts test/copilot-service.test.ts test/function-arguments.test.ts test/members.test.ts test/syntax.test.ts test/updates.test.ts test/issue-report.test.ts test/issue-report-service.test.ts test/diagnostic-history.test.ts test/branding-migration.test.ts",
     "test:extension": "npm run build && node scripts/test-extension.mjs",
-    "test:worker": "npm run build && node --test test/analysis-worker.test.mjs test/workspace.test.mjs",
+    "test:worker": "npm run build && node --test test/analysis-worker.test.mjs test/analysis-cache-worker.test.mjs test/workspace.test.mjs",
     "test:memory": "node --expose-gc --import tsx --test test/analysis-memory.test.ts",
     "test:performance": "tsx test/index-performance.ts",
     "test:large": "npm run build && node scripts/test-large-workspace.mjs",
     "test:freertos": "npm run build && node scripts/test-freertos.mjs",
     "test:ui": "npm run build && tsx test/create-ui-fixture.ts && node test/ui.mjs",
     "vscode:prepublish": "npm run build",
-    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license --out artifacts/dynsight-0.1.53.vsix"
+    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license --out artifacts/dynsight-0.1.54.vsix"
   },
   "dependencies": {
     "minimatch": "10.2.6",

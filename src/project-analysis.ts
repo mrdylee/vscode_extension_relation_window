@@ -4,7 +4,7 @@ import { MacroExpander, macroMemoryLimit } from './macro-expansion';
 
 type Analyze = (uri: string, text: string, skip?: boolean) => FileAnalysis;
 interface Event { offset: number; value: PreprocessorEvent }
-interface Cached { raw: FileAnalysis; paths: string; dependencies: Set<FileAnalysis>; result: FileAnalysis }
+interface Cached { raw: FileAnalysis; paths: string; dependencies: Set<FileAnalysis>; result: FileAnalysis; analyzeCallbacks: boolean }
 const caches = new WeakMap<Analyze, Map<string, Cached>>();
 export function clearMacroCache(analyze: Analyze) { caches.delete(analyze); }
 const includeLimit = 'Macro include traversal limit reached; call relationships may be incomplete';
@@ -80,7 +80,7 @@ function activeText(file: FileAnalysis, start: number, end: number) {
 
 // The analyzer callback uses the already initialized C parser, in the Worker.
 export function deriveMacroCalls(raw: FileAnalysis[], analyze: Analyze, parseCalls: (uri: string, text: string, original?: (start: number, end: number) => Location, namespace?: string, context?: (location: Location) => string[]) => { references: ReferenceRecord[]; issues: string[]; programs: FlowProgram[]; initializers: GlobalInitializer[] },
-  parseInitializer: (uri: string, text: string, original: (start: number, end: number) => Location) => { value: FlowExpression; issues: string[] }, memoryPressure?: () => boolean): FileAnalysis[] {
+  parseInitializer: (uri: string, text: string, original: (start: number, end: number) => Location) => { value: FlowExpression; issues: string[] }, memoryPressure?: () => boolean, analyzeCallbacks = true): FileAnalysis[] {
   const files = new Map(raw.map(file => [file.uri, file]));
   let cache = caches.get(analyze); if (!cache) caches.set(analyze, cache = new Map());
   for (const uri of cache.keys()) if (!files.has(uri)) cache.delete(uri);
@@ -89,7 +89,7 @@ export function deriveMacroCalls(raw: FileAnalysis[], analyze: Analyze, parseCal
     if (file.expandMacros === false) { cache!.delete(file.uri); return file; }
     if (!file.functions?.length && !file.initializers?.length) { cache!.delete(file.uri); return file; }
     const previous = cache!.get(file.uri);
-    if (previous?.raw === file && previous.paths === paths && [...previous.dependencies].every(dep => files.get(dep.uri) === dep) &&
+    if (previous?.raw === file && previous.analyzeCallbacks === analyzeCallbacks && previous.paths === paths && [...previous.dependencies].every(dep => files.get(dep.uri) === dep) &&
       (!previous.result.issues.includes(macroMemoryLimit) || memoryPressure?.())) return previous.result;
     const dependencies = new Set<FileAnalysis>();
     const issues = new Set<string>();
@@ -101,7 +101,7 @@ export function deriveMacroCalls(raw: FileAnalysis[], analyze: Analyze, parseCal
         references: file.references.map(ref => ref.kind === 'call' ? { ...ref,
           inference: { expression: ref.name, evidence: [], incomplete: true, reasons: [reason] } } : ref),
         issues: [...file.issues, ...issues] };
-      cache!.set(file.uri, { raw: file, paths, dependencies, result }); return result;
+      cache!.set(file.uri, { raw: file, paths, dependencies, result, analyzeCallbacks }); return result;
     };
     if (memoryPressure?.()) return partial(macroMemoryLimit);
     const events = timeline(file, files, issues, dependencies, memoryPressure);
@@ -116,9 +116,11 @@ export function deriveMacroCalls(raw: FileAnalysis[], analyze: Analyze, parseCal
     });
     if (!events.some(event => event.value.kind === 'define')) {
       const result = { ...file, projectScoped: true };
-      cache!.set(file.uri, { raw: file, paths, dependencies, result }); return result;
+      cache!.set(file.uri, { raw: file, paths, dependencies, result, analyzeCallbacks }); return result;
     }
-    let initializers = (file.initializers ?? []).map(init => {
+    // Initializer values feed callback propagation, not ordinary references or
+    // literal function arguments. Keep raw facts intact for later re-enabling.
+    let initializers = (analyzeCallbacks ? file.initializers ?? [] : []).map(init => {
       if (memoryPressure?.()) { issues.add(macroMemoryLimit); return init; }
       const tokens = tokenizeC(file.text.slice(init.location.start, init.location.end), (start, end) => sourceLocation(init.location.start + start, init.location.start + end));
       const expander = new MacroExpander(lookup, memoryPressure), variants = expander.expand(tokens);
@@ -184,7 +186,7 @@ export function deriveMacroCalls(raw: FileAnalysis[], analyze: Analyze, parseCal
           generated = parseCalls(file.uri, code, mapLocation, `:variant:${variantIndex}`, location => sourceConditions.get(location.start) ?? []);
           parsedVariants.set(syntaxKey, generated);
           generatedPrograms.push(...generated.programs);
-          generatedInitializers.push(...generated.initializers);
+          if (analyzeCallbacks) generatedInitializers.push(...generated.initializers);
         }
         if (generated.issues.length) issues.add(`Macro expansion near line ${fn.body.line + 1}: generated C has incomplete or unsupported syntax`);
         for (const ref of generated.references) {
@@ -216,6 +218,6 @@ export function deriveMacroCalls(raw: FileAnalysis[], analyze: Analyze, parseCal
         ? replaced.has(`${ref.name}:${ref.location.start}`) && !ref.macroIds?.length ? [] : [{ ...ref, kind: 'reference' as const }] : [ref]).concat(calls);
     }
     const result = { ...file, programs, initializers, projectScoped: true, references, issues: [...file.issues, ...issues] };
-    cache!.set(file.uri, { raw: file, paths, dependencies, result }); return result;
+    cache!.set(file.uri, { raw: file, paths, dependencies, result, analyzeCallbacks }); return result;
   });
 }

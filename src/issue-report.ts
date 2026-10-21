@@ -77,11 +77,16 @@ export function createIssueReport(input: IssueReportInput): string {
       evaluations: number(detail.evaluations), scopeEvaluations: number(detail.scopeEvaluations), slots: number(detail.slots)
     })),
     workerError: diagnostics.workerError ? noticeKind(diagnostics.workerError) : 'none',
+    diskCache: index?.cache ? { state: choice(index.cache.state, ['disabled', 'checking', 'restored', 'updated', 'missing', 'invalid', 'deferred', 'error']),
+      restored: number(index.cache.restored), saved: number(index.cache.saved) } : null,
+    copilot: diagnostics.copilot ? { state: choice(diagnostics.copilot.state, ['off', 'model-unavailable', 'model-selection-required', 'permission-required', 'ready', 'more-callbacks-available', 'request-failed', 'waiting-for-saved-index', 'analyzing', 'restoring-cache']),
+      requests: number(diagnostics.copilot.requests), cacheHits: number(diagnostics.copilot.cacheHits), remaining: number(diagnostics.copilot.remaining), failures: number(diagnostics.copilot.failures),
+      candidates: number(diagnostics.copilot.candidates), notFound: number(diagnostics.copilot.notFound), contextLimited: number(diagnostics.copilot.contextLimited) } : null,
     index: index ? {
       sessionAgeSeconds: age(index.sessionStartedAt), rebuildCount: number(index.rebuildCount),
       sourceParses: number(index.sourceParses), relationPasses: number(index.relationPasses),
       lastSourceEvent: index.lastSourceEvent ? { ageSeconds: age(index.lastSourceEvent.at),
-        kind: choice(index.lastSourceEvent.kind, ['editor-change', 'editor-close', 'file-create', 'file-change', 'file-delete']) } : null,
+        kind: choice(index.lastSourceEvent.kind, ['editor-change', 'editor-save', 'editor-close', 'file-create', 'file-change', 'file-delete']) } : null,
       rebuilds: index.rebuilds.slice(-5).map(record => ({ number: number(record.number), ageSeconds: age(record.at),
         reason: choice(record.reason, ['startup', 'configuration', 'workspace-folders', 'command', 'toolbar']),
         settings: (record.settings ?? []).filter(key => ['skipInactive', 'include', 'exclude', 'macroExpansionFolders'].includes(key)),

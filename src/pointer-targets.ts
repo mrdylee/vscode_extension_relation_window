@@ -214,25 +214,48 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
   const heapValue = (key: string) => { const value = heap.get(key); if (dependencies && !dependencies.heap.has(key)) dependencies.heap.set(key, value); return value; };
   const heapShape = () => { if (dependencies && dependencies.shape === undefined) dependencies.shape = heap.size; };
   const heapRegions = new Set<string>(), regionPatterns = new Map<string, RegExp>();
-  const regionRoots = new WeakMap<object, Map<string, Set<string>>>();
+  interface RegionNode { root?: string; children: Map<string, RegionNode> }
+  const regionRoots = new WeakMap<object, RegionNode>();
   let stamp = 0, regionRevision = 0;
   const opaqueReason = 'Address passed to an opaque call may be modified';
   function storageRoot(slot: string) {
     for (let n = slot.indexOf('#') + 1; n < slot.length; n++) if (slot[n] === '.' || slot[n] === '[') return slot.slice(0, n);
     return slot;
   }
+  function regionPath(slot: string) {
+    const root = storageRoot(slot);
+    return [root, ...Array.from(slot.slice(root.length).matchAll(/\.[^.\[]+|\[[^\]]+\]/g), match => match[0])];
+  }
   function registerRegion(regions: object, root: string) {
     const index = regionRoots.get(regions); if (!index) return;
-    const base = storageRoot(root), entries = index.get(base) ?? new Set();
-    entries.add(root); index.set(base, entries);
+    let node: RegionNode = index;
+    for (const part of regionPath(root)) {
+      let child = node.children.get(part);
+      if (!child) node.children.set(part, child = { children: new Map() });
+      node = child;
+    }
+    node.root = root;
   }
   function matchingRegions(regions: Set<string> | Map<string, OrderedChange>, slot: string): Iterable<string> {
     let index = regionRoots.get(regions);
     if (!index) {
-      regionRoots.set(regions, index = new Map());
+      regionRoots.set(regions, index = { children: new Map() });
       for (const root of regions.keys()) registerRegion(regions, root);
     }
-    return index.get(storageRoot(slot)) ?? [];
+    const matches: string[] = [];
+    let nodes = [index];
+    for (const part of regionPath(slot)) {
+      const next: RegionNode[] = [];
+      for (const node of nodes) {
+        const exact = node.children.get(part), wildcard = part.startsWith('[') && part !== '[*]' ? node.children.get('[*]') : undefined;
+        if (exact) next.push(exact);
+        if (wildcard) next.push(wildcard);
+      }
+      for (const node of next) if (node.root) matches.push(node.root);
+      nodes = next;
+      if (!nodes.length) break;
+    }
+    return matches;
   }
   function containsRegion(root: string, slot: string) {
     if (slot === root || slot.startsWith(root + '.') || slot.startsWith(root + '[')) return true;
@@ -388,7 +411,9 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
       patterns = patterns.filter(key => key !== slot); wildcardSlots.set(slot, patterns);
     }
     const written = state.writes?.get(slot);
-    const broad = patterns.filter(key => (state.memory.has(key) || heap.has(key)) &&
+    // Missing wildcard slots are dependencies too: a later function may add
+    // one after this function's observations have been memoized.
+    const broad = patterns.filter(key => (state.memory.has(key) || heapValue(key) !== undefined) &&
       !(written?.definite && written.stamp > (state.writes?.get(key)?.stamp ?? 0)))
       .map(key => rawRead(key, state)).filter((value): value is Value => !!value);
     return broad.length ? union(exact ?? defaultValue(slot), ...broad) : exact ?? defaultValue(slot);

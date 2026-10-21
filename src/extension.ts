@@ -5,6 +5,7 @@ import { registerUpdates } from './update-service';
 import { selectMacroExpansionFolders } from './macro-folders';
 import { registerIssueReporting } from './issue-report-service';
 import { migrateSettings, prepareUpgrade } from './branding-migration';
+import { registerCopilotCallbacks } from './copilot-service';
 
 export async function activate(context: vscode.ExtensionContext) {
   if (!await prepareUpgrade()) return;
@@ -14,7 +15,8 @@ export async function activate(context: vscode.ExtensionContext) {
     throw error;
   }
   registerUpdates(context);
-  const workspace = new WorkspaceIndex(context.extensionPath);
+  const workspace = new WorkspaceIndex(context.extensionPath, context.storageUri?.fsPath);
+  registerCopilotCallbacks(context, workspace);
   const view = new RelationView(workspace, context.extensionUri);
   registerIssueReporting(context, workspace, view);
   let timer: ReturnType<typeof setTimeout> | undefined;

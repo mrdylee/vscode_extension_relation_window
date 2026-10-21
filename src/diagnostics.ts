@@ -1,7 +1,7 @@
 export type AnalysisPhase = 'sources' | 'macros' | 'callbacks' | 'transfer';
 export interface MemorySample { at: number; heapUsed: number; heapLimit: number; external: number }
 export type RebuildReason = 'startup' | 'configuration' | 'workspace-folders' | 'command' | 'toolbar';
-export type SourceEvent = 'editor-change' | 'editor-close' | 'file-create' | 'file-change' | 'file-delete';
+export type SourceEvent = 'editor-change' | 'editor-save' | 'editor-close' | 'file-create' | 'file-change' | 'file-delete';
 export interface RebuildRecord {
   number: number; at: number; reason: RebuildReason; settings?: string[]; finishedAt?: number;
   outcome: 'running' | 'completed' | 'partial' | 'failed' | 'superseded';
@@ -13,6 +13,7 @@ export interface RebuildRecord {
 export interface IndexDiagnostics {
   sessionStartedAt: number; rebuildCount: number; sourceParses: number; relationPasses: number;
   rebuilds: RebuildRecord[]; lastSourceEvent?: { at: number; kind: SourceEvent };
+  cache?: { state: 'disabled' | 'checking' | 'restored' | 'updated' | 'missing' | 'invalid' | 'deferred' | 'error'; restored: number; saved: number };
 }
 export interface WorkerDiagnostics {
   run: string;
@@ -29,4 +30,5 @@ export interface Diagnostics {
   worker?: WorkerDiagnostics;
   workerError?: string;
   index?: IndexDiagnostics;
+  copilot?: { state: string; requests: number; cacheHits: number; remaining: number; failures: number; candidates: number; notFound: number; contextLimited: number };
 }

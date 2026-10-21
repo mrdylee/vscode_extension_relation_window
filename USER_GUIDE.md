@@ -32,11 +32,63 @@ This guide is included with the extension and works offline. You do not need Git
 
 Use **Settings** in the Dynsight toolbar to configure sorting, Context layout, call graph direction and Include/Exclude together for the current workspace. With no folder open, it opens user settings instead. In a multi-folder workspace, use folder settings for folder-specific Include/Exclude overrides; layout preferences apply to the whole window. **Help** opens this guide again. Both actions are also available in the Command Palette as **Dynsight: Open Settings** and **Dynsight: Open User Guide**.
 
-The index stays in memory for the current window. Navigating or closing unchanged
-files reuses existing results. Edits (including unsaved edits), discarded edits,
-and external file changes update the affected source and call relationships.
-**Rebuild index**, analysis-scope changes, or reloading the window starts a fresh
-analysis. This is not a persistent on-disk index cache.
+The index is saved in this workspace's extension storage, including in the remote
+WSL environment. On restart Dynsight checks file contents and inventory before
+restoring it. An unchanged compatible cache needs no source parsing or relation
+analysis. First use creates the index locally. A damaged or incompatible cache
+(including an analyzer-version upgrade) asks you to run **Rebuild index**.
+
+Edits, discarded edits and external changes reparse only changed files. Relations
+are recomputed for conservatively connected files, including header and callback
+registration dependencies. Shared headers and token-pasting macros can connect
+many or all files; this is not a promise that every edit costs one file of analysis.
+Unsaved edits remain temporary and are not written into the disk generation.
+Scope changes reconcile selected files; only **Rebuild index** explicitly clears
+all local analysis. Diagnostics shows cache state and parse/relation counters.
+
+## Optional Copilot callback candidates
+
+Run **Dynsight: Analyze Callbacks with Copilot** and select a model from your
+existing GitHub Copilot account. VS Code handles access consent. No separate API
+key is needed. This enables `dynsight.copilotCallbacks` for the workspace. Disable
+that setting to stop background requests and remove AI candidates from the view.
+
+In **Settings → Copilot Model**, click **Select Copilot Model** to choose from
+models available to your account. The selection is saved as `dynsight.copilotModel`.
+You can also run **Dynsight: Select Copilot Model** from the Command Palette.
+Selection alone neither enables AI nor sends requests. Analyze uses the configured
+model; an unavailable model requires another selection instead of silently falling
+back. Results are cached separately for each model and version.
+
+Relevant source snippets are sent to Copilot's service; account usage limits and
+organization policies apply. Dynsight does not inherit Copilot chat history or
+Agent search. It selects bounded source evidence from the local index.
+
+- Unchanged startup, navigation and normal **Rebuild index** only reuse AI cache.
+- Saved changes can analyze unresolved callbacks, up to five new requests per
+  batch. No requests are made during unsaved editing. Diagnostics shows requests,
+  cache hits, pending callbacks and failures.
+- Run **Analyze Callbacks with Copilot** again for remaining callbacks. Run
+  **Reanalyze Callback Candidates with Copilot** to bypass valid AI results for
+  a bounded batch. Normal Rebuild does not force AI requests.
+- Source, relevant search results, settings, model and prompt versions determine
+  cache validity. Changed inputs cancel outstanding work; stale answers are discarded.
+- **AI candidate** labels appear in Callers, Callees and both mode. Their details
+  link to source evidence. They are suggestions, never proof of invocation. An
+  empty answer means no candidate was found in the supplied bounded context.
+
+Local index records contain source and analysis data. AI cache records contain
+validated result identifiers and hashes, not source prompts. Both live in workspace
+extension storage, not the Git repository. Removing this storage removes the cache.
+Caching avoids repeated work; it does not make incomplete static or AI analysis complete.
+Successful saves retain the preceding local index generation. Interrupted or
+concurrent writes can leave orphan generation directories; they are not deleted
+automatically because another VS Code window might still be writing them.
+
+`dynsight.analyzeCallbacks` controls the existing static callback engine independently.
+Copilot supplements unresolved results. Disabling static analysis skips expensive
+pointer propagation, but source facts needed by function-argument navigation and
+later reanalysis remain available; this is not a zero-memory callback mode.
 
 ## Choose which files to analyze
 
@@ -49,7 +101,7 @@ Only C/H files are analyzed. Patterns are relative to each workspace folder; use
 | Empty | Set | All C/H files except Exclude matches |
 | Set | Set | Include matches minus Exclude matches |
 
-**Exclude always wins.** An empty Include list means all C/H files; a nonempty list with no matches means zero files. Overlapping patterns do not duplicate files. Changes automatically rebuild the index and also apply to file changes and unsaved edits.
+**Exclude always wins.** An empty Include list means all C/H files; a nonempty list with no matches means zero files. Overlapping patterns do not duplicate files. Changes reconcile selected files and also apply to file changes and unsaved edits.
 
 In Settings, add each pattern as a separate item. To edit JSON instead, run **Preferences: Open Workspace Settings (JSON)** and merge the following entries into the existing object. Keep your other settings.
 
@@ -89,7 +141,7 @@ which indexed source bodies and initializers receive macro expansion.
    Include patterns, or top-level folders when Include is empty. Saved custom
    patterns remain available. In multi-folder workspaces, choose a workspace
    folder first; the setting is saved for that folder.
-3. Wait for the automatic rebuild to reach **Index ready**. Check all for all
+3. Wait for the analysis update to reach **Index ready**. Check all for all
    sources; uncheck all to disable expansion. Cancel leaves settings unchanged.
 
 ```json
