@@ -73,5 +73,21 @@ Common headers, unresolved shared names and token-pasting can broaden dependency
 components to the whole project. Invalid/incompatible local caches request an
 explicit Rebuild. Interrupted/concurrent writers can leave orphan disk generations.
 The private WSL corpus and live Copilot account, quota and model quality have not
-been validated here. Public release and final packaged-runtime evidence are
-recorded separately after those checks complete.
+been validated here.
+
+## Verified publication
+
+- Source commit: `3ba4065118c24930bb764ad73cec6d7d39f51f36`; annotated tag `v0.1.54`.
+- [Release workflow](https://github.com/mrdylee/vscode_extension_relation_window/actions/runs/39529022464)
+  succeeded on Windows, macOS and Ubuntu, including native and large-workspace tests.
+- [Public release](https://github.com/mrdylee/vscode_extension_relation_window/releases/tag/v0.1.54)
+  published on 2026-10-21 at 01:47:37 UTC, not draft or prerelease.
+- Universal, Windows, macOS, WSL and legacy-name VSIX downloads returned HTTP 200
+  and identical bytes. SHA256SUMS matches every alias. VSIX size: 563,197 bytes.
+- Public VSIX SHA256: `085e6adc35238fa7f190b2077e29567c614ac5f50a731d76e038a1f9c925f78d`.
+- All 16 ZIP members match the locally tested package exactly (ZIP archive metadata
+  can differ). Manifest is `dylee.dynsight@0.1.54` with Copilot model settings.
+- Current updater recognizes the release from 0.1.53, stays quiet on 0.1.54, and
+  validates/downloads the package. The legacy 0.1.43 updater retrieves the same bytes.
+- Verification JSON is under ignored `test-results/release-0.1.54/`; scripts are
+  under ignored `output/playwright/release-0.1.54-*`.

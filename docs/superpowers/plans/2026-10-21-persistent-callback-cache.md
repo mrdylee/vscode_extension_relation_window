@@ -27,4 +27,6 @@ Implementation and local review complete: steps 1–5. Model selection was added
 in Settings at the user's request; selecting a model only restores its cache.
 Static callback mode-off cleanup skips callback-only initializer expansion while
 retaining shared facts needed by existing navigation. Packaged native and browser
-checks pass. Step 6 publication and public download verification remain pending.
+checks pass. Step 6 is complete: v0.1.54 is public, the three-platform release
+workflow passed, all download aliases/checksums were verified, and all 16 package
+members match the locally tested VSIX. See the review's publication evidence.
