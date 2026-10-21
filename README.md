@@ -8,12 +8,12 @@ C 소스 폴더만 열어 함수의 호출·참조 관계, 변수의 읽기·쓰
 
 ## 설치와 시작
 
-1. [GitHub Releases](https://github.com/mrdylee/vscode_extension_relation_window/releases/latest)에서 Windows / macOS / WSL용 VSIX를 받고, VS Code 명령 팔레트의 **Extensions: Install from VSIX…**로 설치합니다. 세 파일은 동일한 범용 패키지이며 이름만 구분합니다.
+1. [GitHub Releases](https://github.com/mrdylee/vscode_extension_relation_window/releases/latest)에서 WSL용 VSIX(`dynsight-<version>-wsl.vsix`)를 받고, VS Code 명령 팔레트의 **Extensions: Install from VSIX…**로 설치합니다. 다음 릴리스부터 Windows·macOS 이름의 사본은 제공하지 않습니다. 자동 업데이트용 공통 파일은 같은 패키지입니다.
 2. C 소스가 있는 폴더를 엽니다. 빌드, SDK, clangd, `compile_commands.json`은 필요하지 않습니다.
 3. **Dynsight: Open Relation and Context**를 실행합니다.
 4. 메인 편집기에서 함수나 변수 이름을 클릭합니다. 하단에 Context(왼쪽)와 Relation(오른쪽)이 표시됩니다.
 
-VS Code 데스크톱 1.95 이상이 필요합니다. 기본 분석은 로컬 WASM으로 수행합니다. 선택 기능인 **Copilot 콜백 분석**을 켜면 관련 소스 일부를 기존 Copilot 계정으로 전송하며 계정 사용량 한도가 적용됩니다. 업데이트 확인을 켜면 GitHub에 릴리스 정보를 요청합니다. 릴리스 게시 전에 Windows/macOS/Ubuntu에서 단위 테스트와 Extension Host 통합 테스트를 실행합니다. WSL 원격 연결 및 원격 자동 설치는 실환경 미검증입니다. 웹 전용 VS Code는 지원하지 않습니다.
+VS Code 데스크톱 1.95 이상이 필요합니다. 기본 분석은 로컬 WASM으로 수행합니다. 선택 기능인 **Copilot 콜백 분석**을 켜면 관련 소스 일부를 기존 Copilot 계정으로 전송하며 계정 사용량 한도가 적용됩니다. 업데이트 확인을 켜면 GitHub에 릴리스 정보를 요청합니다. 릴리스 게시 전 검증은 Ubuntu에서 단위 테스트와 Extension Host 통합 테스트를 실행합니다. WSL 원격 연결 및 원격 자동 설치는 실환경 미검증입니다. 웹 전용 VS Code는 지원하지 않습니다.
 
 ## 디스크 캐시와 Copilot 콜백 후보 (v0.1.54)
 
@@ -168,7 +168,7 @@ Include/Exclude는 기본 분석에 포함할 파일을 정하고, **Macro Expan
 1. `package.json`, `package-lock.json`의 버전 및 `package` 스크립트의 VSIX 이름을 함께 올리고 CHANGELOG를 작성합니다.
 2. `docs/releases/<버전>.md`에 변경 사항과 설치 안내를 작성합니다.
 3. 변경을 커밋·푸시한 뒤 `v0.1.10` 같은 버전 태그를 푸시합니다. 태그와 패키지 버전이 일치해야 합니다.
-4. GitHub Actions가 Windows/macOS/Ubuntu 검증을 통과한 후 범용 VSIX를 만들고, Windows/macOS/WSL 이름의 사본과 SHA-256 목록을 정식 릴리스로 게시합니다. 접미사 없는 공통 VSIX 이름은 자동 업데이트가 사용하므로 유지합니다.
+4. GitHub Actions가 Ubuntu 검증을 통과한 후 WSL용 VSIX와 SHA-256 목록을 정식 릴리스로 게시합니다. 접미사 없는 공통 VSIX 이름은 자동 업데이트가 사용하므로 유지합니다.
 5. 이전 버전에서 **Check for Updates**를 실행해 확인합니다. 일반 커밋만으로는 릴리스가 생성되지 않습니다.
 
 ## 탐색
