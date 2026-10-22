@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.63 — 2026-10-22
+
+- Arrange index status, Copilot progress and Analysis notices from left to right
+  in one footer row. Truncate long status text instead of wrapping.
+- Open Analysis notices above the footer without increasing its height. Keep
+  Diagnostics and Copilot analysis actions available.
+
 ## 0.1.62 — 2026-10-21
 
 - Show the overflow operation, first omitted storage location and a bounded

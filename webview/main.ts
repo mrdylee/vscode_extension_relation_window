@@ -474,14 +474,17 @@ function render(state: ViewState) {
   if (state.contextLayout !== 'separate') renderContext(preview);
   popup.querySelectorAll<HTMLElement>('.site').forEach(site => site.classList.toggle('selected', site.dataset.site === `${preview?.location.uri}@${preview?.location.start}`));
   graph.querySelectorAll<HTMLElement>('.node-title').forEach(title => title.classList.toggle('selected', title.dataset.preview === `${preview?.location.uri}#${preview?.location.start}` || title.dataset.preview === `${preview?.location.uri}@${preview?.location.start}`));
-  footer.replaceChildren(el('span', '', `${state.status} · ${state.fileCount} files`), el('span', 'muted', 'Space Details · → Expand · ← Collapse · Shift+→ Levels · Enter Open source'));
-  footer.append(button('Diagnostics', () => diagnostics?.open(), 'Show memory measurements for a screenshot'));
+  const indexStatus = el('span', 'index-status', `${state.status} · ${state.fileCount} files`);
+  indexStatus.title = indexStatus.textContent ?? '';
+  footer.replaceChildren(indexStatus);
   footer.append(copilotProgress); renderCopilot(state.diagnostics?.copilot);
   diagnostics?.update(state.diagnostics, state);
-  if (state.graph?.truncated) footer.append(el('span', 'warning', 'Limited to 300 nodes'));
   if (state.issues.length) {
     const details = el('details', 'warning'); details.append(el('summary', '', `Analysis notices: ${state.issues.length}`), el('pre', '', state.issues.slice(0, 100).join('\n'))); footer.append(details);
   }
+  if (state.graph?.truncated) footer.append(el('span', 'warning', 'Limited to 300 nodes'));
+  footer.append(el('span', 'footer-shortcuts muted', 'Space Details · → Expand · ← Collapse · Shift+→ Levels · Enter Open source'));
+  footer.append(button('Diagnostics', () => diagnostics?.open(), 'Show memory measurements for a screenshot'));
 }
 window.addEventListener('message', event => {
   if (event.data?.type === 'diagnostics') { diagnostics?.update(event.data.diagnostics); renderCopilot(event.data.diagnostics?.copilot); }
