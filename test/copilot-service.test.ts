@@ -15,7 +15,7 @@ class Emitter {
   event = (listener: (...args: any[]) => void) => { this.listeners.add(listener); return { dispose: () => this.listeners.delete(listener) }; };
   fire(value?: any) { for (const listener of this.listeners) listener(value); }
 }
-async function harness(denied=false, timeoutMs?:number, siteCount=denied?2:1) {
+async function harness(denied=false, timeoutMs?:number, siteCount=denied?2:1, replyDelayMs=0) {
   const storage=await mkdtemp(path.join(tmpdir(),'dynsight-service-'));
   const parser=await createAnalyzer(path.resolve('node_modules/web-tree-sitter/web-tree-sitter.wasm'),path.resolve('node_modules/tree-sitter-c/tree-sitter-c.wasm'));
   const file=parser.analyze('file:///example.c','struct Ops{void(*cb_complete)(void);};'+
@@ -33,6 +33,7 @@ async function harness(denied=false, timeoutMs?:number, siteCount=denied?2:1) {
     countTokens:async()=>{await waitHeld(id,'countTokens');return 100;},sendRequest:async(_messages:unknown,_options:unknown,token:{cancelled:boolean})=>{
       calls.push(id);permissions.set(id,!denied);if(denied)throw new Error('Access denied');
       tokens.push(token);await waitHeld(id,'sendRequest');
+      if(replyDelayMs)await new Promise(done=>setTimeout(done,replyDelayMs));
       return{text:(async function*(){await waitHeld(id,'stream');yield'{"status":"not-found","candidates":[]}';})()};
     }}));
   let available=models;
@@ -56,6 +57,17 @@ async function harness(denied=false, timeoutMs?:number, siteCount=denied?2:1) {
     dispose:async()=>{stop();await rm(storage,{recursive:true,force:true});}};
 }
 const settle=()=>new Promise(done=>setTimeout(done,1100));
+function waitFor(h: Awaited<ReturnType<typeof harness>>, predicate: () => boolean): Promise<void> {
+  if (predicate()) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const subscription = h.workspace.diagnosticsChanged.event(() => {
+      if (predicate()) { clearTimeout(timer); subscription.dispose(); resolve(); }
+    });
+    const timer = setTimeout(() => {
+      subscription.dispose(); reject(new Error(`Copilot did not reach the expected state: ${JSON.stringify(h.workspace.copilotDiagnostics)}`));
+    }, 10000);
+  });
+}
 
 test('one Analyze command processes all 38 sites and a restart makes no new requests', async t => {
   const h = await harness(false, undefined, 38); t.after(h.dispose); await h.start().ready;
@@ -84,7 +96,8 @@ test('Stop cancels a held request, retains progress, and suppresses background r
   assert.equal(h.workspace.copilotDiagnostics.completed, 7);
   assert.equal(h.workspace.copilotDiagnostics.failures, 0);
   assert.equal(h.workspace.copilotDiagnostics.automatic, false);
-  h.workspace.sourceChanged.fire('editor-save'); h.workspace.settled.fire(); await settle();
+  h.workspace.sourceChanged.fire('editor-save'); h.workspace.settled.fire();
+  await waitFor(h, () => h.workspace.copilotDiagnostics.state === 'stopped' && h.workspace.copilotDiagnostics.completed === 7);
   assert.equal(h.calls.length, 8, 'save/settled events must not restart a stopped job');
   await h.commands.get('dynsight.analyzeCallbacksWithCopilot')!();
   assert.equal(h.calls.length, 39, 'seven completed results are reused; only 31 pending sites are requested');
@@ -99,7 +112,8 @@ test('a stopped deferred job does not start after saving unsaved sources', async
   assert.equal(h.workspace.copilotDiagnostics.state, 'waiting-for-saved-index');
   await h.commands.get('dynsight.stopCopilotAnalysis')!();
   h.workspace.hasDirtySources = false;
-  h.workspace.sourceChanged.fire('editor-save'); h.workspace.settled.fire(); await settle();
+  h.workspace.sourceChanged.fire('editor-save'); h.workspace.settled.fire();
+  await waitFor(h, () => h.workspace.copilotDiagnostics.state === 'stopped' && h.workspace.copilotDiagnostics.remaining === 7);
   assert.equal(h.calls.length, 0);
   assert.equal(h.workspace.copilotDiagnostics.state, 'stopped');
   await h.commands.get('dynsight.analyzeCallbacksWithCopilot')!();
@@ -107,7 +121,7 @@ test('a stopped deferred job does not start after saving unsaved sources', async
 });
 
 test('automatic analysis pauses on edits and resumes all remaining work after saving', async t => {
-  const h = await harness(false, undefined, 7); t.after(h.dispose); await h.start().ready;
+  const h = await harness(false, undefined, 7, 25); t.after(h.dispose); await h.start().ready;
   const held = h.holdNext('model-a'), pending = h.commands.get('dynsight.analyzeCallbacksWithCopilot')!();
   await held.started;
   h.workspace.hasDirtySources = true; h.workspace.stable = false;
@@ -116,7 +130,8 @@ test('automatic analysis pauses on edits and resumes all remaining work after sa
   assert.equal(h.workspace.copilotDiagnostics.automatic, true);
   assert.equal(h.workspace.copilotDiagnostics.state, 'waiting-for-saved-index');
   h.workspace.hasDirtySources = false; h.workspace.stable = true; h.workspace.generation++;
-  h.workspace.sourceChanged.fire('editor-save'); h.workspace.settled.fire(); await settle();
+  h.workspace.sourceChanged.fire('editor-save'); h.workspace.settled.fire();
+  await waitFor(h, () => h.workspace.copilotDiagnostics.state === 'ready');
   assert.equal(h.calls.length, 8);
   assert.equal(h.workspace.copilotDiagnostics.completed, 7);
   assert.equal(h.workspace.copilotDiagnostics.state, 'ready');
@@ -137,7 +152,8 @@ test('saved-file background work still requests at most five sites after an expl
   const h = await harness(false, undefined, 7); t.after(h.dispose); await h.start().ready;
   await h.commands.get('dynsight.analyzeCallbacksWithCopilot')!();
   h.workspace.analysisKey = 'edited-settings'; h.workspace.generation++;
-  h.workspace.sourceChanged.fire('editor-save'); h.workspace.settled.fire(); await settle();
+  h.workspace.sourceChanged.fire('editor-save'); h.workspace.settled.fire();
+  await waitFor(h, () => h.workspace.copilotDiagnostics.state === 'more-callbacks-available');
   assert.equal(h.calls.length, 12);
   assert.equal(h.workspace.copilotDiagnostics.completed, 5);
   assert.equal(h.workspace.copilotDiagnostics.remaining, 2);

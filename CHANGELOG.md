@@ -1,6 +1,13 @@
 # Changelog
 
-## 0.1.65 — 2026-10-22
+## 0.1.66 — 2026-10-22
+
+- Ship the automatic Copilot run/Stop and AI candidate definition-navigation
+  changes below for Windows, macOS and WSL.
+- Wait for completion in asynchronous service tests instead of a fixed 1.1s
+  delay. Windows CI caught that premature assertion and prevented 0.1.65 publication.
+
+## 0.1.65 — 2026-10-22 (not published)
 
 - Restore Windows, macOS and WSL download filenames and the Windows/macOS/Ubuntu
   CI matrix. Platform downloads contain the same universal JavaScript/WASM VSIX.
