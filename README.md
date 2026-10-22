@@ -22,8 +22,11 @@ VS Code 데스크톱 1.95 이상이 필요합니다. 기본 분석은 로컬 WAS
 등록 등으로 연결된 관계를 갱신합니다. 공통 헤더나 토큰 결합 매크로가 많으면 관계 갱신
 범위가 커질 수 있습니다. 미저장 편집은 디스크 캐시에 반영하지 않습니다.
 
-전체 로컬 분석을 새로 만들 때는 **Rebuild index**를 실행하세요. 캐시 손상이나 분석기
-버전 변경으로 호환되지 않으면 Rebuild 안내를 표시합니다. 첫 실행은 로컬 인덱스를 만듭니다.
+전체 로컬 분석을 새로 만들 때는 **Rebuild index**를 실행하세요. 확장 프로그램 버전과
+별도의 **분석 호환 버전**을 관리하며, 호환 버전이 같으면 업데이트 후에도 인덱스를 재사용합니다.
+호환 버전 변경·설정 변경·이전 캐시 형식은 각각의 이유로 Rebuild를 안내하고,
+실제 파일 손상만 `damaged`로 표시합니다. 새 형식 도입 전의 인덱스는 한 번 Rebuild가
+필요합니다. 첫 실행은 로컬 인덱스를 만듭니다. Diagnostics에서 현재·저장된 호환 버전을 확인할 수 있습니다.
 
 미해결 콜백을 AI로 보완하려면 명령 팔레트에서 **Dynsight: Analyze Callbacks with Copilot**을
 실행해 모델을 선택하고 VS Code 접근을 승인하세요. 별도 API 키는 필요 없습니다.
@@ -38,18 +41,29 @@ VS Code 데스크톱 1.95 이상이 필요합니다. 기본 분석은 로컬 WAS
 프롬프트 형식이 바뀌면 이전 AI 결과는 다시 검증해야 하며, 재시작만으로 새 요청을 보내지는 않습니다.
 
 - `dynsight.copilotCallbacks`는 기본 꺼짐입니다. 끄면 백그라운드 요청과 AI 후보 표시를 중단합니다.
+- **Settings → Copilot Include**에서 AI 콜백 대상 경로를 JSON 배열처럼 추가·제거할 수 있습니다.
+  처음에는 일반 **Include** 경로를 복사하고, 이후 일반 Include에 새로 추가한 경로도 복사합니다.
+  AI 목록에서 지운 기존 경로는 재시작하거나 다른 경로를 추가해도 다시 켜지지 않습니다.
+  같은 JSON 저장에서 두 목록을 함께 수정하면 직접 지정한 AI 목록을 우선합니다.
+  빈 AI 목록은 요청 0건이며, 필요하면 `Copilot Exclude`로 예외를 지정합니다.
+  경로는 콜백 **호출부 파일** 기준입니다. 근거 코드는 다른 로컬 인덱스 경로에서도 가져올 수 있습니다.
+  로컬 분석 범위와 한도는 일반 Include/Exclude가 제어합니다.
 - 켠 상태에서 파일을 저장하면 필요한 미해결 콜백을 한 번에 최대 5건 분석합니다.
 - 재시작·함수 탐색·일반 Rebuild는 유효한 AI 캐시만 복원하며 새 요청을 하지 않습니다.
 - 하단 **Analyze all remaining** 또는 **Analyze Callbacks with Copilot**을 한 번 실행하면
   남은 항목을 5건씩 자동으로 이어 처리합니다. 요청마다 Copilot 사용량을 소비합니다.
 - **Stop analysis** 또는 **Dynsight: Stop Copilot Analysis**로 현재 요청과 연속 처리를
   중지할 수 있습니다. 완료된 결과는 보존하며, 다시 Analyze를 누르면 남은 항목만 처리합니다.
+  초기 경로 복사나 모델 선택을 기다리는 중에도 중지가 적용됩니다.
   중지한 뒤에는 저장만으로 새 요청을 보내지 않습니다. 미저장 편집 중에는 대기하고,
   진행 중인 작업을 중지하지 않았다면 저장·로컬 분석 완료 후 자동으로 이어갑니다.
 - 요청 오류가 발생하면 연속 처리를 멈춥니다. **Reanalyze Callback Candidates with Copilot**은
   기존 AI 캐시를 한 번 무효화한 뒤 전체를 5건씩 다시 처리합니다.
 - 결과는 Callers/Callees에 **AI candidate**로 표시합니다. 근거 소스 위치를 볼 수 있으며,
   실행 시 실제 호출을 보장하는 결과가 아닙니다. 코드가 바뀐 뒤 도착한 오래된 답변은 버립니다.
+- 같은 호출 위치에 AI 후보가 있으면 Callees와 양방향 트리의 기존 간접·미해결 호출 항목을
+  AI 후보로 대체합니다. 후보가 없는 호출과 로컬 분석으로 연결한 함수는 그대로 표시합니다.
+  AI 후보를 해제하면 원래 항목이 다시 나타납니다.
 - Callees의 AI 후보 함수명을 클릭하면 Context에 해당 함수 정의를 표시합니다.
   더블클릭·Enter로 정의 위치를 열고, 클릭·확장 동작으로 후보 함수 내부의 관계를 탐색합니다.
   원래 콜백 호출부와 등록 근거는 상세 팝업에서 별도로 열 수 있습니다.
@@ -198,7 +212,14 @@ Include/Exclude는 기본 분석에 포함할 파일을 정하고, **Macro Expan
 - **콜백 추적:** `Following selection` 상태에서 `cb()`의 `cb` 또는 `ops->callback()`의 `callback`을 클릭하면 **Callback targets**에 실제 호출 대상 후보가 표시됩니다. 함수 이름·파일 위치를 확인하고 후보를 선택하면 해당 함수의 Relation으로 이동하며 Pin도 설정할 수 있습니다. 후보 하나도 실행 확정을 뜻하지 않으며, 미확정 경로는 **Other targets may exist**로 표시합니다. 기존 인덱스를 재사용하므로 클릭으로 전체 재분석을 시작하지 않습니다. `Include Function Arguments`는 이 추적에 필요하지 않습니다.
 - **콜백 등록:** `fp = handler`, `fp = &handler`, `ops.cb = handler`, `.cb = handler`처럼 함수를 대입하면 호출이 없어도 Callers/Callees에 **Registration**으로 표시합니다. 전역 초기화의 등록 주체는 해당 변수, 지역 초기화·대입의 등록 주체는 해당 함수입니다. `Analyze Callbacks`를 꺼도 등록 관계와 단순 함수 포인터·지역 구조체 멤버의 호출 후보를 찾습니다. 등록은 실행을 뜻하지 않으며, 호출 위치에서 찾은 **Registered candidate**와 구분합니다. `fp = factory()`의 반환값은 명시적 함수 등록으로 취급하지 않습니다.
 - **콜백 진단:** 대상이 없으면 **Callback analysis**가 자동으로 펼쳐집니다. getter 본문 누락(`Return value unavailable`), 인자 공급 경로 누락(`Argument … has no indexed supply`), 객체 연결·멤버 값 미확인(`Object connection unavailable` / `Member value unavailable`), 구조체 정의 미확인(`Structure layout unavailable`)을 확인하세요. 이는 색인에서 확인하지 못한 정보이며 실제 실행 오류를 뜻하지 않습니다.
-- **Settings → Context Layout → Combined / Combined · Full width / Separate**: Combined는 Context와 Relation을 함께 표시합니다. **Combined · Full width**는 두 창을 왼쪽·오른쪽 사이드바 아래까지 하단 전체 너비로 표시합니다. VS Code의 패널 정렬을 바꾸므로 Terminal 등 다른 하단 패널도 같은 너비를 사용하며, Combined나 Separate로 바꾸면 기본 편집기 너비로 돌아옵니다. Separate는 **Dynsight Context**를 Explorer의 독립 뷰로 엽니다. 제목줄 드래그 또는 **View: Move View**로 왼쪽 파일 트리 아래 등 원하는 위치에 배치합니다. 세 방식 모두 분석 인덱스·미리보기·코드 이동·고정 상태를 공유합니다. Settings 버튼은 Include/Exclude를 포함한 확장의 모든 설정을 한곳에서 엽니다.
+- **Settings → Context Layout**: **Combined · Full width**는 하단 전체를 사용합니다.
+  **Left sidebar full height**는 왼쪽 패널을 아래까지 유지하고 Combined를 중앙·오른쪽
+  하단에 배치합니다. **Right sidebar full height**는 오른쪽 패널을 유지하고 중앙·왼쪽
+  하단을 사용합니다. **Center**는 양쪽 패널을 유지하고 편집기 바로 아래만 사용합니다.
+  VS Code 패널 정렬을 사용하므로 Terminal 등 다른 하단 뷰도 같은 배치를 따릅니다.
+  기본 Combined나 Separate로 돌아가면 Center 정렬을 복원합니다. Separate는
+  **Dynsight Context**를 Explorer의 독립 뷰로 열며, 제목줄을 드래그해 옮길 수 있습니다.
+  모든 배치는 분석 인덱스·미리보기·코드 이동·고정 상태를 공유합니다.
 - **Macro-expanded call**은 매크로 확장으로 찾은 호출입니다. **Inferred call**은 정적 분석으로 찾은 함수 포인터·콜백 후보이며 점선 아이콘과 근거 위치를 표시합니다. **Macro invocation**은 확장하지 못한 호출, **Indirect call**은 아직 모르는 간접 대상, **Unresolved call**은 분석 범위에 정의가 없는 호출입니다. 미확정 대상은 말단 노드로 남깁니다.
 - 함수 이름 선택: 해당 정의를 Context에서 미리 봅니다.
 - Relation 노드는 **아이콘 + 심볼 이름 한 줄**로 표시합니다. 마우스를 같은 노드 위에서 500ms 동안 멈추거나 노드에 포커스를 두고 Space를 누르면 상세 팝업이 열립니다. Escape로 닫습니다.

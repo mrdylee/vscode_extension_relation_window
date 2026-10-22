@@ -59,6 +59,31 @@ test('unrelated file edits preserve cache while getter/registration edits invali
   assert.equal((await controller(cacheDir, {modelKey: 'model-2', complete: async () => validReply(s)}).restore(s)).cached, 0);
 }));
 
+test('AI path scope filters requests/results/counts, retains cross-path evidence and preserves excluded caches', async () => temporary(async cacheDir => {
+  const s = snapshot([source, source.replaceAll('target', 'other_target')]);
+  const contexts = callbackContexts(s.files);
+  let requests = 0;
+  const c = controller(cacheDir, { modelKey: 'model-1', complete: async prompt => {
+    requests++;
+    const payload = JSON.parse(prompt.split('CONTEXT_JSON\n')[1]);
+    assert.ok(payload.targets.some((target: { id: string }) => target.id.startsWith(s.files[1].uri)), 'supporting targets remain available outside the selected invocation path');
+    return '{"status":"not-found","candidates":[]}';
+  } });
+  const all = await c.analyzeUnresolved(s, { reason: 'enabled', automatic: true });
+  assert.equal(all.total, 2); assert.equal(requests, 2);
+  const selected = { ...s, callsiteUris: new Set([s.files[0].uri]) };
+  const narrow = await c.analyzeUnresolved(selected, { reason: 'force', automatic: true });
+  assert.equal(narrow.total, 1); assert.equal(narrow.excluded, 1); assert.equal(narrow.requested, 1);
+  assert.deepEqual(narrow.hints.map(hint => hint.callsite.uri), [s.files[0].uri]);
+  assert.equal((await c.restore(s)).cached, 2, 'force in a restricted scope must not delete the other file cache');
+  const before = requests;
+  const none = await c.analyzeUnresolved({ ...s, callsiteUris: new Set() }, { reason: 'force', automatic: true });
+  assert.equal(none.total, 0); assert.equal(none.excluded, 2); assert.equal(none.hints.length, 0);
+  assert.equal(requests, before);
+  assert.equal((await c.restore(s)).cached, 2);
+  assert.equal(contexts.length, 2);
+}));
+
 test('cached negative search is invalidated when a new file supplies a callback registration', async () => temporary(async cacheDir => {
   const missing = snapshot(['struct Ops{void(*cb_complete)(void);};void run(struct Ops*p){p->cb_complete();}']);
   const c = controller(cacheDir, {modelKey: 'model-1', complete: async () => '{"status":"not-found","candidates":[]}'});

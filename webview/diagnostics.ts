@@ -36,7 +36,11 @@ export function createDiagnostics(version: string, refresh: () => void, reportIs
     body.append(el('div', `${state?.mode ?? 'references'} · ${state?.graph?.root.name ?? 'No symbol selected'} · ${state?.fileCount ?? 0} indexed files`, 'diagnostics-selection'));
     if (data.index) {
       const index = data.index;
-      if (index.cache) body.append(el('div', `Disk cache: ${index.cache.state} · Restored: ${index.cache.restored} files · Saved: ${index.cache.saved} files`));
+      if (index.cache) {
+        const cache = index.cache;
+        const compatibility = cache.version === undefined ? '' : ` · Analysis v${cache.version} / saved ${cache.savedVersion === undefined ? 'unversioned' : `v${cache.savedVersion}`}`;
+        body.append(el('div', `Disk cache: ${cache.state}${cache.reason ? ` (${cache.reason})` : ''}${compatibility} · Restored: ${cache.restored} · Saved: ${cache.saved}`));
+      }
       const latest = index.rebuilds.at(-1);
       const trigger = (record: typeof latest) => record ? `${rebuildNames[record.reason]}${record.settings?.length ? ` (${record.settings.join(', ')})` : ''}` : '';
       if (latest) body.append(el('div', `Last rebuild: #${latest.number} · ${time(latest.at)} · ${trigger(latest)} · ${latest.outcome}`));
@@ -69,7 +73,7 @@ export function createDiagnostics(version: string, refresh: () => void, reportIs
         body.append(el('div', `Copilot paused: ${copilotWaitMessage(ai.waitReason)} · Requests this session: ${ai.requests}. Current callback counts are unavailable while waiting.`));
       } else {
         body.append(el('div', `Copilot callbacks: ${ai.state} · Processed: ${ai.completed ?? 0}/${ai.total ?? 0} · Requests this session: ${ai.requests} · Cache hits: ${ai.cacheHits} · Remaining (includes failed): ${ai.remaining} · Failures: ${ai.failures}`));
-        body.append(el('div', `AI candidates: ${ai.candidates} · No candidate in supplied context: ${ai.notFound} · Context limited: ${ai.contextLimited}`));
+        body.append(el('div', `AI candidates: ${ai.candidates} · No candidate in supplied context: ${ai.notFound} · Context limited: ${ai.contextLimited}${ai.excluded ? ` · Excluded by path: ${ai.excluded}` : ''}`));
         body.append(el('div', 'Coverage is limited to detected callback sites in the saved index, not proof of all runtime targets. Analyze all remaining continues automatically in batches of 5. Stop analysis keeps completed results. Normal Rebuild preserves valid AI results.', 'diagnostics-note muted'));
       }
     }

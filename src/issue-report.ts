@@ -64,7 +64,7 @@ export function createIssueReport(input: IssueReportInput): string {
       analyzeCallbacks: !!state.analyzeCallbacks,
       accessFilter: choice(state.accessFilter, ['all', 'read', 'write', 'readwrite', 'address']),
       calleeSort: choice(state.calleeSort, ['name', 'source']),
-      contextLayout: choice(state.contextLayout, ['combined', 'combined-full-width', 'separate']),
+      contextLayout: choice(state.contextLayout, ['combined', 'combined-full-width', 'combined-keep-left-sidebar', 'combined-center', 'combined-keep-right-sidebar', 'separate']),
       callGraphDirection: choice(state.callGraphDirection, ['callers-left', 'callees-left'])
     },
     scope: { workspaceFolders: scopes.length, includePatternCount: scopes.reduce((n, s) => n + s.include, 0),
@@ -78,12 +78,14 @@ export function createIssueReport(input: IssueReportInput): string {
       evaluations: number(detail.evaluations), scopeEvaluations: number(detail.scopeEvaluations), slots: number(detail.slots)
     })),
     workerError: diagnostics.workerError ? noticeKind(diagnostics.workerError) : 'none',
-    diskCache: index?.cache ? { state: choice(index.cache.state, ['disabled', 'checking', 'restored', 'updated', 'missing', 'invalid', 'deferred', 'error']),
+    diskCache: index?.cache ? { state: choice(index.cache.state, ['disabled', 'checking', 'restored', 'updated', 'missing', 'incompatible', 'invalid', 'deferred', 'error']),
+      reason: choice(index.cache.reason ?? '', ['analysis-version', 'workspace-settings', 'legacy-format']),
+      version: number(index.cache.version), savedVersion: number(index.cache.savedVersion),
       restored: number(index.cache.restored), saved: number(index.cache.saved) } : null,
     copilot: diagnostics.copilot ? { state: choice(diagnostics.copilot.state, ['off', 'model-unavailable', 'model-selection-required', 'permission-required', 'ready', 'more-callbacks-available', 'request-failed', 'waiting-for-saved-index', 'analyzing', 'restoring-cache', 'stopped']),
       waitReason: choice(diagnostics.copilot.waitReason ?? '', Object.keys(copilotWaitMessages)),
       requests: number(diagnostics.copilot.requests), cacheHits: number(diagnostics.copilot.cacheHits), remaining: number(diagnostics.copilot.remaining), failures: number(diagnostics.copilot.failures),
-      candidates: number(diagnostics.copilot.candidates), notFound: number(diagnostics.copilot.notFound), contextLimited: number(diagnostics.copilot.contextLimited) } : null,
+      candidates: number(diagnostics.copilot.candidates), notFound: number(diagnostics.copilot.notFound), contextLimited: number(diagnostics.copilot.contextLimited), excluded: number(diagnostics.copilot.excluded) } : null,
     index: index ? {
       sessionAgeSeconds: age(index.sessionStartedAt), rebuildCount: number(index.rebuildCount),
       sourceParses: number(index.sourceParses), relationPasses: number(index.relationPasses),

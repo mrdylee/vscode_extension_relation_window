@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { AnalysisCache } from '../src/analysis-cache';
+import { AnalysisCache, ANALYSIS_CACHE_VERSION } from '../src/analysis-cache';
 import { FileAnalysis } from '../src/model';
 
 const file = (uri: string, text: string): FileAnalysis => ({ uri, text, symbols: [], references: [], includes: [], issues: [],
@@ -41,10 +41,39 @@ test('content, file options and workspace configuration invalidate cached input'
   assert.equal(await cache.restore('file:///main.c', 'void main(void){}', false, false), undefined);
   assert.equal(await cache.restore('file:///main.c', 'void main(void){}', true, true), undefined);
   const different = await AnalysisCache.open(directory, 'workspace-v2');
-  assert.equal(different.state, 'invalid');
+  assert.equal(different.state, 'incompatible');
+  assert.equal(different.reason, 'workspace-settings');
   assert.equal(await different.restore('file:///main.c', 'void main(void){}', true, false), undefined);
   assert.equal((await different.save([entry()])).saved, true, 'manual rebuild can replace incompatible data');
   assert.equal((await AnalysisCache.open(directory, 'workspace-v2')).state, 'ready');
+}));
+
+test('analysis compatibility changes are distinct from damage and manual rebuild adopts the new version', async () => temporary(async directory => {
+  const old = await AnalysisCache.open(directory, 'same-settings');
+  await old.save([entry()]);
+  const next = await AnalysisCache.open(directory, 'same-settings', ANALYSIS_CACHE_VERSION + 1);
+  assert.equal(next.state, 'incompatible');
+  assert.equal(next.reason, 'analysis-version');
+  assert.equal(next.savedVersion, ANALYSIS_CACHE_VERSION);
+  assert.equal(await next.restore('file:///main.c', 'void main(void){}', true, false), undefined);
+  assert.equal((await next.save([entry()])).saved, true);
+  assert.equal(next.reason, undefined);
+  assert.equal((await AnalysisCache.open(directory, 'same-settings', ANALYSIS_CACHE_VERSION + 1)).state, 'ready');
+  assert.equal((await AnalysisCache.open(directory, 'same-settings')).reason, 'analysis-version', 'downgrades also need compatible analysis');
+}));
+
+test('legacy unversioned generations require migration while malformed version metadata is damaged', async () => temporary(async directory => {
+  const cache = await AnalysisCache.open(directory, 'settings'); await cache.save([entry()]);
+  const filename = path.join(directory, 'manifest.json');
+  const manifest = JSON.parse(await readFile(filename, 'utf8'));
+  const { analysisVersion, ...legacy } = manifest;
+  await writeFile(filename, JSON.stringify({ ...legacy, schema: 1 }));
+  const old = await AnalysisCache.open(directory, 'settings');
+  assert.equal(old.state, 'incompatible'); assert.equal(old.reason, 'legacy-format');
+  await writeFile(filename, JSON.stringify({ ...manifest, analysisVersion: 'broken' }));
+  assert.equal((await AnalysisCache.open(directory, 'settings')).state, 'invalid');
+  await writeFile(filename, JSON.stringify({ ...manifest, key: 'different', entries: [{}] }));
+  assert.equal((await AnalysisCache.open(directory, 'settings')).state, 'invalid', 'corruption is not hidden by a settings mismatch');
 }));
 
 test('truncated records are cache misses and corrupt manifests require rebuilding', async () => temporary(async directory => {

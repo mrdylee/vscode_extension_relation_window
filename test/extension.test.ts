@@ -700,6 +700,12 @@ export async function run() {
   await vscode.workspace.getConfiguration('dynsight').update('calleeSort', 'source', vscode.ConfigurationTarget.Workspace);
   assert.deepEqual(api.view.state.graph.root.children.map((node: any) => node.name), ['layout_z', 'layout_a']);
   assert.equal(vscode.workspace.getConfiguration('dynsight').inspect('calleeSort')!.workspaceValue, 'source');
+  for (const layout of ['combined-keep-left-sidebar', 'combined-center', 'combined-keep-right-sidebar', 'combined-full-width']) {
+    await vscode.workspace.getConfiguration('dynsight').update('contextLayout', layout, vscode.ConfigurationTarget.Workspace);
+    await api.view.panelLayout;
+    assert.equal(api.view.state.contextLayout, layout);
+    assert.equal(api.workspace.index.files.get(layoutUri.toString()), originalAnalysis, 'native panel alignment reuses analysis');
+  }
   const originalGraph = api.view.state.graph, originalPreview = api.view.state.context;
   await vscode.workspace.getConfiguration('dynsight').update('callGraphDirection', 'callees-left', vscode.ConfigurationTarget.Workspace);
   assert.equal(api.view.state.callGraphDirection, 'callees-left');

@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.1.67 — 2026-10-22
+
+- Honor Stop and disabling Copilot while Include setup or model selection is
+  pending, preventing delayed commands from starting paid requests.
+- Preserve explicit Copilot Include arrays, including empty arrays, when general
+  Include and AI scope are edited in the same JSON save.
+- Replace partial local callback entries when AI confirms the same target, while
+  retaining local evidence and avoiding duplicate caller/callee counts.
+- Copy general Include paths into the editable Copilot Include array. Preserve
+  user removals, add newly included paths and support per-folder settings. Empty
+  AI Include disables requests. Scope changes cancel active runs, retain excluded
+  cache and restore eligible results without starting new paid requests.
+- Add Combined alignments that keep the left sidebar, right sidebar or both
+  sidebars full height. Use the remaining bottom area and preserve the existing
+  full-width and Separate options.
+- Separate analysis-cache compatibility from extension release versions. Reuse
+  compatible indexes across updates; distinguish analysis-version, settings and
+  legacy-format mismatches from damaged files in status and Diagnostics. Existing
+  unversioned caches need one manual Rebuild when adopting the new manifest.
+- Replace an indirect/unresolved Callees entry with available AI candidates at
+  the same invocation. Preserve original callsite/evidence navigation, local
+  inferred/direct edges and unhinted calls; restore entries when AI is cleared.
+
 ## 0.1.66 — 2026-10-22
 
 - Ship the automatic Copilot run/Stop and AI candidate definition-navigation

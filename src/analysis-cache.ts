@@ -5,7 +5,11 @@ import path from 'node:path';
 
 export interface CachedAnalysis { raw: FileAnalysis; derived: FileAnalysis; skip: boolean; expandMacros: boolean }
 interface Entry { uri: string; name: string; digest: string; source: string; skip: boolean; expandMacros: boolean }
-interface Manifest { schema: 1; key: string; generation: string; previous?: string; entries: Entry[] }
+// Bump only when parsing, macro expansion, callback derivation or stored analysis
+// semantics change. UI, packaging and other compatible releases keep this value.
+export const ANALYSIS_CACHE_VERSION = 1;
+export type CacheIncompatibility = 'analysis-version' | 'workspace-settings' | 'legacy-format';
+interface Manifest { schema: 2; analysisVersion: number; key: string; generation: string; previous?: string; entries: Entry[] }
 const workerFields = new Set(['text', 'programs', 'initializers', 'argumentPrograms', 'statementConditions']);
 const maxFiles = 10_000, maxRecordBytes = 64 * 1024 * 1024, maxGenerationBytes = 1024 * 1024 * 1024;
 const maxManifestBytes = 4 * 1024 * 1024;
@@ -23,20 +27,28 @@ function validFile(value: FileAnalysis, uri: string) {
     Array.isArray(value.references) && Array.isArray(value.includes) && Array.isArray(value.issues);
 }
 export class AnalysisCache {
-  state: 'missing' | 'ready' | 'invalid' = 'missing';
+  state: 'missing' | 'ready' | 'incompatible' | 'invalid' = 'missing';
+  reason?: CacheIncompatibility;
+  savedVersion?: number;
   private manifest?: Manifest;
   private entries = new Map<string, Entry>();
-  private constructor(private directory: string, private key: string) {}
-  static async open(directory: string, key: string) {
-    const cache = new AnalysisCache(directory, key);
+  private constructor(private directory: string, private key: string, private analysisVersion: number) {}
+  static async open(directory: string, key: string, analysisVersion = ANALYSIS_CACHE_VERSION) {
+    const cache = new AnalysisCache(directory, key, analysisVersion);
     try {
       const data = JSON.parse(await boundedRead(path.join(directory, 'manifest.json'), maxManifestBytes)) as Manifest;
-      if (data.schema !== 1 || data.key !== key || !generationPattern.test(data.generation) ||
+      if (!Number.isSafeInteger(data.schema) || data.schema < 1 || typeof data.key !== 'string' || !generationPattern.test(data.generation) ||
         (data.previous !== undefined && (!generationPattern.test(data.previous) || data.previous === data.generation)) ||
         !Array.isArray(data.entries) || data.entries.length > maxFiles || data.entries.some(entry =>
           !entry || typeof entry.uri !== 'string' || !digestPattern.test(entry.digest) || !digestPattern.test(entry.source) ||
           entry.name !== hash(entry.uri) + '.json' || typeof entry.skip !== 'boolean' || typeof entry.expandMacros !== 'boolean') ||
         new Set(data.entries.map(entry => entry.uri)).size !== data.entries.length) throw new Error('Invalid analysis cache');
+      if (data.schema !== 2) { cache.state = 'incompatible'; cache.reason = 'legacy-format'; return cache; }
+      if (!Number.isSafeInteger(data.analysisVersion) || data.analysisVersion < 1) throw new Error('Invalid analysis cache version');
+      cache.savedVersion = data.analysisVersion;
+      if (data.analysisVersion !== analysisVersion || data.key !== key) {
+        cache.state = 'incompatible'; cache.reason = data.analysisVersion !== analysisVersion ? 'analysis-version' : 'workspace-settings'; return cache;
+      }
       cache.manifest = data; cache.entries = new Map(data.entries.map(entry => [entry.uri, entry])); cache.state = 'ready';
     } catch (error) { cache.state = (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'invalid'; }
     return cache;
@@ -95,12 +107,13 @@ export class AnalysisCache {
         await writeFile(path.join(directory, name), data);
         entries.push({ uri: record.raw.uri, name, digest: hash(data), source: hash(record.raw.text), skip: record.skip, expandMacros: record.expandMacros });
       }
-      const manifest: Manifest = { schema: 1, key: this.key, generation, previous, entries };
+      const manifest: Manifest = { schema: 2, analysisVersion: this.analysisVersion, key: this.key, generation, previous, entries };
       const serialized = JSON.stringify(manifest);
       if (Buffer.byteLength(serialized) > maxManifestBytes) throw new Error('Analysis cache manifest size limit');
       await writeFile(temporary, serialized);
       await rename(temporary, path.join(this.directory, 'manifest.json'));
       committed = true; this.manifest = manifest; this.entries = new Map(entries.map(entry => [entry.uri, entry])); this.state = 'ready';
+      this.reason = undefined; this.savedVersion = this.analysisVersion;
       // Prune only a known superseded ancestor, never another writer's staging
       // directory. Interrupted process orphans can remain until manual cleanup.
       if (retired) await rm(path.join(this.directory, retired), { recursive: true, force: true }).catch(() => {});

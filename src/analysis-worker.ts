@@ -84,7 +84,8 @@ parentPort!.on('message', (request: Request) => {
       if (request.type === 'reset') { raw.clear(); restored.clear(); savedVersions.clear(); derivedSnapshot = undefined; incremental.clear(); parser.reset(); diagnostics = freshDiagnostics(); report(true); return; }
       if (request.type === 'cache-init') {
         cache = await AnalysisCache.open(request.directory, request.key); restored.clear(); savedVersions.clear(); derivedSnapshot = undefined;
-        parentPort!.postMessage({ id: request.id, result: { state: cache.state } }); return;
+        parentPort!.postMessage({ id: request.id, result: { state: cache.state,
+          ...(cache.reason ? { reason: cache.reason } : {}), ...(cache.savedVersion === undefined ? {} : { savedVersion: cache.savedVersion }) } }); return;
       }
       if (request.type === 'cache-restore') {
         const record = !memoryPressure() ? await cache?.restore(request.uri, request.text, request.skip, request.expandMacros !== false) : undefined;

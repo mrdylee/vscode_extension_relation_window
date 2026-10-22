@@ -1,6 +1,9 @@
 import { AccessFilter, CallbackTargets, CalleeSort, FileAnalysis, GraphData, GraphNode, ReferenceRecord, RelationGroup, RelationMode, SymbolRecord } from './model';
 import { MemberResolver } from './member-resolver';
 
+const callsiteKey = (ref: ReferenceRecord) => `${ref.location.uri}:${ref.location.start}:${ref.location.end}`;
+const callbackTargetKey = (ref: ReferenceRecord) => `${callsiteKey(ref)}:${ref.targetId}`;
+
 // Keep each file's contribution separate so edits never rebuild unrelated files.
 class FileBuckets<T extends { name: string }> {
   private names = new Map<string, Map<string, T[]>>();
@@ -247,16 +250,30 @@ export class RelationIndex {
       targets: [...targets.values()], incomplete: !targets.size || sites.some(ref => ref.callKind !== 'inferred' || ref.inference?.incomplete),
       reasons: [...new Set(sites.flatMap(ref => ref.inference?.reasons ?? []))] };
   }
+  private aiReplacements(references: ReferenceRecord[]) {
+    const sites = new Set<string>(), targets = new Set<string>();
+    for (const ref of references) if (ref.callKind === 'ai-candidate' && this.byId.get(ref.targetId ?? '')?.kind === 'function') {
+      sites.add(callsiteKey(ref)); targets.add(callbackTargetKey(ref));
+    }
+    return { sites, targets };
+  }
   private callees(target: SymbolRecord, sort: CalleeSort, includeFunctionArguments: boolean): RelationGroup[] {
     if (target.kind !== 'function') return [];
     const groups = new Map<string, RelationGroup>();
     const calls = [...(this.outgoing.get(target.id) ?? []), ...(includeFunctionArguments ? this.outgoingArguments.get(target.id) ?? [] : [])]
       .sort((a, b) => a.location.start - b.location.start);
+    const ai = this.aiReplacements(calls);
     for (const ref of calls) {
+      if (!ref.argument && ref.kind === 'call' && (ref.callKind === 'inferred' || ref.callKind === 'registered') && ai.targets.has(callbackTargetKey(ref))) continue;
       const candidates = this.resolve(ref);
+      // Replace only this invocation's unresolved/indirect presentation. Keep raw
+      // references for cursor tracing, variable uses, AI context and hint removal.
+      const replaced = !ref.argument && ref.kind === 'call' && ai.sites.has(callsiteKey(ref));
+      if (replaced && !candidates.length) continue;
       const candidateIds = candidates.map(s => s.id);
       const ambiguous = ref.callKind === 'inferred' || !!ref.argument?.inferred || !!ref.inference?.incomplete || candidates.length > 1 || candidates.some(s => s.conditions.length > 0) || ref.conditions.length > 0;
       for (const symbol of candidates.length ? candidates : [undefined]) {
+        if (replaced && symbol?.kind === 'variable') continue;
         const callKind = ref.argument ? undefined : ref.indirect || symbol?.kind === 'variable' ? 'indirect'
           : symbol?.kind === 'function' ? ref.callKind ?? 'direct' : symbol?.kind === 'macro' ? 'macro' : 'unresolved';
         const key = symbol?.id ?? `${callKind}:${ref.name}`;
@@ -280,7 +297,9 @@ export class RelationIndex {
       ? this.functionArguments.get(target.name, this.fileOrder) : [];
     const references = [...this.references.get(target.name, this.fileOrder),
       ...(target.kind === 'function' && (mode === 'callers' || mode === 'both') ? this.callbackRegistrations.get(target.name, this.fileOrder) : [])];
+    const ai = target.kind === 'function' ? this.aiReplacements(references).targets : undefined;
     for (const ref of argumentsFound.length ? [...references, ...argumentsFound] : references) {
+      if (!ref.argument && ref.kind === 'call' && (ref.callKind === 'inferred' || ref.callKind === 'registered') && ai?.has(callbackTargetKey(ref))) continue;
       const variable = target.kind === 'variable';
       if (variable) {
         if (!ref.access || (filter !== 'all' && ref.access !== filter &&

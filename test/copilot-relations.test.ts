@@ -70,7 +70,7 @@ function synthetic(refCount: number) {
   return { file, hint, target };
 }
 
-test('AI candidates retain source evidence and appear in both directions without replacing unresolved calls', async () => {
+test('AI candidates replace unresolved tree entries while retaining evidence and both navigation directions', async () => {
   const parser = await createAnalyzer(path.resolve('node_modules/web-tree-sitter/web-tree-sitter.wasm'), path.resolve('node_modules/tree-sitter-c/tree-sitter-c.wasm'));
   const file = parser.analyze('file:///candidate.c', 'typedef void(*CB)(void); void target(void){} void run(CB cb){cb();}', true);
   const index = new RelationIndex(); index.update(file);
@@ -80,7 +80,8 @@ test('AI candidates retain source evidence and appear in both directions without
   applyCallbackHints(index, [{ key: 'test', callsite: site.location, expression: 'cb', status: 'candidates', cached: false,
     candidates: [{ targetId: target.id, evidence: [target.location], reason: 'Registered candidate' }] }]);
   const outgoing = index.relations(run.id, 'callees');
-  assert.ok(outgoing.some(group => group.name === 'cb'), 'unresolved evidence remains');
+  assert.equal(outgoing.some(group => group.name === 'cb'), false, 'the resolved variable-call placeholder is replaced');
+  assert.ok(index.files.get(file.uri)!.references.some(ref => ref.id === site.id), 'source reference remains available');
   const candidate = outgoing.find(group => group.name === 'target')!;
   assert.equal(candidate.callKind, 'ai-candidate');
   assert.equal(candidate.sites[0].ambiguous, true);
@@ -88,6 +89,7 @@ test('AI candidates retain source evidence and appear in both directions without
   assert.equal(index.callbackAt(file.uri, site.location.start)?.incomplete, true);
   applyCallbackHints(index, []);
   assert.equal(index.relations(target.id, 'callers').length, 0);
+  assert.ok(index.relations(run.id, 'callees').some(group => group.name === 'cb'), 'clearing AI restores the placeholder');
   index.update({ ...file, references: [...file.references, { ...site, name: target.name, targetId: target.id, indirect: false, callKind: 'inferred' }] });
   applyCallbackHints(index, [{ key: 'same', callsite: site.location, expression: 'cb', status: 'candidates', cached: false,
     candidates: [{ targetId: target.id, evidence: [target.location], reason: 'Duplicate candidate' }] }]);
@@ -107,6 +109,74 @@ test('many cached hints inspect reference locations once rather than scanning th
   assert.equal(index.files.get(file.uri)!.references.filter(ref => ref.callKind === 'ai-candidate').length, 200);
   assert.ok(locationReads < 40_000, `Expected linear source lookup, observed ${locationReads} reference-location reads`);
   assert.equal(file.references.length, 10_000, 'source reference array remains unchanged');
+});
+
+for (const kind of ['inferred','registered'] as const) for (const mode of ['callees','both'] as const) test(`AI confirmation of a partial local candidate replaces its placeholder without duplicating the call (${kind}, ${mode})`, async () => {
+  const parser=await createAnalyzer(path.resolve('node_modules/web-tree-sitter/web-tree-sitter.wasm'),path.resolve('node_modules/tree-sitter-c/tree-sitter-c.wasm'));
+  const source=kind==='inferred'?'void run(int condition){CB cb;if(condition)cb=target;cb();}':'struct Ops{CB cb;};void run(struct Ops*p){p->cb=target;p->cb();}';
+  const file=parser.derive([parser.analyze('file:///confirmed.c','typedef void(*CB)(void);void target(void){}'+source)],undefined,undefined,kind==='inferred')[0];
+  const target=file.symbols.find(s=>s.name==='target')!,root=file.symbols.find(s=>s.name==='run')!;
+  const site=file.references.find(ref=>ref.kind==='call'&&ref.callKind!=='inferred'&&ref.callKind!=='registered')!;
+  const local=file.references.find(ref=>ref.kind==='call'&&ref.callKind===kind&&ref.targetId===target.id)!;
+  assert.equal(local.inference?.incomplete,true);
+  const index=new RelationIndex();index.update(file);
+  applyCallbackHints(index,[{key:'confirmation',callsite:site.location,expression:'cb',status:'candidates',cached:true,
+    candidates:[{targetId:target.id,evidence:[target.location],reason:'AI checked the local registration'}]}]);
+  const graph=index.graph(root.id,mode,1)!;
+  assert.equal(graph.root.children.some(node=>node.callKind==='indirect'),false);
+  const candidate=graph.root.children.find(node=>node.symbolId===target.id)!;
+  assert.equal(candidate.callKind,'ai-candidate');
+  assert.equal(candidate.sites.filter(ref=>ref.kind==='call').length,1);
+  assert.equal(candidate.sites.filter(ref=>ref.kind==='call')[0].inference?.evidence[0].reason,'AI checked the local registration');
+  assert.equal(index.relations(target.id,'callers').flatMap(group=>group.sites).filter(ref=>ref.kind==='call').length,1);
+  assert.equal(index.relations(target.id,'references').flatMap(group=>group.sites).filter(ref=>ref.kind==='call').length,1);
+  assert.equal(index.callbackAt(file.uri,site.location.end-1)?.incomplete,true);
+  assert.ok(index.files.get(file.uri)!.references.includes(local),'local evidence stays available to snapshots and cursor tracing');
+  applyCallbackHints(index,[]);
+  assert.ok(index.relations(root.id,'callees').some(group=>group.callKind==='indirect'));
+  assert.ok(index.relations(root.id,'callees').some(group=>group.callKind===kind));
+  assert.equal(index.relations(target.id,'callers').flatMap(group=>group.sites).filter(ref=>ref.kind==='call').length,1);
+});
+
+test('replacement is per invocation, preserves multiple AI targets and keeps local inferred/direct edges', async () => {
+  const parser = await createAnalyzer(path.resolve('node_modules/web-tree-sitter/web-tree-sitter.wasm'), path.resolve('node_modules/tree-sitter-c/tree-sitter-c.wasm'));
+  const file = parser.analyze('file:///fields.c', 'struct Ops{void(*read)(void);}; void first(void){} void second(void){} void local(void){} void direct(void){} void run(struct Ops *ops){ops->read();ops->read();direct();}');
+  const index = new RelationIndex(); index.update(file);
+  const root = file.symbols.find(s => s.name === 'run')!;
+  const targets = ['first', 'second'].map(name => file.symbols.find(s => s.name === name)!);
+  const local = file.symbols.find(s => s.name === 'local')!;
+  const calls = file.references.filter(ref => ref.kind === 'call' && ref.indirect);
+  assert.equal(calls.length, 2);
+  index.update({ ...file, references: [...file.references, { ...calls[0], id: 'inferred-local', name: local.name, targetId: local.id, indirect: false,
+    callKind: 'inferred', inference: { expression: 'ops->read', incomplete: true, evidence: [], reasons: [] } }] });
+  applyCallbackHints(index, [{ key: 'first-site', callsite: calls[0].location, expression: 'ops->read', status: 'candidates', cached: true,
+    candidates: targets.map(target => ({ targetId: target.id, evidence: [target.location], reason: 'Possible registration' })) }]);
+  for (const sort of ['name', 'source'] as const) {
+    const outgoing = index.relations(root.id, 'callees', 'all', sort);
+    assert.deepEqual(outgoing.filter(group => group.callKind === 'ai-candidate').map(group => group.name).sort(), ['first', 'second']);
+    const remaining = outgoing.filter(group => ['indirect', 'unresolved'].includes(group.callKind!));
+    assert.equal(remaining.length, 1);
+    assert.deepEqual(remaining[0].sites.map(site => site.location.start), [calls[1].location.start], 'same field at another invocation remains visible');
+    assert.ok(outgoing.some(group => group.name === 'local' && group.callKind === 'inferred'));
+    assert.ok(outgoing.some(group => group.name === 'direct' && group.callKind === 'direct'));
+  }
+  for (const mode of ['callees', 'both'] as const) {
+    const graph = index.graph(root.id, mode, 1)!;
+    const children = graph.root.children.filter(node => mode !== 'both' || node.direction === 'callees');
+    assert.equal(children.filter(node => node.callKind === 'ai-candidate').length, 2);
+    assert.equal(children.filter(node => node.callKind === 'indirect').flatMap(node => node.sites).length, 1);
+  }
+  assert.equal(index.callbackAt(file.uri, calls[0].location.end - 1)?.targets.length, 3);
+  assert.equal(index.callbackAt(file.uri, calls[1].location.end - 1)?.targets.length, 0);
+});
+
+test('negative or rejected AI results keep indirect calls visible', () => {
+  const { file, hint, target } = synthetic(2);
+  const index = new RelationIndex(); index.update(file);
+  applyCallbackHints(index, [{ ...hint(file.references[0]), status: 'not-found', candidates: [] },
+    { ...hint(file.references[1]), candidates: [{ targetId: 'missing', evidence: [target.location], reason: 'Unavailable' }] }]);
+  assert.equal(index.relations(target.id, 'callees').filter(group => group.callKind === 'indirect').length, 2);
+  assert.equal(index.files.get(file.uri), file);
 });
 
 test('empty results preserve unchanged files without allocating filtered reference arrays', () => {

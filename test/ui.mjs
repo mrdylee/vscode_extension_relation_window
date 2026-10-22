@@ -32,6 +32,8 @@ try {
   collect(fixture.memberGraph.root);
   collect(fixture.macroGraph.root);
   collect(fixture.pointerGraph.root);
+  collect(fixture.aiGraph.root);
+  collect(fixture.aiUnresolvedGraph.root);
   collect(fixture.registrationGraph.root);
   collect(fixture.argumentGraph.root);
   collect(fixture.argumentBothGraph.root); fixture.argumentBothGraph.callers.forEach(collect);
@@ -101,6 +103,10 @@ try {
   assert.match(await page.locator('.copilot-progress').textContent(),/All detected sites processed.*7\/7/);
   assert.match(await page.locator('.copilot-progress').textContent(),/No candidate in supplied context: 7/);
   assert.equal(await page.getByRole('button',{name:'Analyze all remaining',exact:true}).count(),0);
+  Object.assign(aiDiagnostics.copilot,{total:0,completed:0,excluded:7});
+  await page.evaluate(diagnostics=>window.dispatchEvent(new MessageEvent('message',{data:{type:'diagnostics',diagnostics}})),aiDiagnostics);
+  assert.match(await page.locator('.copilot-progress').textContent(),/No callback sites in AI scope.*Excluded by path: 7/);
+  Object.assign(aiDiagnostics.copilot,{total:7,completed:7,excluded:0});
   await page.getByRole('button', { name: 'Diagnostics', exact: true }).click();
   for (const [waitReason, message] of [
     ['unsaved-sources', 'Save all modified C/H files'],
@@ -399,10 +405,12 @@ try {
   assert.ok((await page.locator('.code-line.highlight').textContent()).includes('callback_target'));
   await page.screenshot({ path: 'output/playwright/inferred-calls.png', fullPage: true });
   await page.keyboard.press('Escape');
-  const aiGraph = structuredClone(fixture.pointerGraph);
+  await configure({ graph: fixture.aiUnresolvedGraph });
+  assert.equal(await page.locator('.node-title[aria-label*="Indirect call"]').count(), 1);
+  const aiGraph = structuredClone(fixture.aiGraph);
   const aiTarget = aiGraph.root.children.find(node => node.name === 'callback_target');
-  aiTarget.callKind = 'ai-candidate'; aiTarget.sites.forEach(site => site.callKind = 'ai-candidate');
   await configure({ graph: aiGraph });
+  assert.equal(await page.locator('.node-title[aria-label*="Indirect call"]').count(), 0, 'AI candidates replace the original indirect entry');
   assert.ok((await pointerTarget.textContent()).includes('AI candidate'));
   assert.equal(await pointerTarget.getAttribute('data-preview'), aiTarget.symbolId, 'AI title opens the candidate definition');
   await pointerTarget.click();
@@ -610,6 +618,13 @@ try {
   await configure({ contextLayout: 'combined' });
   await page.waitForFunction(() => !document.querySelector('.context').hidden);
   assert.equal(await divider.isVisible(), true);
+  for (const contextLayout of ['combined-keep-left-sidebar', 'combined-center', 'combined-keep-right-sidebar', 'combined-full-width']) {
+    await configure({ contextLayout });
+    assert.equal(await page.locator('.context').isVisible(), true);
+    assert.equal(await page.locator('.relation').isVisible(), true);
+    assert.equal(await divider.isVisible(), true);
+  }
+  await configure({ contextLayout: 'combined' });
   state.graph = fixture.graph; state.mode = 'references';
   await page.evaluate(state => window.dispatchEvent(new MessageEvent('message', { data: { type: 'state', state } })), state);
   const prefix = '/* 한글 😀 */ ';
@@ -660,6 +675,7 @@ try {
     counts: { files: 1820, sourceChars: 6000000, references: 82000, programs: 12000, macroFiles: 420 }
   } };
   diagnostics.index = { sessionStartedAt: at - 30000, rebuildCount: 5, sourceParses: 1820, relationPasses: 5,
+    cache: { state: 'incompatible', reason: 'analysis-version', version: 2, savedVersion: 1, restored: 0, saved: 0 },
     lastSourceEvent: { at: at - 2000, kind: 'editor-close' },
     rebuilds: Array.from({ length: 5 }, (_, i) => ({ number: i + 1, at: at - 10000, finishedAt: at - 5000,
       reason: i === 4 ? 'configuration' : 'startup', settings: i === 4 ? ['include'] : undefined, outcome: 'completed',
@@ -668,6 +684,9 @@ try {
   await page.getByRole('button', { name: 'Diagnostics', exact: true }).click();
   const diagnosticDialog = page.getByRole('dialog', { name: 'Memory diagnostics' });
   assert.ok(await diagnosticDialog.isVisible());
+  assert.match(await diagnosticDialog.textContent(), /Disk cache: incompatible \(analysis-version\)/);
+  assert.match(await diagnosticDialog.textContent(), /Analysis v2 \/ saved v1/);
+  delete diagnostics.index.cache; // Keep the existing memory-incident fixture independent of this compatibility case.
   assert.match(await diagnosticDialog.textContent(), /Last rebuild: #5.*Analysis settings changed \(include\)/);
   assert.match(await diagnosticDialog.textContent(), /Search results: 1820 · Selected: 1820 · Indexed: 1820 · Failed: 0 · Unaccounted: 0 · Discovery: finished/);
   await diagnosticDialog.getByText('Rebuild history and source activity', { exact: true }).click();

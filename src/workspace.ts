@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { Worker } from 'node:worker_threads';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { ANALYSIS_CACHE_VERSION, CacheIncompatibility } from './analysis-cache';
 import { FileAnalysis } from './model';
 import { RelationIndex } from './relations';
 import { Minimatch } from 'minimatch';
@@ -126,8 +126,7 @@ export class WorkspaceIndex implements vscode.Disposable {
     this.ready = this.storagePath ? this.restoreCache() : this.reindex('startup');
   }
   get analysisKey() {
-    const version = JSON.parse(readFileSync(path.join(this.extensionPath, 'package.json'), 'utf8')).version;
-    return createHash('sha256').update(JSON.stringify({ version, schema: 2, remote: vscode.env.remoteName ?? '', skip: this.skipInactive, callbacks: this.analyzeCallbacks,
+    return createHash('sha256').update(JSON.stringify({ analysisVersion: ANALYSIS_CACHE_VERSION, schema: 2, remote: vscode.env.remoteName ?? '', skip: this.skipInactive, callbacks: this.analyzeCallbacks,
       folders: (vscode.workspace.workspaceFolders ?? []).map(folder => { const scope = this.scope(folder); return [folder.uri.toString(), scope.include, scope.exclude, scope.macros.map(m => m.pattern)]; }) })).digest('hex');
   }
   private options(uri: vscode.Uri) {
@@ -151,19 +150,29 @@ export class WorkspaceIndex implements vscode.Disposable {
     return { uris: [...seen.values()].slice(0, maxFiles), searchResults };
   }
   private initCache() {
-    return this.request<{ state: 'missing' | 'ready' | 'invalid' }>({ type: 'cache-init', directory: path.join(this.storagePath!, 'analysis-cache'), key: this.analysisKey }).promise;
+    return this.request<{ state: 'missing' | 'ready' | 'incompatible' | 'invalid'; reason?: CacheIncompatibility; savedVersion?: number }>({ type: 'cache-init', directory: path.join(this.storagePath!, 'analysis-cache'), key: this.analysisKey }).promise;
   }
   private async restoreCache() {
     this.indexing = true;
-    this.indexDiagnostics.cache = { state: 'checking', restored: 0, saved: 0 };
+    this.indexDiagnostics.cache = { state: 'checking', restored: 0, saved: 0, version: ANALYSIS_CACHE_VERSION };
     this.status = 'Checking saved index…';
     const epoch = this.epoch;
     try {
       const initialized = await this.initCache();
       if (this.disposed || epoch !== this.epoch) return;
       this.indexDiagnostics.cache.state = initialized.state === 'ready' ? 'checking' : initialized.state;
+      this.indexDiagnostics.cache.reason = initialized.reason;
+      this.indexDiagnostics.cache.savedVersion = initialized.savedVersion;
       if (initialized.state === 'missing') { this.indexing = false; await this.reindex('startup'); return; }
-      if (initialized.state === 'invalid') { this.cacheBlocked = true; this.derivedRevision = this.revision; this.status = 'Saved index is incompatible or damaged. Run Rebuild Index.'; return; }
+      if (initialized.state === 'incompatible') {
+        this.cacheBlocked = true; this.derivedRevision = this.revision;
+        this.status = initialized.reason === 'analysis-version'
+          ? `Saved index analysis version changed (${initialized.savedVersion} → ${ANALYSIS_CACHE_VERSION}). Run Rebuild Index.`
+          : initialized.reason === 'workspace-settings' ? 'Saved index settings changed. Run Rebuild Index.'
+          : 'Saved index uses an older cache format. Run Rebuild Index.';
+        return;
+      }
+      if (initialized.state === 'invalid') { this.cacheBlocked = true; this.derivedRevision = this.revision; this.status = 'Saved index is damaged. Run Rebuild Index.'; return; }
       const { uris } = await this.discover();
       for (const uri of uris) {
         if (this.disposed || epoch !== this.epoch) return;
@@ -207,7 +216,8 @@ export class WorkspaceIndex implements vscode.Disposable {
     this.saving = (async () => {
       try {
         const { saved } = await this.request<{ saved: boolean }>({ type: 'cache-save', versions: this.workerVersions() }).promise;
-        if (saved && revision === this.revision) { this.savedRevision = revision; this.indexDiagnostics.cache = { state: 'updated', restored: this.indexDiagnostics.cache?.restored ?? 0, saved: this.index.files.size }; }
+        if (saved && revision === this.revision) { this.savedRevision = revision; this.indexDiagnostics.cache = { state: 'updated', restored: this.indexDiagnostics.cache?.restored ?? 0, saved: this.index.files.size,
+          version: ANALYSIS_CACHE_VERSION, savedVersion: ANALYSIS_CACHE_VERSION }; }
       } catch { if (this.indexDiagnostics.cache) this.indexDiagnostics.cache.state = 'error'; }
       finally { this.saving = undefined; this.diagnosticsChanged.fire(); }
     })();

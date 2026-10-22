@@ -11,13 +11,14 @@ export function canExpandNode(node: GraphNode): boolean {
   return !!node.symbolId && !node.cycle && (!node.callKind || ['direct', 'expanded', 'inferred', 'ai-candidate'].includes(node.callKind));
 }
 export interface Preview { location: Location; text: string; tokens: SyntaxToken[][]; firstLine: number; path: string; label: string }
+export type ContextLayout = 'combined' | 'combined-full-width' | 'combined-keep-left-sidebar' | 'combined-center' | 'combined-keep-right-sidebar' | 'separate';
 export interface ViewState {
   graph?: GraphData; context?: Preview; candidates: SymbolRecord[];
   callback?: CallbackTargets;
   callbackDiagnostics?: CallbackDiagnostic[];
   status: string; fileCount: number; issues: string[];
   mode: RelationMode; accessFilter: AccessFilter; depth: number; locked: boolean; skipInactive: boolean;
-  calleeSort: CalleeSort; contextLayout: 'combined' | 'combined-full-width' | 'separate';
+  calleeSort: CalleeSort; contextLayout: ContextLayout;
   callGraphDirection: 'callers-left' | 'callees-left';
   includeFunctionArguments: boolean; analyzeCallbacks: boolean;
   diagnostics?: Diagnostics;

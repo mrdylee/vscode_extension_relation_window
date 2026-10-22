@@ -15,13 +15,17 @@ export function applyCallbackHints(index: RelationIndex, hints: readonly Callbac
     if (!hasPrevious && !fileHints) continue;
     const references = hasPrevious ? file.references.filter(ref => ref.callKind !== 'ai-candidate') : file.references;
     if (!fileHints) { index.update({ ...file, references }); continue; }
-    const callsites = new Map<string, ReferenceRecord>(), existingTargets = new Set<string>();
+    const callsites = new Map<string, ReferenceRecord>(), existingTargets = new Map<string, boolean>();
     const wantedSites = new Set(fileHints.map(hint => `${hint.callsite.start}:${hint.callsite.end}`));
     for (const ref of references) {
       const location = ref.location, key = `${location.start}:${location.end}`;
       if (!wantedSites.has(key)) continue;
       if (ref.kind === 'call' && ref.access && !callsites.has(key)) callsites.set(key, ref);
-      if (ref.targetId) existingTargets.add(`${key}:${ref.targetId}`);
+      if (ref.targetId) {
+        const target = `${key}:${ref.targetId}`;
+        const partial = ref.kind === 'call' && (ref.callKind === 'inferred' || ref.callKind === 'registered') && ref.inference?.incomplete;
+        existingTargets.set(target, existingTargets.get(target) === true || !partial);
+      }
     }
     const added: ReferenceRecord[] = [];
     for (const hint of fileHints) {
@@ -30,7 +34,7 @@ export function applyCallbackHints(index: RelationIndex, hints: readonly Callbac
       for (const candidate of hint.candidates) {
         const target = index.symbol(candidate.targetId);
         if (!target || target.kind !== 'function' || !target.definition) continue;
-        if (existingTargets.has(`${key}:${target.id}`)) continue;
+        if (existingTargets.get(`${key}:${target.id}`)) continue;
         added.push({ ...site, id: `${site.id}:ai:${target.id}`, name: target.name, targetId: target.id, indirect: false, member: undefined,
           callKind: 'ai-candidate', inference: { expression: hint.expression, incomplete: true,
             reasons: ['Copilot candidate; not proof of invocation.', ...(hint.contextLimited ? ['Only bounded source context was examined.'] : [])],

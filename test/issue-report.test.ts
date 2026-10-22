@@ -71,6 +71,12 @@ test('cache and AI diagnostics expose bounded counters without model names or so
   assert.equal(data.copilot.state, 'model-selection-required');
   assert.equal(data.copilot.requests, 5);
   assert.equal(data.copilot.contextLimited, 2);
+  value.diagnostics.index!.cache = { state: 'incompatible', reason: 'analysis-version', version: 2, savedVersion: 1, restored: 0, saved: 0 };
+  const incompatible = createIssueReport(value);
+  assert.match(incompatible, /"state": "incompatible"/);
+  assert.match(incompatible, /"reason": "analysis-version"/);
+  assert.match(incompatible, /"version": 2/);
+  assert.match(incompatible, /"savedVersion": 1/);
   value.diagnostics.copilot!.waitReason = 'unsaved-sources';
   assert.match(createIssueReport(value), /"waitReason": "unsaved-sources"/);
   value.diagnostics.copilot!.waitReason = 'SECRET_SOURCE_PATH' as any;

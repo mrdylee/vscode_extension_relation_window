@@ -41,8 +41,12 @@ Use **Settings** in the Dynsight toolbar to configure sorting, Context layout, c
 The index is saved in this workspace's extension storage, including in the remote
 WSL environment. On restart Dynsight checks file contents and inventory before
 restoring it. An unchanged compatible cache needs no source parsing or relation
-analysis. First use creates the index locally. A damaged or incompatible cache
-(including an analyzer-version upgrade) asks you to run **Rebuild index**.
+analysis. First use creates the index locally. Analysis compatibility has its own
+version, separate from the extension's release number. Compatible extension
+updates reuse the saved index. A changed analysis version, changed workspace
+settings, an older cache format and damaged files have separate Rebuild messages;
+only damaged files use the word **damaged**. Pre-versioned caches need one Rebuild
+when adopting this format. Diagnostics shows current and saved analysis versions.
 
 Edits, discarded edits and external changes reparse only changed files. Relations
 are recomputed for conservatively connected files, including header and callback
@@ -70,6 +74,33 @@ Relevant source snippets are sent to Copilot's service; account usage limits and
 organization policies apply. Dynsight does not inherit Copilot chat history or
 Agent search. It selects bounded source evidence from the local index.
 
+Use **Settings → Copilot Include** to control which callback invocation files may
+use AI. This is an editable array in the ordinary VS Code settings editor; there
+is no separate scope dialog. Initial setup copies general **Include** paths.
+Newly added Include paths are also copied, while removing a copied path from AI
+Include remains effective after restart and when other Include paths are added.
+If general Include and Copilot Include change in the same JSON save, the explicit
+AI array takes priority, including an empty array.
+Removing a general Include path removes its AI copy. An empty AI Include means
+**no AI requests**. A workspace with no general Include paths starts with an empty
+AI list; explicitly add paths (or `**` for all indexed files) when needed.
+
+```json
+{
+  "dynsight.include": ["App/**", "Drivers/**"],
+  "dynsight.copilotInclude": ["App/**"],
+  "dynsight.copilotExclude": ["App/Generated/**"]
+}
+```
+
+Patterns are relative to each workspace root; folder settings are supported.
+Exclusions win over AI includes. Only invocation files in this AI scope contribute
+to AI requests, cached candidate display and pending counts. Supporting evidence
+may still come from any locally indexed path. Changing the scope cancels the
+active AI run and restores eligible cached results only. Excluded cache is kept
+for later reuse; use Analyze for missing results. Local callback analysis and its
+limits use the separate general Include/Exclude scope.
+
 When local registration and data-flow analysis has candidates, Dynsight first
 selects up to eight of them and asks Copilot to review their evidence. This path
 supplies at most ten source snippets and 8,000 source characters, including bounded
@@ -87,7 +118,8 @@ requests; use **Analyze Callbacks with Copilot** to refresh missing results.
   Copilot**, to process every pending site automatically in batches of five.
   Each request uses your Copilot allowance. Progress stays cumulative across batches.
 - Click **Stop analysis** or run **Dynsight: Stop Copilot Analysis** to cancel the
-  current request and stop further requests. Completed results are kept; Analyze
+  current request and stop further requests. Stop also applies during initial
+  Include setup or pending model selection. Completed results are kept; Analyze
   resumes the missing sites. Saving does not restart a stopped job. Active jobs
   pause during unsaved edits and resume after saving and local indexing settle.
 - A request error stops automatic continuation. Run **Reanalyze Callback Candidates
@@ -98,6 +130,10 @@ requests; use **Analyze Callbacks with Copilot** to refresh missing results.
 - **AI candidate** labels appear in Callers, Callees and both mode. Their details
   link to source evidence. They are suggestions, never proof of invocation. An
   empty answer means no candidate was found in the supplied bounded context.
+- In Callees and both mode, AI candidates replace the indirect/unresolved entry
+  at that exact invocation. Other invocations and local inferred/direct targets
+  stay visible. No candidate leaves the original entry visible; disabling or
+  clearing AI restores it. The original reference remains available for tracing.
 - Click an AI candidate function in Callees to preview its definition in Context
   and expand its callees. Double-click or press Enter to open the definition in
   the editor. The details popup keeps separate links to the original callback
@@ -218,7 +254,15 @@ It does not guarantee that every project fits the Worker memory budget.
 Click **Settings** in Relation to open all Dynsight settings in one place. Sorting and layout choices are configured here:
 
 - **Callees sorting → Name order / Source order**: the default is name order. Source order groups each target at its first original call location, including macro-expanded and inferred calls. Repeated calls stay in one node, with popup locations in source order. Tied locations retain discovery order. This is the order written in source, not runtime evaluation order. Callers/References keep name order.
-- **Context layout → Combined / Combined · Full width / Separate**: Combined keeps Context and Relation together. **Combined · Full width** places them together across the bottom, beneath both sidebars, using VS Code's Justify panel alignment. Terminal and other bottom-panel views share that width. Selecting Combined or Separate after Full width restores Center alignment (editor width). Separate gives Relation the panel's available width and opens **Dynsight Context** as an independent Explorer view. Drag that view's **header**, or use **View: Move View**, to move it below the file tree or to another supported VS Code location. VS Code remembers docking positions. Its width follows the destination area; long code lines may require horizontal scrolling. Syntax colors, code clicks, pinning and shared selection remain available in all three choices.
+- **Context layout** keeps Context and Relation together in Combined modes. Choose
+  **Full width** for the entire bottom; **Left sidebar full height** for the center
+  and right bottom area; **Right sidebar full height** for the left and center
+  bottom area; or **Center** to preserve both sidebars' height. These use native
+  VS Code panel alignment, so Terminal and other bottom-panel views share it.
+  Default Combined preserves the current placement; returning to it or Separate
+  from an explicit alignment restores Center. Separate opens **Dynsight Context**
+  as an independent Explorer view; drag its header to another supported location.
+  All modes share the same index, selection, syntax colors and source navigation.
 - **Call Graph Direction → Callers left / Callees right**, or **Callees left / Callers right**: applies to Callers & Callees mode. Changing sides preserves expanded branches, selection and the Callees sorting rule. The graph remains left aligned and left-side branches are visible initially; it does not center the selected function or reanalyze sources. Single-direction modes keep their existing orientation.
 
 Right-click inside Relation (or focus a node and press **Shift+F10**) for **Settings…** and **Reset graph position**. Reset returns the whole graph to its initial left-aligned position.
@@ -416,6 +460,15 @@ the relevant getter, registration and table definitions when collecting a reprod
 
 - Explicit member initializers such as `.cb_preprocess = target` remain attached to their object even if the structure definition is unavailable. Getter returns, argument passing and stored pointers can carry that object to a callback invocation. Positional initializers such as `{target, other}` still require a known field layout.
 - Macro/callback analysis limits show **Partial index: analysis limits reached** in the status bar. Existing relations remain usable; inspect **Analysis notices** for the limit that left results incomplete.
+- **Callback region limit: 256 reachable objects** bounds abstract storage regions
+  tracked by local callback flow analysis. **Stage=propagation** means function
+  parameter, return and mutation effects were being propagated. Passing callback
+  storage addresses to functions with unavailable bodies, or importing many
+  callee effects, can fill the limit. Inspect the function/file location,
+  `ordered-region` / `function-regions` / `reachable-regions` operation and
+  `first omitted` storage in the notice. AI Analyze waits for local indexing and
+  can use a stable partial result. Copilot Include limits paid requests; general
+  Include/Exclude controls the local analysis scope that produced this warning.
 - Object/function macros, nested argument expansion, stringizing, token pasting, variadics and literal indexed includes are supported. The popup shows the expansion chain and tinted effective code. Clicking a call still previews its original invocation in Context.
 - Local pointer initialization/assignment, pointer aliases, branches/loops, callback argument forwarding/registration/returns, static state, struct tables and arrays supply possible targets. Constant array indices stay separate; unknown indices collect possible entries.
 - Known object instances stay separate. Unknown pointer fields may merge by declaration and remain uncertain.

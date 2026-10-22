@@ -6,6 +6,13 @@ import { ViewState, nodePreviewId, canExpandNode } from './view-state';
 import { analysisNotices } from './analysis-notices';
 import { highlightC, SyntaxToken } from './syntax';
 
+const panelAlignments: Partial<Record<ViewState['contextLayout'], string>> = {
+  'combined-full-width': 'Justify', 'combined-center': 'Center',
+  // Extend the bottom panel under the opposite sidebar to keep the named
+  // sidebar full height, using native VS Code panel alignment commands.
+  'combined-keep-left-sidebar': 'Right', 'combined-keep-right-sidebar': 'Left'
+};
+
 export class RelationView implements vscode.Disposable {
   state: ViewState = { candidates: [], status: 'Open a C file and click a symbol name.', fileCount: 0,
     issues: [], mode: 'references', accessFilter: 'all', depth: 1, locked: false, skipInactive: true,
@@ -28,6 +35,7 @@ export class RelationView implements vscode.Disposable {
   private lastEditor?: vscode.TextEditor;
   private pendingTrack = false;
   private syntaxCache?: { text: string; tokens: SyntaxToken[][] };
+  private panelLayout = Promise.resolve();
   constructor(private workspace: WorkspaceIndex, private extensionUri: vscode.Uri) {
     this.diagnosticsListener = workspace.diagnosticsChanged.event(() => {
       this.state.diagnostics = workspace.diagnostics;
@@ -62,18 +70,21 @@ export class RelationView implements vscode.Disposable {
     const config = vscode.workspace.getConfiguration('dynsight');
     this.state.calleeSort = config.get('calleeSort') === 'source' ? 'source' : 'name';
     const layout = config.get('contextLayout');
-    this.state.contextLayout = layout === 'separate' || layout === 'combined-full-width' ? layout : 'combined';
+    this.state.contextLayout = layout === 'separate' || (typeof layout === 'string' && Object.hasOwn(panelAlignments, layout)) ? layout as ViewState['contextLayout'] : 'combined';
     this.state.callGraphDirection = config.get('callGraphDirection') === 'callees-left' ? 'callees-left' : 'callers-left';
     this.state.includeFunctionArguments = config.get('includeFunctionArguments') === true;
     this.state.analyzeCallbacks = config.get('analyzeCallbacks', true);
   }
-  private async applyPanelLayout(previousLayout?: ViewState['contextLayout']) {
-    try {
-      if (this.state.contextLayout === 'combined-full-width') {
+  private applyPanelLayout(previousLayout?: ViewState['contextLayout']) {
+    const layout = this.state.contextLayout, alignment = panelAlignments[layout];
+    this.panelLayout = this.panelLayout.then(async () => {
+      if (this.state.contextLayout !== layout) return;
+      if (alignment) {
         await vscode.commands.executeCommand('workbench.action.positionPanelBottom');
-        if (this.state.contextLayout === 'combined-full-width') await vscode.commands.executeCommand('workbench.action.alignPanelJustify');
-      } else if (previousLayout === 'combined-full-width') await vscode.commands.executeCommand('workbench.action.alignPanelCenter');
-    } catch (error) { void vscode.window.showErrorMessage(`Dynsight: Could not change panel layout: ${String(error)}`); }
+        if (this.state.contextLayout === layout) await vscode.commands.executeCommand(`workbench.action.alignPanel${alignment}`);
+      } else if (previousLayout && panelAlignments[previousLayout]) await vscode.commands.executeCommand('workbench.action.alignPanelCenter');
+    }).catch(error => { void vscode.window.showErrorMessage(`Dynsight: Could not change panel layout: ${String(error)}`); });
+    return this.panelLayout;
   }
   resolveWebviewView(view: vscode.WebviewView, contextOnly = false) {
     if (contextOnly) this.contextView = view; else this.webview = view;

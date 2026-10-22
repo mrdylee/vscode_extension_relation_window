@@ -3,13 +3,14 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { CallbackContext, prepareCallbackContexts, callbackDigest } from './copilot-context';
-export interface CopilotSnapshot { generation: number | string; files: readonly FileAnalysis[]; settingsKey: string }
+export interface CopilotSnapshot { generation: number | string; files: readonly FileAnalysis[]; settingsKey: string;
+  callsiteUris?: ReadonlySet<string>; scopeRevision?: number }
 export interface CopilotProvider { readonly modelKey: string; complete(prompt: string, signal: AbortSignal): Promise<string> }
 export interface CallbackHint {
   key: string; callsite: Location; expression: string; status: 'candidates' | 'not-found';
   candidates: {targetId: string; evidence: Location[]; reason: string}[]; cached: boolean; contextLimited?: boolean;
 }
-export interface CopilotProgress { total: number; completed: number; requested: number; cached: number; remaining: number; failures: number; candidates: number; notFound: number; contextLimited: number }
+export interface CopilotProgress { total: number; completed: number; requested: number; cached: number; remaining: number; failures: number; candidates: number; notFound: number; contextLimited: number; excluded?: number }
 export interface CopilotRunResult extends CopilotProgress { hints: CallbackHint[]; stale: boolean; stopped?: boolean }
 interface Options { cacheDir: string; provider: CopilotProvider; isCurrent: (snapshot: CopilotSnapshot) => boolean; onHints?: (hints: CallbackHint[]) => void; onProgress?: (progress: CopilotProgress) => void; maxRequests?: number }
 const version = 'copilot-callbacks-2';
@@ -63,6 +64,8 @@ export class CopilotCallbackController {
     if (!current()) return {...result,stale:true};
     const builder = await prepareCallbackContexts(snapshot.files,current);
     if (!current()) return {...result,stale:true};
+    const sites = snapshot.callsiteUris ? builder.sites.filter(site => snapshot.callsiteUris!.has(site.file.uri)) : builder.sites;
+    result.excluded = builder.sites.length - sites.length;
     const progress = () => {
       if (!current()) return;
       const { hints, stale, ...value } = result;
@@ -75,15 +78,15 @@ export class CopilotCallbackController {
       result.contextLimited += Number(value.contextLimited === true);
       progress();
     };
-    result.total = result.remaining = builder.sites.length; progress();
+    result.total = result.remaining = sites.length; progress();
     const maximum = Math.max(0,Math.min(20,Math.floor(this.options.maxRequests ?? 5)));
     let batchRequests = 0, failed = false;
     const canRequest = () => !!reason && !failed && maximum > 0 && (automatic || result.requested < maximum);
-    if(reason === 'force') for(const site of builder.sites) {
+    if(reason === 'force') for(const site of sites) {
       if(!current())break;
       await rm(path.join(this.options.cacheDir,callbackDigest(site.key)+'.json'),{force:true});
     }
-    for (const site of builder.sites) {
+    for (const site of sites) {
       await new Promise<void>(resolve=>setImmediate(resolve));
       if (!current()) { result.stale = true; break; }
       const filename = path.join(this.options.cacheDir, callbackDigest(site.key) + '.json');

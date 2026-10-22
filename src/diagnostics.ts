@@ -1,3 +1,5 @@
+import type { CacheIncompatibility } from './analysis-cache';
+
 export type AnalysisPhase = 'sources' | 'macros' | 'callbacks' | 'transfer';
 export const copilotWaitMessages = {
   'unsaved-sources': 'Save all modified C/H files in the analysis scope to continue.',
@@ -27,7 +29,8 @@ export interface RebuildRecord {
 export interface IndexDiagnostics {
   sessionStartedAt: number; rebuildCount: number; sourceParses: number; relationPasses: number;
   rebuilds: RebuildRecord[]; lastSourceEvent?: { at: number; kind: SourceEvent };
-  cache?: { state: 'disabled' | 'checking' | 'restored' | 'updated' | 'missing' | 'invalid' | 'deferred' | 'error'; restored: number; saved: number };
+  cache?: { state: 'disabled' | 'checking' | 'restored' | 'updated' | 'missing' | 'incompatible' | 'invalid' | 'deferred' | 'error';
+    reason?: CacheIncompatibility; version?: number; savedVersion?: number; restored: number; saved: number };
 }
 export interface WorkerDiagnostics {
   run: string;
@@ -44,5 +47,5 @@ export interface Diagnostics {
   worker?: WorkerDiagnostics;
   workerError?: string;
   index?: IndexDiagnostics;
-  copilot?: { state: string; automatic?: boolean; waitReason?: CopilotWaitReason; total?: number; completed?: number; requests: number; cacheHits: number; remaining: number; failures: number; candidates: number; notFound: number; contextLimited: number };
+  copilot?: { state: string; automatic?: boolean; waitReason?: CopilotWaitReason; total?: number; completed?: number; requests: number; cacheHits: number; remaining: number; failures: number; candidates: number; notFound: number; contextLimited: number; excluded?: number };
 }

@@ -49,8 +49,9 @@ function renderCopilot(ai: Diagnostics['copilot']) {
   const total = ai.total ?? 0, completed = ai.completed ?? 0;
   const busy = ['analyzing', 'restoring-cache', 'waiting-for-saved-index'].includes(ai.state);
   const ready = ai.state === 'ready';
-  const state = ready ? total ? 'All detected sites processed' : 'No unresolved callback sites detected' : ai.state.replaceAll('-', ' ');
+  const state = ready ? total ? 'All detected sites processed' : ai.excluded ? 'No callback sites in AI scope' : 'No unresolved callback sites detected' : ai.state.replaceAll('-', ' ');
   copilotProgress.append(el('span', '', `Copilot: ${state} · ${completed}/${total} processed · Remaining: ${ai.remaining} · Failed: ${ai.failures}`));
+  if (ai.excluded) copilotProgress.append(el('span', 'muted', `Excluded by path: ${ai.excluded}`));
   if (total) copilotProgress.append(el('span', 'muted', `Candidates: ${ai.candidates} · No candidate in supplied context: ${ai.notFound} · Context limited: ${ai.contextLimited}`));
   copilotProgress.title = 'Coverage of detected callback sites in the current saved index. Failed sites remain pending. Processing every site does not prove every runtime target was found.';
   if (ai.state === 'analyzing' || ai.automatic) stop();

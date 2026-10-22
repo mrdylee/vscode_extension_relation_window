@@ -2,7 +2,7 @@
   "name": "dynsight",
   "displayName": "Dynsight — C Code Explorer",
   "description": "Build-free C references, caller/callee graphs and a linked Context preview.",
-  "version": "0.1.66",
+  "version": "0.1.67",
   "publisher": "dylee",
   "author": "dylee",
   "license": "MIT",
@@ -108,6 +108,20 @@
           "scope": "window",
           "markdownDescription": "Copilot model ID for callback candidates. [Select Copilot Model](command:dynsight.selectCopilotModel) lists models available to your Copilot account and saves the selected ID here. Selecting a model does not enable analysis or send source. An empty value asks you to choose when starting Analyze Callbacks with Copilot. Model changes reuse only that model's valid cache; unavailable models are not replaced automatically."
         },
+        "dynsight.copilotInclude": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "default": [],
+          "scope": "resource",
+          "description": "Files whose callback call sites may use AI, using workspace-relative globs. Paths are copied from Include on first setup and when Include changes; remove unwanted paths here. Empty disables all AI callback requests. Copilot Exclude takes priority. Local analysis is unchanged and supporting evidence may come from other indexed paths. Scope changes cancel the active AI run and restore eligible cache only; use Analyze for missing results."
+        },
+        "dynsight.copilotExclude": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "default": [],
+          "scope": "resource",
+          "description": "Workspace-relative glob patterns whose callback call sites skip AI, for example Vendor/** or Generated/**. Exclude takes priority over Copilot Include. Excluded sites use no AI requests and are omitted from AI results and pending counts; existing cached results are kept for later reuse. Local callback analysis and use as supporting source evidence remain available."
+        },
         "dynsight.analyzeCallbacks": {
           "type": "boolean",
           "default": true,
@@ -138,12 +152,12 @@
         },
         "dynsight.contextLayout": {
           "type": "string",
-          "enum": ["combined", "combined-full-width", "separate"],
-          "enumItemLabels": ["Combined", "Combined · Full width", "Separate"],
-          "enumDescriptions": ["Show Context and Relation together in the normal panel. Leaving Full width restores editor-width alignment.", "Show Context and Relation together across the bottom, beneath both sidebars. Also changes the width of Terminal and other bottom-panel views.", "Show Context as an independent Explorer view; drag its header to move it. Leaving Full width restores editor-width panel alignment."],
+          "enum": ["combined", "combined-full-width", "combined-keep-left-sidebar", "combined-center", "combined-keep-right-sidebar", "separate"],
+          "enumItemLabels": ["Combined", "Combined · Full width", "Combined · Left sidebar full height", "Combined · Center", "Combined · Right sidebar full height", "Separate"],
+          "enumDescriptions": ["Show Context and Relation together in the normal panel. Leaving an explicit alignment restores Center.", "Use the full bottom width beneath both sidebars.", "Keep the left sidebar full height; Combined uses the center and right bottom area.", "Keep both sidebars full height; Combined uses the bottom area beneath the editor.", "Keep the right sidebar full height; Combined uses the left and center bottom area.", "Show Context as an independent Explorer view; drag its header to move it. Leaving an explicit alignment restores Center."],
           "default": "combined",
           "scope": "window",
-          "description": "Choose Combined, Combined · Full width (beneath both sidebars), or Separate Context. Full width also changes Terminal and other bottom-panel views. All layouts share the same analysis and selection."
+          "description": "Place Combined across the full bottom, preserve either sidebar's full height, or use only the center below the editor. Separate opens an independent Context view. Explicit alignment also changes Terminal and other bottom-panel views. All layouts share the same analysis and selection."
         },
         "dynsight.include": {
           "type": "array",
@@ -183,7 +197,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test test/core.test.ts test/analysis-notices.test.ts test/macros.test.ts test/pointer-calls.test.ts test/callback-effects.test.ts test/callback-uncertainty.test.ts test/callback-safety.test.ts test/callback-index-regressions.test.ts test/analysis-cache.test.ts test/incremental-analysis.test.ts test/copilot-callbacks.test.ts test/copilot-progress.test.ts test/explicit-callbacks.test.ts test/copilot-relations.test.ts test/copilot-service.test.ts test/function-arguments.test.ts test/members.test.ts test/syntax.test.ts test/updates.test.ts test/issue-report.test.ts test/issue-report-service.test.ts test/diagnostic-history.test.ts test/branding-migration.test.ts",
+    "test": "tsx --test test/core.test.ts test/analysis-notices.test.ts test/macros.test.ts test/pointer-calls.test.ts test/callback-effects.test.ts test/callback-uncertainty.test.ts test/callback-safety.test.ts test/callback-index-regressions.test.ts test/analysis-cache.test.ts test/incremental-analysis.test.ts test/copilot-callbacks.test.ts test/copilot-progress.test.ts test/explicit-callbacks.test.ts test/copilot-relations.test.ts test/copilot-service.test.ts test/panel-layout.test.ts test/function-arguments.test.ts test/members.test.ts test/syntax.test.ts test/updates.test.ts test/issue-report.test.ts test/issue-report-service.test.ts test/diagnostic-history.test.ts test/branding-migration.test.ts",
     "test:extension": "npm run build && node scripts/test-extension.mjs",
     "test:worker": "npm run build && node --test test/analysis-worker.test.mjs test/analysis-cache-worker.test.mjs test/workspace.test.mjs",
     "test:memory": "node --expose-gc --import tsx --test test/analysis-memory.test.ts",
@@ -192,7 +206,7 @@
     "test:freertos": "npm run build && node scripts/test-freertos.mjs",
     "test:ui": "npm run build && tsx test/create-ui-fixture.ts && node test/ui.mjs",
     "vscode:prepublish": "npm run build",
-    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license --out artifacts/dynsight-0.1.66.vsix"
+    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license --out artifacts/dynsight-0.1.67.vsix"
   },
   "dependencies": {
     "minimatch": "10.2.6",

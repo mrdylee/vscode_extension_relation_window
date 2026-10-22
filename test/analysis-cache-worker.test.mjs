@@ -52,7 +52,8 @@ test('unchanged restart restores full callback results without source or relatio
   assert.equal((await first.request({ type: 'cache-save', versions }).promise).saved, true);
   await first.worker.terminate();
   const second = spawn();
-  assert.deepEqual(await second.request({ type: 'cache-init', directory, key: 'v1' }).promise, { state: 'ready' });
+  const manifest = JSON.parse(await readFile(path.join(directory, 'manifest.json'), 'utf8'));
+  assert.deepEqual(await second.request({ type: 'cache-init', directory, key: 'v1' }).promise, { state: 'ready', savedVersion: manifest.analysisVersion });
   const restored = [], actual = [];
   for (const [uri, text] of sources) {
     const job = second.request({ type: 'cache-restore', uri, text, skip: true, expandMacros: false });

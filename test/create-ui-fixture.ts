@@ -4,6 +4,7 @@ import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { highlightC } from '../src/syntax';
 import { analysisNotices } from '../src/analysis-notices';
+import { applyCallbackHints } from '../src/copilot-relations';
 async function main() {
   const analyzer = await createAnalyzer(path.resolve('dist/web-tree-sitter.wasm'), path.resolve('dist/tree-sitter-c.wasm'));
   const index = new RelationIndex();
@@ -30,6 +31,16 @@ async function main() {
   analyzer.derive([analyzer.analyze('file:///demo/registration.c', 'void registration_target(void){}\nvoid registration_run(void){void (*fp)(void)=registration_target;}\n')], undefined, undefined, false).forEach(file => index.update(file));
   const registrationGraph = index.graph(index.symbols().find(s => s.name === 'registration_run')!.id, 'callees', 1);
   const pointerFile = index.files.get('file:///demo/pointer.c')!;
+  const aiIndex = new RelationIndex();
+  const aiFile = analyzer.analyze(pointerFile.uri, pointerFile.text);
+  aiIndex.update(aiFile);
+  const aiRoot = aiFile.symbols.find(symbol => symbol.name === 'pointer_run')!;
+  const aiTarget = aiFile.symbols.find(symbol => symbol.name === 'callback_target')!;
+  const aiSite = aiFile.references.find(ref => ref.kind === 'call' && ref.indirect)!;
+  const aiUnresolvedGraph = aiIndex.graph(aiRoot.id, 'callees', 2);
+  applyCallbackHints(aiIndex, [{ key: 'ui', callsite: aiSite.location, expression: 'callbacks.run', status: 'candidates', cached: true,
+    candidates: [{ targetId: aiTarget.id, evidence: [aiTarget.location], reason: 'Registration candidate' }] }]);
+  const aiGraph = aiIndex.graph(aiRoot.id, 'callees', 2);
   const callback = index.callbackAt(pointerFile.uri, pointerFile.text.indexOf('callbacks.run()') + 'callbacks.'.length);
   index.update(analyzer.analyze('file:///demo/navigation.c', 'void nav_leaf(void){} void alpha(void){nav_leaf();} void zulu(void){} void pivot(void){zulu();alpha();zulu();} void entry(void){pivot();} void launch(void){entry();}'));
   const pivot = index.symbols().find(s => s.name === 'pivot')!;
@@ -41,6 +52,6 @@ async function main() {
   const limitFile = analyzer.analyze('file:///demo/limits.c', 'void target(void){}void(*data[300])(void);void update(void){'+Array.from({length:270},(_,n)=>`data[${n}]=target;`).join('\n')+'}void run(void){void(*cb)(void)=target;cb();}');
   const limitNotices = analysisNotices(analyzer.derive([limitFile]), uri => uri.replace('file:///demo/', ''));
   await mkdir('test-results', { recursive: true });
-  await writeFile('test-results/ui-fixture.json', JSON.stringify({ limitNotices, graph, expandedGraph, calleeGraph, macroGraph, pointerGraph, registrationGraph, callback, memberGraph, variableGraphs, navigation, argumentGraph, argumentBothGraph, files: [...index.files.values()].map(file => ({ ...file, tokens: highlightC(file.text) })) }));
+  await writeFile('test-results/ui-fixture.json', JSON.stringify({ limitNotices, graph, expandedGraph, calleeGraph, macroGraph, pointerGraph, aiGraph, aiUnresolvedGraph, registrationGraph, callback, memberGraph, variableGraphs, navigation, argumentGraph, argumentBothGraph, files: [...index.files.values()].map(file => ({ ...file, tokens: highlightC(file.text) })) }));
 }
 void main();

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { buildSync } from 'esbuild';
 import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -45,7 +45,7 @@ function fixture(t, files = [], options = {}) {
   const vscode = { EventEmitter: Emitter, Uri, RelativePattern: class {}, env: {}, version: 'test', workspace: adapter };
   const module = { exports: {} };
   runInNewContext(bundle, { module, exports: module.exports, process, Buffer, URL, setTimeout, clearTimeout, require: name => name === 'vscode' ? vscode : require(name) });
-  const workspace = new module.exports.WorkspaceIndex(process.cwd(), options.storage);
+  const workspace = new module.exports.WorkspaceIndex(options.extensionPath ?? process.cwd(), options.storage);
   t.after(async () => { const worker = workspace.worker; workspace.dispose(); await worker.terminate(); });
   return { workspace, adapter, created, changed, deleted, closed, edited, configuration, folders };
 }
@@ -142,6 +142,7 @@ test('analysis limits report a partial index while ordinary syntax notices retai
   await workspace.enqueue(file); await workspace.derive();
   const analysis = workspace.index.files.get(file.toString());
   for (const issue of ['Macro include traversal limit reached; call relationships may be incomplete',
+    'Callback region limit: 256 reachable objects; targets may be incomplete',
     'Callback propagation limit: 12 project passes; targets may be incomplete',
     'Callback analysis budget: 10 seconds; targets may be incomplete. Narrow Include/Exclude scope.']) {
     workspace.index.update({ ...analysis, issues: [issue] });
@@ -382,12 +383,69 @@ test('damaged manifest waits for explicit Rebuild and does not silently analyze'
   await writeFile(path.join(storage, 'analysis-cache', 'manifest.json'), 'damaged');
   const { workspace, changed } = fixture(t, files, { storage, sources });
   await workspace.ready;
+  assert.equal(workspace.diagnostics.index.cache.state, 'invalid');
+  assert.match(workspace.status, /damaged/);
   assert.match(workspace.status, /Rebuild Index/);
   changed.fire(files[0]); await bounded(workspace.whenIdle());
   assert.equal(workspace.diagnostics.index.sourceParses, 0);
   await workspace.reindex(); await bounded(workspace.whenIdle());
   assert.equal(workspace.status, 'Index ready');
   assert.equal(workspace.index.files.size, 1);
+});
+
+test('extension version changes reuse compatible disk analysis and the AI settings key', async t => {
+  const storage = await mkdtemp(path.join(os.tmpdir(), 'dynsight-compatible-update-'));
+  t.after(() => rm(storage, { recursive: true, force: true }));
+  const files = [uri('cached.c')], sources = new Map([[files[0].toString(), latest]]);
+  const first = fixture(t, files, { storage, sources }).workspace;
+  await first.ready; await bounded(first.whenIdle());
+  const key = first.analysisKey; first.dispose();
+  // Use the real built Worker with an independent package manifest to simulate
+  // an installed extension update, without changing the checkout's version.
+  const extensionPath = path.join(storage, 'updated-extension');
+  const { mkdir, symlink } = await import('node:fs/promises');
+  await mkdir(extensionPath);
+  await symlink(path.join(process.cwd(), 'dist'), path.join(extensionPath, 'dist'), process.platform === 'win32' ? 'junction' : 'dir');
+  await writeFile(path.join(extensionPath, 'package.json'), JSON.stringify({ version: '999.0.0' }));
+  const next = fixture(t, files, { storage, sources, extensionPath }).workspace;
+  await next.ready; await bounded(next.whenIdle());
+  assert.equal(next.analysisKey, key);
+  assert.equal(next.diagnostics.index.cache.state, 'restored');
+  assert.equal(next.diagnostics.index.sourceParses, 0);
+  assert.equal(next.diagnostics.index.relationPasses, 0);
+  assert.equal(next.diagnostics.index.rebuildCount, 0);
+  assert.equal(next.index.files.size, 1);
+});
+
+for (const reason of ['analysis-version', 'workspace-settings', 'legacy-format']) test(`startup distinguishes ${reason} from damaged data and rebuild recovers`, async t => {
+  const storage = await mkdtemp(path.join(os.tmpdir(), 'dynsight-incompatible-cache-'));
+  t.after(() => rm(storage, { recursive: true, force: true }));
+  const files = [uri('cached.c')], sources = new Map([[files[0].toString(), latest]]);
+  const first = fixture(t, files, { storage, sources }).workspace;
+  await first.ready; await bounded(first.whenIdle()); first.dispose();
+  const filename = path.join(storage, 'analysis-cache', 'manifest.json');
+  const manifest = JSON.parse(await readFile(filename, 'utf8'));
+  if (reason === 'analysis-version') manifest.analysisVersion++;
+  if (reason === 'workspace-settings') manifest.key = 'other-settings';
+  if (reason === 'legacy-format') { manifest.schema = 1; delete manifest.analysisVersion; }
+  await writeFile(filename, JSON.stringify(manifest));
+  const next = fixture(t, files, { storage, sources }).workspace;
+  await next.ready;
+  assert.equal(next.diagnostics.index.cache.state, 'incompatible');
+  assert.equal(next.diagnostics.index.cache.reason, reason);
+  assert.doesNotMatch(next.status, /damaged/);
+  assert.match(next.status, /Rebuild Index/);
+  assert.match(next.status, reason === 'analysis-version' ? /analysis version changed/ : reason === 'workspace-settings' ? /settings changed/ : /cache format/);
+  assert.equal(next.diagnostics.index.sourceParses, 0);
+  assert.equal(next.copilotWaitReason, 'cache-rebuild-required');
+  await next.reindex(); await bounded(next.whenIdle());
+  assert.equal(next.status, 'Index ready');
+  assert.equal(next.diagnostics.index.cache.reason, undefined);
+  next.dispose();
+  const reopened = fixture(t, files, { storage, sources }).workspace;
+  await reopened.ready; await bounded(reopened.whenIdle());
+  assert.equal(reopened.diagnostics.index.cache.state, 'restored');
+  assert.equal(reopened.diagnostics.index.sourceParses, 0);
 });
 
 test('dirty editor overlays cannot replace the persisted saved generation', async t => {

@@ -5,6 +5,7 @@ import { WorkspaceIndex } from './workspace';
 import { CopilotCallbackController, CopilotProgress, CopilotRunResult, CopilotSnapshot } from './copilot-callbacks';
 import { applyCallbackHints } from './copilot-relations';
 import { CopilotWaitReason } from './diagnostics';
+import { Minimatch } from 'minimatch';
 
 interface SavedModel { id: string; version: string }
 export function registerCopilotCallbacks(context: vscode.ExtensionContext, workspace: WorkspaceIndex) {
@@ -13,9 +14,14 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
   let disposed = false, userAction = false, pendingChange = false, running: Promise<void> | undefined;
   let observedGeneration = -1;
   let automatic = false, stoppedByUser = false, stopRevision = 0;
+  let startCancellation = 0;
+  let scopeRevision = 0;
+  let scopeSync = Promise.resolve();
+  const includeBases = new Map((vscode.workspace.workspaceFolders ?? []).map(folder =>
+    [folder.uri.toString(), [...vscode.workspace.getConfiguration('dynsight', folder.uri).get<string[]>('include', [])]]));
   let deferredReason: 'enabled' | 'force' | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const activity = { state: 'off', waitReason: undefined as CopilotWaitReason | undefined, total: 0, completed: 0, requests: 0, cacheHits: 0, remaining: 0, failures: 0, candidates: 0, notFound: 0, contextLimited: 0 };
+  const activity = { state: 'off', waitReason: undefined as CopilotWaitReason | undefined, total: 0, completed: 0, requests: 0, cacheHits: 0, remaining: 0, failures: 0, candidates: 0, notFound: 0, contextLimited: 0, excluded: 0 };
   const enabled = () => vscode.workspace.isTrusted && vscode.workspace.getConfiguration('dynsight').get('copilotCallbacks', false);
   const configuredModel = () => vscode.workspace.getConfiguration('dynsight').get('copilotModel', '').trim();
   function status(value: string) {
@@ -25,7 +31,7 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
     workspace.copilotDiagnostics = { ...activity, automatic }; workspace.diagnosticsChanged.fire();
   }
   function clearProgress() {
-    activity.total = activity.completed = activity.cacheHits = activity.remaining = activity.failures = activity.candidates = activity.notFound = activity.contextLimited = 0;
+    activity.total = activity.completed = activity.cacheHits = activity.remaining = activity.failures = activity.candidates = activity.notFound = activity.contextLimited = activity.excluded = 0;
   }
   function clear() {
     controller?.invalidate(); applyCallbackHints(workspace.index, []); clearProgress();
@@ -38,7 +44,23 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
     pendingChange = false; clearTimeout(timer); observedGeneration = workspace.generation;
   }
   function snapshot(): CopilotSnapshot {
-    return { generation: workspace.generation, settingsKey: workspace.analysisKey,
+    const scopes = new Map<string, { include: Minimatch[]; exclude: Minimatch[] }>();
+    const callsiteUris = new Set<string>();
+    for (const file of workspace.index.files.values()) {
+      const uri = vscode.Uri.parse(file.uri), folder = vscode.workspace.getWorkspaceFolder(uri);
+      if (!folder) continue;
+      const key = folder.uri.toString();
+      let scope = scopes.get(key);
+      if (!scope) {
+        const config = vscode.workspace.getConfiguration('dynsight', folder.uri);
+        const match = (pattern: string) => new Minimatch(pattern, { dot: true, nonegate: true, nocomment: true, noext: true, nocase: process.platform === 'win32' });
+        scope = { include: config.get<string[]>('copilotInclude', []).map(match), exclude: config.get<string[]>('copilotExclude', []).map(match) };
+        scopes.set(key, scope);
+      }
+      const relative = vscode.workspace.asRelativePath(uri, false).replace(/\\/g, '/');
+      if (scope.include.some(pattern => pattern.match(relative)) && !scope.exclude.some(pattern => pattern.match(relative))) callsiteUris.add(file.uri);
+    }
+    return { generation: workspace.generation, settingsKey: workspace.analysisKey, scopeRevision, callsiteUris,
       files: [...workspace.index.files.values()].map(file => file.references.some(ref => ref.callKind === 'ai-candidate')
         ? { ...file, references: file.references.filter(ref => ref.callKind !== 'ai-candidate') } : file) };
   }
@@ -47,7 +69,7 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
     const selected = savedModel;
     const cacheKey = createHash('sha256').update(JSON.stringify([selected.id, selected.version])).digest('hex');
     controller = new CopilotCallbackController({ cacheDir: path.join(context.storageUri.fsPath, 'copilot-callbacks', cacheKey),
-      isCurrent: value => !disposed && enabled() && configuredModel() === selected.id && workspace.stable && !workspace.hasDirtySources && value.generation === workspace.generation && value.settingsKey === workspace.analysisKey,
+      isCurrent: value => !disposed && enabled() && configuredModel() === selected.id && workspace.stable && !workspace.hasDirtySources && value.generation === workspace.generation && value.settingsKey === workspace.analysisKey && value.scopeRevision === scopeRevision,
       onHints: hints => { applyCallbackHints(workspace.index, hints); workspace.changed.fire(); },
       onProgress: value => { recordProgress(value); status(activity.state); },
       provider: { modelKey: `copilot:${selected.id}:${selected.version}`, complete: async (prompt, signal) => {
@@ -96,6 +118,7 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
     activity.total = result.total; activity.completed = result.completed; activity.cacheHits = result.cached;
     activity.remaining = result.remaining; activity.failures = result.failures;
     activity.candidates = result.candidates; activity.notFound = result.notFound; activity.contextLimited = result.contextLimited;
+    activity.excluded = result.excluded ?? 0;
   }
   function account(result: CopilotRunResult) {
     if (result.stale) return;
@@ -140,14 +163,16 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
       void run(changed && !stoppedByUser ? 'saved-change' : undefined);
     }, 1000);
   }
-  async function selectModel(picker: boolean) {
+  async function selectModel(picker: boolean, current: () => boolean) {
     const id = configuredModel();
     const models = await vscode.lm.selectChatModels(id && !picker ? { vendor: 'copilot', id } : { vendor: 'copilot' });
+    if (!current()) return false;
     const chosen = picker || !id
       ? (await vscode.window.showQuickPick(models.map(value => ({ label: value.name, description: `${value.id} · ${value.version}`, value })),
         { title: 'Select Copilot model for Dynsight', placeHolder: picker ? 'Selection alone sends no source and makes no AI request.' :
           'Analyze all pending callbacks in batches of 5. Relevant source is sent to Copilot and each request uses your allowance. You can stop at any time.' }))?.value
       : models.find(value => value.id === id);
+    if (!current()) return false;
     if (!chosen) {
       if (id && !picker) {
         status('model-unavailable');
@@ -156,32 +181,65 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
       return false;
     }
     resetModel(); await running;
-    if (disposed) return false;
+    if (!current()) return false;
     savedModel = { id: chosen.id, version: chosen.version };
     await context.workspaceState.update('copilotCallbackModel', savedModel);
+    if (!current()) return false;
     if (configuredModel() !== chosen.id) await vscode.workspace.getConfiguration('dynsight').update('copilotModel', chosen.id, vscode.ConfigurationTarget.Workspace);
+    if (!current()) return false;
     model = chosen;
     return true;
   }
   async function command(force = false, selectOnly = false) {
     if (!vscode.workspace.isTrusted || !context.storageUri) { await vscode.window.showInformationMessage('Dynsight: Open a trusted workspace to use Copilot callback analysis.'); return; }
+    const cancellation = startCancellation;
     try {
+      await copyIncludeScopes();
+      // Initial copying can invalidate the old scope itself; explicit Stop or
+      // Disable must still cancel a command waiting for that copy to finish.
+      if (disposed || cancellation !== startCancellation) return;
       const revision = stopRevision;
-      if (!await selectModel(selectOnly)) return;
-      if (revision !== stopRevision || disposed) return;
+      const current = () => !disposed && revision === stopRevision && cancellation === startCancellation;
+      if (!await selectModel(selectOnly, current) || !current()) return;
       if (selectOnly) { clearTimeout(timer); await run(); return; }
       automatic = true; stoppedByUser = false;
       await vscode.workspace.getConfiguration('dynsight').update('copilotCallbacks', true, vscode.ConfigurationTarget.Workspace);
       await workspace.whenIdle(); await running;
-      if (revision !== stopRevision || disposed || !enabled()) return;
+      if (!current() || !enabled()) return;
       userAction = true; pendingChange = false; clearTimeout(timer);
       await run(force ? 'force' : 'enabled');
     } catch { status('request-failed'); await vscode.window.showErrorMessage('Dynsight: Copilot callback analysis could not start. Check Copilot sign-in and model access.'); }
   }
   function stop() {
-    stopRevision++; automatic = false; stoppedByUser = true;
+    startCancellation++; stopRevision++; automatic = false; stoppedByUser = true;
     deferredReason = undefined; pendingChange = false; userAction = false;
     clearTimeout(timer); controller?.stop(); status(enabled() ? 'stopped' : 'off');
+  }
+  function copyIncludeScopes(overwrite = false, event?: vscode.ConfigurationChangeEvent) {
+    scopeSync = scopeSync.then(async () => {
+      const folders = vscode.workspace.workspaceFolders ?? [];
+      for (const folder of folders) {
+        if (disposed || (event && !event.affectsConfiguration('dynsight.include', folder.uri))) continue;
+        const config = vscode.workspace.getConfiguration('dynsight', folder.uri);
+        const existing = config.inspect<string[]>('copilotInclude');
+        const configured = existing?.globalValue !== undefined || existing?.workspaceValue !== undefined || existing?.workspaceFolderValue !== undefined;
+        const include = config.get<string[]>('include', []);
+        const key = folder.uri.toString(), previous = includeBases.get(key) ?? [];
+        // An explicit AI array in the same JSON save wins over automatic
+        // copying, including an empty array used to disable every AI request.
+        if (configured && (!overwrite || event?.affectsConfiguration('dynsight.copilotInclude', folder.uri))) {
+          includeBases.set(key, [...include]); continue;
+        }
+        // Copy newly included paths without re-enabling paths the user removed
+        // from the AI list. Removing a general Include also removes its copy.
+        const paths = configured ? [...new Set([...config.get<string[]>('copilotInclude', []).filter(pattern =>
+          !previous.includes(pattern) || include.includes(pattern)), ...include.filter(pattern => !previous.includes(pattern))])] : [...include];
+        if (configured && JSON.stringify(config.get('copilotInclude')) === JSON.stringify(paths)) { includeBases.set(key, [...include]); continue; }
+        await config.update('copilotInclude', paths, folders.length > 1 ? vscode.ConfigurationTarget.WorkspaceFolder : vscode.ConfigurationTarget.Workspace);
+        includeBases.set(key, [...include]);
+      }
+    }).catch(error => { void vscode.window.showErrorMessage(`Dynsight: Could not copy Include paths to Copilot Include: ${String(error)}`); });
+    return scopeSync;
   }
   context.subscriptions.push(
     vscode.commands.registerCommand('dynsight.analyzeCallbacksWithCopilot', () => command()),
@@ -194,10 +252,18 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
     }),
     workspace.settled.event(schedule),
     vscode.workspace.onDidChangeConfiguration(event => {
-      if (event.affectsConfiguration('dynsight.copilotModel')) {
-        resetModel(); savedModel = context.workspaceState.get<SavedModel>('copilotCallbackModel');
-        schedule(); return;
+      if (event.affectsConfiguration('dynsight.copilotCallbacks') && !enabled()) startCancellation++;
+      const modelChanged = event.affectsConfiguration('dynsight.copilotModel');
+      if (modelChanged) { resetModel(); savedModel = context.workspaceState.get<SavedModel>('copilotCallbackModel'); }
+      const includeChanged = event.affectsConfiguration('dynsight.include');
+      if (includeChanged || event.affectsConfiguration('dynsight.copilotInclude') || event.affectsConfiguration('dynsight.copilotExclude')) {
+        scopeRevision++; stopRevision++; automatic = false; pendingChange = false;
+        deferredReason = undefined; userAction = false; clearTimeout(timer);
+        clear();
+        if (includeChanged) void copyIncludeScopes(true, event).then(schedule); else schedule();
+        return;
       }
+      if (modelChanged) { schedule(); return; }
       if (!event.affectsConfiguration('dynsight.copilotCallbacks')) return;
       clear(); if (!enabled()) {
         stopRevision++; automatic = false; pendingChange = false; deferredReason = undefined;
@@ -205,6 +271,6 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
       } else schedule();
     }),
     { dispose: () => { disposed = true; clearTimeout(timer); controller?.dispose(); } });
-  const ready = workspace.ready.then(() => run());
+  const ready = workspace.ready.then(async () => { await copyIncludeScopes(); return run(); });
   return { ready };
 }
