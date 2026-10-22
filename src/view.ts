@@ -228,8 +228,8 @@ export class RelationView implements vscode.Disposable {
     if (!message || typeof message !== 'object') return;
     const m = message as Record<string, unknown>;
     if(m.type === 'copyFunctionName') {
-      if(typeof m.requestId !== 'string' || typeof m.name !== 'string' || !/^[A-Za-z_]\w{0,4095}$/.test(m.name))return;
-      let ok=false;try{await vscode.env.clipboard.writeText(m.name);ok=true;}catch{/* UI keeps selectable text on clipboard failure. */}
+      if(typeof m.requestId !== 'string'||!m.requestId.length||m.requestId.length>128)return;
+      let ok=false;if(typeof m.name==='string'&&m.name.length>0&&m.name.length<=4096)try{await vscode.env.clipboard.writeText(m.name);ok=true;}catch{/* UI keeps selectable text on clipboard failure. */}
       await this.webview?.webview.postMessage({type:'copyFunctionNameResult',requestId:m.requestId,ok});return;
     }
     if(typeof m.type==='string' && ['callbackSearch','callbackSetTarget','callbackAnalyze','callbackUseSuggestion','callbackRemoveOverride','callbackCancel'].includes(m.type)) {

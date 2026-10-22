@@ -23,12 +23,17 @@ const spawn=()=>new Worker(path.resolve('dist/analysis-worker.cjs'), { workerDat
 let worker = spawn();
 let id = 0, diagnostics: any, failure: string | undefined, peakHeap=0,peakExternal=0;
 let activeCancellation:Int32Array|undefined,stopRequestedAt:number|undefined;
+let basicReadyMs:number|undefined;
 const pending = new Map<number, { resolve: (value: any) => void; reject: (error: Error) => void }>();
 const onMessage=(message:any) => {
   if (message.type === 'diagnostics') {
     diagnostics = structuredClone(message.diagnostics);
     peakHeap=Math.max(peakHeap,diagnostics.peakHeap??0);peakExternal=Math.max(peakExternal,diagnostics.sample?.external??0);
     if(stopProbe&&activeCancellation&&diagnostics.phase==='macros'&&stopRequestedAt===undefined){stopRequestedAt=performance.now();Atomics.store(activeCancellation,0,1);}
+  }
+  if(message.type==='basic-result'){
+    for(const file of message.files){const previous=hostFiles.get(file.uri);hostFiles.set(file.uri,{...previous,...file,references:[...(previous?.references??[]),...file.references]});}
+    basicReadyMs??=performance.now()-started;
   }
   const job = pending.get(message.id); if (!job) return;
   pending.delete(message.id); message.error ? job.reject(new Error(message.error)) : job.resolve(message.result);
@@ -53,7 +58,7 @@ const fingerprint=createHash('sha256');
 let timer: ReturnType<typeof setTimeout> | undefined;
 function sample(stage:string,began:number,extra:Record<string,unknown>={}) {
   const files=[...hostFiles.values()],issues=files.flatMap(file=>file.issues);
-  samples.push({stage,elapsedMs:performance.now()-began,files:files.length,
+  samples.push({stage,elapsedMs:performance.now()-began,files:files.length,basicReadyMs,
     complete:!issues.some(issue=>/limit|budget|cancelled/i.test(issue)),candidates:files.flatMap(file=>file.references).filter(ref=>ref.callKind==='inferred').length,
     candidateNames:[...new Set(files.flatMap(file=>file.references).filter(ref=>ref.callKind==='inferred').map(ref=>ref.name))],
     references:files.reduce((n,file)=>n+file.references.length,0),issues,diagnostics,

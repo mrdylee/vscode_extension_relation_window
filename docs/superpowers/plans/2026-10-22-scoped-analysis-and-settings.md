@@ -18,7 +18,7 @@
 
 **계획 작성 당시에는 코드 변경을 하지 않았다. 이후 사용자의 실행 승인에 따라 구현과 검증을 진행했다.** 실행 기준 HEAD는 `8160f3f`이며 기존 변경을 보존했다. 체크된 항목은 구현·검증했고, 전체 조합 시험·측정 방식의 조정·외부 환경 미검증 항목은 아래 실행 결과에서 구분한다.
 
-실행 기록: [Scoped Analysis Implementation Results](2026-10-22-scoped-analysis-execution.md). 미체크 항목은 해당 항목의 모든 세부 조합을 실행했다는 뜻으로 표시하지 않기 위해 남겼다. 대체 검증과 남은 플랫폼·실제 모델 평가는 실행 기록을 따른다.
+실행 기록: [Scoped Analysis Implementation Results](2026-10-22-scoped-analysis-execution.md). 최종 감사에서 Task 4의 기본 등록·인자 선공개가 누락된 것을 확인하고 [0.1.73 검토](../../reviews/2026-10-23-release-0.1.73.md)에서 보완했다. 미체크 항목은 실제 외부 플랫폼·모델 환경 미검증이다.
 
 작성 중 작업 공간 변경: 시작 시 추적 파일 diff는 없었으나 마지막 확인 시 `src/analysis-cache.ts`, `src/analyzer.ts`, `src/flow-parser.ts`, `src/project-analysis.ts`, `src/type-info.ts`, `test/core.test.ts`에 변경이 감지됐다. 새 미추적 파일 `src/initializer-preprocessor.ts`도 확인됐다. 이 계획 작성 작업은 이 파일들을 생성·수정하지 않았다. 변경의 출처·완성도는 확인하지 않았으며 실행 전 현재 diff와 아래 계약을 대조해 기존 작업을 보존하고 중복 구현을 피한다.
 

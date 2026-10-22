@@ -24,7 +24,7 @@ export async function run() {
   await vscode.workspace.getConfiguration('dynsight').update('analyzeCallbacks',true,vscode.ConfigurationTarget.Workspace);
   const api = await ext.activate();
   const previousClipboard=await vscode.env.clipboard.readText();
-  try{await api.view.handleMessage({type:'copyFunctionName',requestId:'native-copy',name:'product_network_act_write_nv_data'});assert.equal(await vscode.env.clipboard.readText(),'product_network_act_write_nv_data');}
+  try{for(const name of ['product_network_act_write_nv_data','task_함수']){await api.view.handleMessage({type:'copyFunctionName',requestId:'native-copy',name});assert.equal(await vscode.env.clipboard.readText(),name);}}
   finally{await vscode.env.clipboard.writeText(previousClipboard);}
   assert.ok(api.workspace, 'workspace analysis service exported');
   assert.equal(ext.packageJSON.publisher, 'dylee');

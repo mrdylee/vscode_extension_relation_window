@@ -17,8 +17,9 @@ class Emitter {
 function harness(layout = 'combined') {
   const settings = new Emitter(), config = new Map<string, unknown>([['contextLayout', layout]]);
   const commands: string[] = [], errors: string[] = [];
+  const copied:string[]=[];
   let pause: (() => Promise<void>) | undefined;
-  const vscode = { EventEmitter: Emitter,
+  const vscode = { EventEmitter: Emitter,env:{clipboard:{writeText:async(value:string)=>{copied.push(value);}}},
     workspace: { getConfiguration: () => ({ get: (key: string, fallback: unknown) => config.get(key) ?? fallback }), onDidChangeConfiguration: settings.event,
       asRelativePath: (value: unknown) => String(value) }, Uri: { parse: (value: string) => ({ toString: () => value }) },
     commands: { executeCommand: async (name: string) => { commands.push(name); if (name.endsWith('positionPanelBottom')) await pause?.(); } },
@@ -28,8 +29,18 @@ function harness(layout = 'combined') {
   const index = new RelationIndex();
   const view = new module.exports.RelationView({ index, changed: new Emitter(), diagnosticsChanged: new Emitter(), failures: new Map(), skipInactive: true, status: 'Index ready' }, {});
   const update = (value: string) => { config.set('contextLayout', value); settings.fire({ affectsConfiguration: (key: string) => key === 'dynsight.contextLayout' }); return view.panelLayout; };
-  return { view, index, commands, errors, update, pause: (value?: () => Promise<void>) => { pause = value; } };
+  return { view, index, commands, errors, copied, update, pause: (value?: () => Promise<void>) => { pause = value; } };
 }
+
+test('function-name copying accepts Unicode snapshots and reports over-limit failure',async()=>{
+  const h=harness(),replies:any[]=[];h.view.webview={webview:{postMessage:async(message:unknown)=>{replies.push(message);}}};
+  try{
+    await h.view.handleMessage({type:'copyFunctionName',requestId:'unicode',name:'task_함수'});
+    assert.deepEqual(h.copied,['task_함수']);assert.equal(replies.at(-1)?.ok,true);
+    await h.view.handleMessage({type:'copyFunctionName',requestId:'too-long',name:'a'.repeat(4097)});
+    assert.equal(h.copied.length,1);assert.equal(replies.at(-1)?.requestId,'too-long');assert.equal(replies.at(-1)?.ok,false);
+  }finally{h.view.dispose();}
+});
 
 test('status-only refresh preserves the graph while source and graph settings invalidate it', () => {
   const h = harness(), uri = 'file:///graph-refresh.c';

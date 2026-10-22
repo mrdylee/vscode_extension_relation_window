@@ -2,7 +2,7 @@ import { parentPort, threadId, workerData } from 'node:worker_threads';
 import path from 'node:path';
 import { getHeapStatistics } from 'node:v8';
 import { createAnalyzer } from './analyzer';
-import { FileAnalysis } from './model';
+import { FileAnalysis, ReferenceRecord } from './model';
 import { AnalysisPhase, WorkerDiagnostics } from './diagnostics';
 import { AnalysisCache, CachedAnalysis } from './analysis-cache';
 import { IncrementalAnalysis } from './incremental-analysis';
@@ -17,11 +17,16 @@ type Request = { id: number; uri: string; text: string; skip: boolean; expandMac
 const raw = new Map<string, { id: number; file: FileAnalysis; skip: boolean; expandMacros: boolean }>();
 const stamps = new WeakMap<FileAnalysis, number>(); let serial = 0;
 const forIndex = (file: FileAnalysis): FileAnalysis => ({ ...file, programs: undefined, initializers: undefined, argumentPrograms: undefined, registrationPrograms: undefined, registrationInitializers: undefined, statementConditions: undefined });
+function retainFacts(current: ReferenceRecord[]|undefined, basic: ReferenceRecord[]|undefined) {
+  const ids=new Set(current?.map(ref=>ref.id));const extra=basic?.filter(ref=>!ids.has(ref.id));
+  return extra?.length?[...(current??[]),...extra]:current;
+}
 let cache: AnalysisCache | undefined;
 const incremental = new IncrementalAnalysis();
 let savedVersions = new Map<string, { id: number; stamp: number }>();
 type Snapshot = Map<string, { id: number; stamp: number; file: FileAnalysis }>;
 const restored: Snapshot = new Map();
+let basicSnapshot: { inputs: FileAnalysis[]; files: FileAnalysis[] } | undefined;
 let derivedSnapshot: Snapshot | undefined;
 function matches(versions: [string, number, number][], snapshot: Snapshot | undefined) {
   return !!snapshot && snapshot.size === versions.length && raw.size === versions.length && new Set(versions.map(([uri]) => uri)).size === versions.length &&
@@ -63,6 +68,7 @@ function count(file: FileAnalysis, sign: number) {
   counts.macroFiles += sign * Number(file.expandMacros !== false);
 }
 function remove(uri: string) {
+  basicSnapshot = undefined;
   const previous = raw.get(uri); if (previous) count(previous.file, -1);
   raw.delete(uri); restored.delete(uri); derivedSnapshot = undefined;
 }
@@ -81,7 +87,7 @@ parentPort!.on('message', (request: Request) => {
     if (request.type === 'diagnostics') { report(true); return; }
     try {
       const parser = await analyzer;
-      if (request.type === 'reset') { raw.clear(); restored.clear(); savedVersions.clear(); derivedSnapshot = undefined; incremental.clear(); parser.reset(); diagnostics = freshDiagnostics(); report(true); return; }
+      if (request.type === 'reset') { raw.clear(); restored.clear(); savedVersions.clear(); derivedSnapshot = undefined; basicSnapshot = undefined; incremental.clear(); parser.reset(); diagnostics = freshDiagnostics(); report(true); return; }
       if (request.type === 'cache-init') {
         cache = await AnalysisCache.open(request.directory, request.key); cache.legacyRoots = request.legacyRoots ?? []; restored.clear(); savedVersions.clear(); derivedSnapshot = undefined;
         parentPort!.postMessage({ id: request.id, result: { state: cache.state,
@@ -131,14 +137,36 @@ parentPort!.on('message', (request: Request) => {
         const changed: FileAnalysis[] = [], versions: [string, number][] = [];
         const cancellation = request.cancellation && new Int32Array(request.cancellation);
         diagnostics.callbacks = undefined;
-        const derived = incremental.derive(files, dirty => parser.derive(dirty, memoryPressure, phase, request.analyzeCallbacks, {
+        const control = {
           shouldCancel: cancellation ? () => Atomics.load(cancellation, 0) !== 0 : undefined,
-          onProgress: progress => {
+          onProgress: (progress: NonNullable<WorkerDiagnostics['callbacks']>) => {
             diagnostics.callbacks = progress;
             parentPort!.postMessage({ type: 'callback-progress', requestId: request.id, progress });
             report();
           }
-        }), request.analyzeCallbacks);
+        };
+        const basic = basicSnapshot?.inputs.length===files.length && files.every((file,n)=>basicSnapshot!.inputs[n]===file) ? basicSnapshot.files : parser.basic(files,control);
+        if(!control.shouldCancel?.())basicSnapshot={inputs:files,files:basic};
+        parentPort!.postMessage({type:'basic-result',requestId:request.id,inputs:request.versions.map(([uri,id])=>[uri,id]),
+          files:basic.filter((file,n)=>file!==files[n]&&request.versions[n][2]<0).map(file=>({uri:file.uri,
+            references:file.references.filter(ref=>ref.callKind==='registered'),functionArguments:file.functionArguments,
+            callbackRegistrations:file.callbackRegistrations,callbackDiagnostics:file.callbackDiagnostics,issues:file.issues}))});
+        diagnostics.callbacks=undefined;
+        let derived = incremental.derive(files, dirty => parser.derive(dirty, memoryPressure, phase, request.analyzeCallbacks, control), request.analyzeCallbacks);
+        if(control.shouldCancel?.()||derived.some(file=>file.issues.some(issue=>/memory budget/i.test(issue)))){
+          let remaining=64-basic.reduce((total,file)=>total+(file.callbackDiagnostics?.filter(detail=>detail.kind==='cancelled').length??0),0);
+          derived=derived.map((file,n)=>{
+          const key=(ref:ReferenceRecord)=>`${ref.location.uri}:${ref.location.start}:${ref.location.end}:${ref.targetId}`;
+          const found=new Set(file.references.filter(ref=>ref.kind==='call').map(key));
+          const retained=basic[n].references.filter(ref=>ref.callKind==='registered'&&!found.has(key(ref)));
+          const registrations=retainFacts(file.callbackRegistrations,basic[n].callbackRegistrations),argumentsFound=retainFacts(file.functionArguments,basic[n].functionArguments);
+          const basicNotices=basic[n].callbackDiagnostics?.filter(detail=>detail.kind==='cancelled')??[];
+          const details=file.callbackDiagnostics?.slice(0,remaining);remaining-=details?.length??0;
+          return retained.length||registrations!==file.callbackRegistrations||argumentsFound!==file.functionArguments||basicNotices.length||details?.length!==file.callbackDiagnostics?.length ?
+            {...file,references:retained.length?[...file.references,...retained]:file.references,callbackRegistrations:registrations,functionArguments:argumentsFound,
+              callbackDiagnostics:basicNotices.length?[...basicNotices,...(details??[])]:details}:file;
+          });
+        }
         const snapshot: Snapshot = new Map();
         phase('transfer');
         derived.forEach((file, i) => {

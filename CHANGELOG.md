@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.73 — 2026-10-23
+
+- Publish explicit registrations and literal function arguments before detailed
+  macro/callback work, completing the basic-first navigation contract. Retain
+  already-published basic facts and the cancellation stage after Stop or memory
+  limits; Retry reuses parsed sources.
+- Reject basic-result messages from old source/policy generations and preserve
+  unchanged full relationships during warm passes. Clear completed basic timing
+  before detailed work begins.
+- Preserve legacy root detection for unversioned caches without enabling legacy
+  analysis for newer workspaces using the unified setting's defaults.
+- Copy Unicode function-name snapshots and report rejected-length failures so
+  the selectable-name fallback remains usable.
+- Analysis compatibility is now 6. Rebuild an incompatible saved index; user
+  confirmations remain stored separately. 0.1.72 tags/assets remain unchanged.
+
 ## 0.1.72 — 2026-10-23
 
 - Order settings by View, Include, Exclude, Detailed Analysis Folders, Analysis

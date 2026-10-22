@@ -10,6 +10,8 @@ import { suggestPartialCallbacks } from './partial-callbacks';
 import { suggestExplicitCallbacks } from './explicit-callbacks';
 import { locationIn, tokenizeC } from './c-tokens';
 import { initializerPreprocessor, InitializerRecovery } from './initializer-preprocessor';
+import { RelationIndex } from './relations';
+import { FunctionArguments } from './function-arguments';
 
 function ancestor(node: Node, type: string): Node | null {
   for (let current = node.parent; current; current = current.parent) if (current.type === type) return current;
@@ -374,6 +376,11 @@ export async function createAnalyzer(runtime: string, grammar: string) {
     const value: FlowExpression = facts.initializers[0]?.value ?? { kind: 'unknown', location: original(0, text.length) };
     const issues = tree.rootNode.hasError ? ['Expanded initializer has incomplete or unsupported syntax'] : [];
     tree.delete(); return { value, issues };
+  }, basic(files: FileAnalysis[], options: CallbackAnalysisOptions = {}) {
+    const index = new RelationIndex(); files.forEach(file=>index.update(file));
+    const argumentsFound = new FunctionArguments(files,index);
+    const facts=files.map(file=>{const values=argumentsFound.forFile(file.uri);return values.length?{...file,functionArguments:values}:file;});
+    return suggestExplicitCallbacks(files,facts,options);
   }, reset() {
     clearMacroCache(analyzer.analyze); clearPointerCache(analyzer.analyze);
   }, derive(files: FileAnalysis[], memoryPressure?: () => boolean, phase?: (value: 'macros' | 'callbacks') => void, analyzeCallbacks = true, options: CallbackAnalysisOptions = {}): FileAnalysis[] {

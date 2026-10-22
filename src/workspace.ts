@@ -37,7 +37,7 @@ export class WorkspaceIndex implements vscode.Disposable {
   private derivedRevision = -1;
   private deriving?: Promise<void>;
   private analysisPaused = false;
-  private activeAnalysis?: { id: number; cancellation: Int32Array };
+  private activeAnalysis?: { id: number; cancellation: Int32Array; revision: number; key: string };
   private callbackProgress?: CallbackProgress;
   private indexing = false;
   private jobs = new Set<Promise<void>>();
@@ -86,7 +86,8 @@ export class WorkspaceIndex implements vscode.Disposable {
     if (!this.disposed && !this.workerError) this.worker.postMessage({ type: 'diagnostics' });
   }
   private legacyRoots = new Set<string>();
-  get basicReady() { return !this.disposed && !this.cacheBlocked && !this.workerError && !this.indexing && !this.jobs.size && !this.timers.size && !this.hasDirtySources && ![...this.failures.keys()].some(key => key !== 'derived'); }
+  private basicRevision=-1;
+  get basicReady() { return (this.basicRevision===this.revision||this.derivedRevision===this.revision)&&!this.disposed && !this.cacheBlocked && !this.workerError && !this.indexing && !this.jobs.size && !this.timers.size && !this.hasDirtySources && ![...this.failures.keys()].some(key => key !== 'derived'); }
   get copilotSnapshotReady() { return this.basicReady; }
   private scopes = new Map<string, { include: string[]; exclude: string[]; included: Minimatch[]; excluded: Minimatch[]; macros: Minimatch[]; detailed?: string[]; legacy: boolean }>();
   get skipInactive() { return vscode.workspace.getConfiguration('dynsight').get<boolean>('skipInactive', true); }
@@ -95,9 +96,24 @@ export class WorkspaceIndex implements vscode.Disposable {
     const assets = path.join(this.extensionPath, 'dist');
     const worker = new Worker(path.join(assets, 'analysis-worker.cjs'), { workerData: { assets } });
     this.worker = worker; this.workerError = undefined; this.workerDiagnostics = undefined;
-    worker.on('message', ({ id, result, error, type, diagnostics, progress, requestId }) => {
+    worker.on('message', ({ id, result, error, type, diagnostics, progress, requestId, inputs, files }) => {
       if (this.disposed || this.worker !== worker) return;
       if (type === 'diagnostics') { this.workerDiagnostics = diagnostics; this.diagnosticsChanged.fire(); return; }
+      if(type==='basic-result'){
+        const active=this.activeAnalysis;
+        if(!this.workerError&&active&&active.id===requestId&&active.revision===this.revision&&active.key===this.analysisKey&&!this.jobs.size&&!this.timers.size&&
+          inputs.every(([uri,version]:[string,number])=>this.rawVersions.get(uri)===version)){
+          for(const file of files){
+            const current=this.index.files.get(file.uri);if(!current)continue;
+            const known=new Set(current.references.map(ref=>ref.id)),added=file.references.filter((ref:FileAnalysis['references'][number])=>!known.has(ref.id));
+            this.index.update({...current,...file,references:added.length?[...current.references,...added]:current.references});
+          }
+          this.basicRevision=this.revision;
+          this.callbackProgress=undefined;
+          this.status=this.analysisPaused?this.completedStatus():'Basic navigation ready · Detailed analysis…';this.changed.fire();this.diagnosticsChanged.fire();
+        }
+        return;
+      }
       if (type === 'callback-progress') {
         if (requestId === this.activeAnalysis?.id) { this.callbackProgress = progress; this.diagnosticsChanged.fire(); }
         return;
@@ -127,7 +143,7 @@ export class WorkspaceIndex implements vscode.Disposable {
       for (const folder of vscode.workspace.workspaceFolders ?? []) {
         const root = folder.uri.toString();
         if (Array.isArray(manifest.legacyRoots) ? manifest.legacyRoots.includes(root) :
-          (manifest.legacyAnalysis === true || manifest.analysisVersion < 5) && manifest.entries?.some((entry: { uri?: string }) => entry.uri?.startsWith(root.replace(/\/$/, '') + '/')))
+          (manifest.legacyAnalysis === true || manifest.schema === 1 || manifest.analysisVersion < 5) && manifest.entries?.some((entry: { uri?: string }) => entry.uri?.startsWith(root.replace(/\/$/, '') + '/')))
           this.legacyRoots.add(root);
       }
     } catch { /* No prior workspace policy. */ }
@@ -141,7 +157,7 @@ export class WorkspaceIndex implements vscode.Disposable {
         const settings = ['skipInactive', 'include', 'exclude', 'macroExpansionFolders', 'detailedAnalysisFolders'].filter(key => event.affectsConfiguration(`dynsight.${key}`));
         if (settings.length) { this.sourceChanged.fire('configuration'); void this.reconcile(); }
         else if (event.affectsConfiguration('dynsight.analyzeCallbacks')) {
-          this.cancelActiveAnalysis(); this.analysisPaused = false;
+          this.cancelActiveAnalysis(); this.analysisPaused = false; this.scopes.clear();
           this.sourceChanged.fire('configuration'); this.revision++;
           void (async () => { if (this.storagePath) await this.initCache(); await Promise.all([...this.index.files.keys()].map(uri=>this.enqueue(vscode.Uri.parse(uri)))); await this.derive(); })();
         }
@@ -403,10 +419,10 @@ export class WorkspaceIndex implements vscode.Disposable {
         const versions = this.workerVersions();
         const cancellation = new Int32Array(new SharedArrayBuffer(4));
         this.callbackProgress = undefined;
-        this.status = 'Basic navigation ready · Detailed analysis…';
+        this.status = 'Preparing basic relations…';
         const request = this.request<{ stale: boolean; files: FileAnalysis[]; versions: [string, number][] }>({ type: 'derive', versions,
           analyzeCallbacks: this.analyzeCallbacks, cancellation: cancellation.buffer });
-        this.activeAnalysis = { id: request.id, cancellation };
+        this.activeAnalysis = { id: request.id, cancellation, revision, key:this.analysisKey };
         if (!this.workerError) { this.changed.fire(); this.diagnosticsChanged.fire(); }
         let result;
         try { result = await request.promise; }

@@ -51,16 +51,33 @@ function fixture(t, files = [], options = {}) {
   return { workspace, adapter, created, changed, deleted, closed, edited, configuration, folders };
 }
 
-test('legacy cache evidence applies only to roots present in that saved workspace', async t => {
+for(const metadata of [{analysisVersion:4},{schema:1}])test(`legacy cache evidence ${JSON.stringify(metadata)} applies only to saved roots`, async t => {
   const storage = await mkdtemp(path.join(os.tmpdir(), 'dynsight-legacy-roots-'));
   t.after(() => rm(storage, { recursive: true, force: true }));
   await mkdir(path.join(storage, 'analysis-cache'));
-  await writeFile(path.join(storage, 'analysis-cache', 'manifest.json'), JSON.stringify({ analysisVersion: 4, entries: [{ uri: 'file:///review/old.c' }] }));
+  await writeFile(path.join(storage, 'analysis-cache', 'manifest.json'), JSON.stringify({ ...metadata, entries: [{ uri: 'file:///review/old.c' }] }));
   const folders = ['review', 'new'].map((name,index)=>({uri:Uri.parse(`file:///${name}`),name,index}));
   const {workspace}=fixture(t,[],{storage,folders,newWorkspace:true});
   await workspace.ready;
   assert.equal(workspace.scope(folders[0]).legacy,true);
   assert.equal(workspace.scope(folders[1]).legacy,false,'new roots must start with basic navigation');
+});
+test('upgrading an unconfigured unified-policy cache never enables legacy full analysis',async t=>{
+  const storage=await mkdtemp(path.join(os.tmpdir(),'dynsight-unified-upgrade-'));t.after(()=>rm(storage,{recursive:true,force:true}));
+  await mkdir(path.join(storage,'analysis-cache'));
+  await writeFile(path.join(storage,'analysis-cache','manifest.json'),JSON.stringify({analysisVersion:5,legacyRoots:[],entries:[{uri:'file:///review/current.c'}]}));
+  const {workspace}=fixture(t,[],{storage,newWorkspace:true});await workspace.ready;
+  assert.equal(workspace.scope({uri:Uri.parse('file:///review')}).legacy,false);assert.equal(workspace.analyzeCallbacks,false);
+});
+test('adding and removing an explicit legacy callback setting refreshes root policy',async t=>{
+  const file=uri('legacy-toggle.c'),{workspace,adapter,configuration}=fixture(t,[file],{newWorkspace:true,sources:new Map([[file.toString(),'typedef void(*CB)(void);void target(void){}void run(void){CB cb=target;cb();}']])});
+  await workspace.ready;await bounded(workspace.whenIdle());assert.equal(workspace.analyzeCallbacks,false);
+  const original=adapter.getConfiguration;
+  adapter.getConfiguration=()=>({...original(),inspect:key=>key==='analyzeCallbacks'?{workspaceValue:true}:undefined});
+  configuration.fire({affectsConfiguration:name=>name==='dynsight.analyzeCallbacks'});await bounded(workspace.whenIdle());
+  assert.equal(workspace.analyzeCallbacks,true);assert.ok(workspace.diagnostics.worker.counts.programs>0);
+  adapter.getConfiguration=original;configuration.fire({affectsConfiguration:name=>name==='dynsight.analyzeCallbacks'});await bounded(workspace.whenIdle());
+  assert.equal(workspace.analyzeCallbacks,false);assert.equal(workspace.diagnostics.worker.counts.programs,0);
 });
 
 test('disk cache restores unchanged startup without parses or relationship passes; one edit reparses one file', async t => {
@@ -145,14 +162,15 @@ test('startup migrates fixed-deadline derived cache without reparsing unchanged 
   assert.equal(workspace.status, 'Index ready');
 });
 
-test('Stop reaches registration postprocessing in the Worker and Retry completes the missing facts', async t => {
+for(const stage of ['basic','postprocessing'])test(`Stop reaches ${stage} registrations and Retry preserves all published facts`, async t => {
   const file = uri('stop-registrations.c'), count = 5000;
   const source = 'typedef void(*CB)(void);void target(void){}static CB cb;void setup(void){' + 'cb=target;'.repeat(count) + '}void run(void){cb();}';
   const { workspace } = fixture(t, [file], { sources: new Map([[file.toString(), source]]) });
-  let stopped = false;
+  let stopped = false,sawMacros=false;
   const listener = workspace.diagnosticsChanged.event(() => {
     const analysis = workspace.diagnostics.index.callbackAnalysis;
-    if (!stopped && analysis.running && analysis.progress?.stage === 'registrations' && analysis.progress.symbol === 'setup') {
+    sawMacros ||= workspace.diagnostics.worker?.phase==='macros';
+    if (!stopped && (stage==='basic'||sawMacros) && analysis.running && analysis.progress?.stage === 'registrations' && analysis.progress.symbol === 'setup') {
       stopped = true; workspace.stopAnalysis();
     }
   });
@@ -162,8 +180,8 @@ test('Stop reaches registration postprocessing in the Worker and Retry completes
   assert.match(workspace.status, /^Partial index: local analysis paused/);
   const partial = workspace.index.files.get(file.toString());
   assert.ok(partial.callbackDiagnostics.some(detail => detail.kind === 'cancelled' && detail.stage === 'registrations'));
-  assert.ok((partial.callbackRegistrations?.length ?? 0) < count);
-  assert.ok(partial.references.some(ref => ref.name === 'target' && ref.callKind === 'inferred'));
+  if(stage==='basic')assert.ok((partial.callbackRegistrations?.length ?? 0) < count);
+  else {assert.equal(partial.callbackRegistrations.length,count,'published basic registrations survive later cancellation');assert.ok(partial.references.some(ref => ref.name === 'target' && ref.callKind === 'inferred'));}
   const parses = workspace.diagnostics.index.sourceParses;
   await bounded(workspace.resumeAnalysis()); await bounded(workspace.whenIdle());
   assert.equal(workspace.diagnostics.index.sourceParses, parses);
@@ -706,7 +724,7 @@ test('callback setting changes refresh flow facts and discard in-flight results 
   const targetKind = () => workspace.index.relations(task.id, 'callees').find(g => g.name === 'new_target')?.callKind;
   assert.equal(targetKind(), 'inferred');
   let enabled = false;
-  adapter.getConfiguration = () => ({ get: (key, fallback) => key === 'analyzeCallbacks' ? enabled : fallback });
+  adapter.getConfiguration = () => ({ get: (key, fallback) => key === 'analyzeCallbacks' ? enabled : fallback,inspect:key=>({workspaceValue:key==='analyzeCallbacks'?enabled:undefined}) });
   const event = { affectsConfiguration: key => key === 'dynsight.analyzeCallbacks' };
   configuration.fire(event); await bounded(workspace.whenIdle());
   assert.equal(targetKind(), 'registered', 'simple assignments remain available with full analysis disabled');
@@ -740,7 +758,7 @@ test('Worker transfers located callback diagnostics and clears them when callbac
   assert.equal(analysis.callbackDiagnostics.find(d=>d.kind==='mutation').symbol,'update');
   assert.equal(analysis.programs,undefined,'flow programs remain Worker-only');
   assert.match(workspace.status,/Partial index: analysis limits/);
-  adapter.getConfiguration=()=>({get:(key,fallback)=>key==='analyzeCallbacks'?false:fallback});
+  adapter.getConfiguration=()=>({get:(key,fallback)=>key==='analyzeCallbacks'?false:fallback,inspect:key=>({workspaceValue:key==='analyzeCallbacks'?false:undefined})});
   configuration.fire({affectsConfiguration:key=>key==='dynsight.analyzeCallbacks'});
   await bounded(workspace.whenIdle());
   assert.equal(workspace.index.files.get(file.toString()).callbackDiagnostics,undefined);
@@ -860,4 +878,45 @@ test('new explicit empty detailed scope retains basic navigation without propaga
   assert.equal(workspace.diagnostics.worker.counts.programs,0);
   const target=workspace.index.symbols().find(symbol=>symbol.name==='new_target');
   assert.ok(workspace.index.relations(target.id,'callers').some(group=>group.name==='task'));
+});
+
+test('registered targets and literal arguments are published before detailed macro work and survive Stop',async t=>{
+  const file=uri('basic-first.c'),source='typedef void(*CB)(void);void target(void){}void take(CB);CB cb=target;void run(void){take(target);cb();}';
+  const {workspace}=fixture(t,[file],{detailedFolders:['**'],sources:new Map([[file.toString(),source]])});
+  let before,collectingReady,transfer;
+  workspace.worker.on('message',message=>{if(message.type==='basic-result')transfer=message.files[0];});
+  const subscription=workspace.diagnosticsChanged.event(()=>{
+    if(collectingReady===undefined&&workspace.diagnostics.index.callbackAnalysis.progress?.stage==='registrations')collectingReady=workspace.basicReady;
+    if(before||workspace.diagnostics.worker?.phase!=='macros')return;
+    const current=workspace.index.files.get(file.toString());
+    before={registrations:current?.callbackRegistrations?.length??0,arguments:current?.functionArguments?.length??0};workspace.stopAnalysis();
+  });t.after(()=>subscription.dispose());
+  await workspace.ready;await bounded(workspace.whenIdle());
+  assert.ok(before,'observe the detailed phase before its final result');
+  assert.equal(collectingReady,false,'AI readiness waits for the first basic-fact publication');
+  assert.equal(workspace.basicReady,true,'published basic facts remain ready after stopping detail');
+  assert.ok(before.registrations>0,'basic registration facts must already be available');
+  assert.ok(before.arguments>0,'literal function arguments must already be available');
+  assert.ok(transfer&&!('text' in transfer)&&!('symbols' in transfer)&&!('programs' in transfer),'basic publication transfers only additional facts');
+  assert.ok(transfer.references.every(ref=>ref.callKind==='registered'));
+  assert.equal(workspace.index.files.get(file.toString()).text,source,'the host reuses its source and symbol snapshot');
+  assert.ok(workspace.index.files.get(file.toString()).callbackRegistrations?.length>0,'Stop keeps published basic registrations');
+  assert.ok(workspace.index.callbackAt(file.toString(),source.lastIndexOf('cb();')+1)?.targets.some(target=>target.name==='target'));
+});
+
+test('basic relation messages cannot replace a newer source or policy generation',async t=>{
+  const file=uri('basic-generation.c'),{workspace}=fixture(t,[file],{detailedFolders:['**'],sources:new Map([[file.toString(),'void current(void){}']])});
+  await workspace.ready;await bounded(workspace.whenIdle());
+  const current=workspace.index.files.get(file.toString()),version=workspace.rawVersions.get(file.toString());
+  const message={type:'basic-result',requestId:123,inputs:[[file.toString(),version]],files:[{...current,issues:['stale basic facts']}]};
+  workspace.activeAnalysis={id:123,cancellation:new Int32Array(new SharedArrayBuffer(4)),revision:workspace.revision,key:'previous-policy'};
+  workspace.worker.emit('message',message);assert.equal(workspace.index.files.get(file.toString()),current);
+  workspace.activeAnalysis.key=workspace.analysisKey;message.inputs[0][1]=version-1;
+  workspace.worker.emit('message',message);assert.equal(workspace.index.files.get(file.toString()),current);
+  message.inputs[0][1]=version;workspace.activeAnalysis.revision=workspace.revision-1;
+  workspace.worker.emit('message',message);assert.equal(workspace.index.files.get(file.toString()),current);
+  workspace.activeAnalysis.revision=workspace.revision;
+  workspace.worker.emit('error',new Error('reviewed Worker failure'));const fatal=workspace.status;
+  workspace.worker.emit('message',message);assert.equal(workspace.index.files.get(file.toString()),current);assert.equal(workspace.status,fatal);
+  workspace.activeAnalysis=undefined;
 });
