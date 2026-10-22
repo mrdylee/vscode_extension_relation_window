@@ -19,7 +19,8 @@ function harness(layout = 'combined') {
   const commands: string[] = [], errors: string[] = [];
   let pause: (() => Promise<void>) | undefined;
   const vscode = { EventEmitter: Emitter,
-    workspace: { getConfiguration: () => ({ get: (key: string, fallback: unknown) => config.get(key) ?? fallback }), onDidChangeConfiguration: settings.event },
+    workspace: { getConfiguration: () => ({ get: (key: string, fallback: unknown) => config.get(key) ?? fallback }), onDidChangeConfiguration: settings.event,
+      asRelativePath: (value: unknown) => String(value) }, Uri: { parse: (value: string) => ({ toString: () => value }) },
     commands: { executeCommand: async (name: string) => { commands.push(name); if (name.endsWith('positionPanelBottom')) await pause?.(); } },
     window: { showErrorMessage: (message: string) => { errors.push(message); } } };
   const module = { exports: {} as any };
@@ -27,8 +28,29 @@ function harness(layout = 'combined') {
   const index = new RelationIndex();
   const view = new module.exports.RelationView({ index, changed: new Emitter(), diagnosticsChanged: new Emitter(), failures: new Map(), skipInactive: true, status: 'Index ready' }, {});
   const update = (value: string) => { config.set('contextLayout', value); settings.fire({ affectsConfiguration: (key: string) => key === 'dynsight.contextLayout' }); return view.panelLayout; };
-  return { view, commands, errors, update, pause: (value?: () => Promise<void>) => { pause = value; } };
+  return { view, index, commands, errors, update, pause: (value?: () => Promise<void>) => { pause = value; } };
 }
+
+test('status-only refresh preserves the graph while source and graph settings invalidate it', () => {
+  const h = harness(), uri = 'file:///graph-refresh.c';
+  const location = { uri, start: 5, end: 9, line: 0, column: 5, endLine: 0, endColumn: 9 };
+  const symbol = { id: uri + '#5', name: 'root', kind: 'function' as const, definition: true, pointer: false,
+    storage: 'global' as const, conditions: [], location, extent: location };
+  const file = { uri, text: 'void root(void){}', symbols: [symbol], references: [], includes: [], issues: [] };
+  h.index.update(file); h.view.root = { id: symbol.id, name: symbol.name, uri };
+  const original = h.index.graph.bind(h.index); let builds = 0;
+  h.index.graph = (...args: Parameters<typeof original>) => { builds++; return original(...args); };
+  try {
+    h.view.refresh(); const first = h.view.state.graph;
+    h.view.refresh(); h.view.refresh();
+    assert.equal(h.view.state.graph, first);
+    assert.equal(builds, 1);
+    h.index.update({ ...file, text: 'void root(void){ }' }); h.view.refresh();
+    assert.equal(builds, 2);
+    h.view.state.depth = 2; h.view.refresh();
+    assert.equal(builds, 3);
+  } finally { h.view.dispose(); }
+});
 
 test('Combined alignments keep the requested sidebar full height and restore center on exit', async () => {
   const h = harness();

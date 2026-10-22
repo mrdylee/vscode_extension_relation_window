@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { randomBytes } from 'node:crypto';
 import { WorkspaceIndex } from './workspace';
-import { GraphNode, Location, SymbolRecord } from './model';
+import { FileAnalysis, GraphData, GraphNode, Location, SymbolRecord } from './model';
 import { ViewState, nodePreviewId, canExpandNode } from './view-state';
 import { analysisNotices } from './analysis-notices';
 import { highlightC, SyntaxToken } from './syntax';
@@ -36,6 +36,7 @@ export class RelationView implements vscode.Disposable {
   private pendingTrack = false;
   private syntaxCache?: { text: string; tokens: SyntaxToken[][] };
   private panelLayout = Promise.resolve();
+  private graphSnapshot?: { key: string; files: FileAnalysis[]; graph?: GraphData };
   constructor(private workspace: WorkspaceIndex, private extensionUri: vscode.Uri) {
     this.diagnosticsListener = workspace.diagnosticsChanged.event(() => {
       this.state.diagnostics = workspace.diagnostics;
@@ -142,6 +143,7 @@ export class RelationView implements vscode.Disposable {
     this.state.candidates = []; this.refresh();
   }
   refresh() {
+    clearTimeout(this.refreshTimer); this.refreshTimer = undefined;
     this.state.diagnostics = this.workspace.diagnostics;
     this.state.skipInactive = this.workspace.skipInactive;
     this.state.status = this.workspace.status;
@@ -158,9 +160,17 @@ export class RelationView implements vscode.Disposable {
         symbol = matches.length === 1 ? matches[0] : undefined;
         if (symbol) { this.root.id = symbol.id; this.expanded = {}; this.selection = symbol.id; }
       }
-      this.state.graph = symbol ? this.workspace.index.graph(symbol.id, this.state.mode, this.state.depth, this.expanded, this.state.accessFilter, this.state.calleeSort, this.state.includeFunctionArguments) : undefined;
+      if (symbol) {
+        const key = JSON.stringify([symbol.id, this.state.mode, this.state.depth, this.expanded, this.state.accessFilter, this.state.calleeSort, this.state.includeFunctionArguments]);
+        const files = [...this.workspace.index.files.values()], previous = this.graphSnapshot;
+        if (previous?.key === key && files.length === previous.files.length && files.every((file, n) => file === previous.files[n])) this.state.graph = previous.graph;
+        else {
+          this.state.graph = this.workspace.index.graph(symbol.id, this.state.mode, this.state.depth, this.expanded, this.state.accessFilter, this.state.calleeSort, this.state.includeFunctionArguments);
+          this.graphSnapshot = { key, files, graph: this.state.graph };
+        }
+      } else { this.state.graph = undefined; this.graphSnapshot = undefined; }
       if (!symbol) this.state.context = undefined;
-    }
+    } else this.graphSnapshot = undefined;
     this.locations.clear(); this.nodes.clear();
     if (this.callbackFocus) {
       const focus = this.callbackFocus, callback = this.workspace.index.callbackAt(focus.uri, focus.offset);

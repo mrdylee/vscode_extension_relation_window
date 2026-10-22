@@ -383,10 +383,11 @@ export class WorkspaceIndex implements vscode.Disposable {
         const versions = this.workerVersions();
         const cancellation = new Int32Array(new SharedArrayBuffer(4));
         this.callbackProgress = undefined;
+        this.status = 'Resolving calls and callbacks…';
         const request = this.request<{ stale: boolean; files: FileAnalysis[]; versions: [string, number][] }>({ type: 'derive', versions,
           analyzeCallbacks: this.analyzeCallbacks, cancellation: cancellation.buffer });
         this.activeAnalysis = { id: request.id, cancellation };
-        this.status = 'Resolving calls and callbacks…'; this.changed.fire(); this.diagnosticsChanged.fire();
+        if (!this.workerError) { this.changed.fire(); this.diagnosticsChanged.fire(); }
         let result;
         try { result = await request.promise; }
         finally { if (this.activeAnalysis?.id === request.id) this.activeAnalysis = undefined; this.diagnosticsChanged.fire(); }

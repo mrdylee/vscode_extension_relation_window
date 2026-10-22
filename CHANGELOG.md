@@ -1,6 +1,13 @@
 # Changelog
 
-## 0.1.70 — 2026-10-22
+## 0.1.71 — 2026-10-22
+
+- Ship manual Stop/Retry and per-function timing below after native release CI.
+- Preserve a fatal Worker error raised during request dispatch instead of
+  overwriting it with a resolving status. Reuse unchanged Relation graphs during
+  status/diagnostic updates; source and graph-setting changes still rebuild them.
+
+## 0.1.70 — unpublished CI candidate
 
 - Remove the project-wide 10-second callback cutoff. Show the current function's
   elapsed time, reset it at each function visit, and highlight visits taking at

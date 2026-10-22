@@ -198,6 +198,26 @@ test('Copilot waiting diagnostics reflect a Worker failure after the wait began'
   assert.equal(workspace.diagnostics.copilot.waitReason, 'worker-unavailable');
 });
 
+test('a Worker failure raised while dispatching derive retains the fatal status', async t => {
+  const { workspace } = fixture(t);
+  await workspace.ready;
+  const original = workspace.request, worker = workspace.worker;
+  let injected = false;
+  workspace.request = function(message) {
+    const request = original.call(this, message);
+    if (message.type === 'derive' && !injected) {
+      injected = true;
+      worker.emit('error', Object.assign(new Error('Worker ran out of memory'), { code: 'ERR_WORKER_OUT_OF_MEMORY' }));
+      void worker.terminate();
+    }
+    return request;
+  };
+  await workspace.reindex();
+  assert.equal(injected, true);
+  assert.match(workspace.status, /memory/i);
+  assert.ok(workspace.failures.has('worker'));
+});
+
 test('saving an already indexed dirty buffer clears the Copilot blocker without changing generation', async t => {
   const file = uri('save.c'), { workspace, adapter, edited } = fixture(t, [file]);
   await workspace.ready;
