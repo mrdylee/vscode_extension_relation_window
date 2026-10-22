@@ -70,6 +70,9 @@ export function suggestExplicitCallbacks(raw: FileAnalysis[], derived: FileAnaly
     .map(ref => [`${file.uri}:${ref.location.start}`, ref.conditions] as const)));
   function register(value: Expr, ownerId: string, functionId: string | undefined, expression: string) {
     check();
+    if (value.kind === 'choice') {
+      value.values.forEach(part => register(part, ownerId, functionId, expression)); return;
+    }
     if (value.kind === 'initializer') {
       for (const entry of value.entries) {
         if (!entry.path.length || entry.path.some(part => typeof part !== 'string' || part === '*')) continue;
@@ -114,13 +117,23 @@ export function suggestExplicitCallbacks(raw: FileAnalysis[], derived: FileAnaly
   }
   function initializer(storage: Storage, value: Expr, bindings: Map<string, Registration[]>) {
     check();
-    if (value.kind !== 'initializer') return;
+    if (value.kind === 'choice') {
+      const variants = value.values.map(part => { const branch = new Map(bindings); initializer(storage, part, branch); return branch; });
+      // Basic tracing keeps only bindings shared by every alternative. The
+      // full callback pass handles targets that depend on the branch.
+      for (const key of new Set(variants.flatMap(branch => [...branch.keys()]))) {
+        check();
+        bindings.set(key, (variants[0]?.get(key) ?? []).filter(registration => variants.every(branch =>
+          (branch.get(key) ?? []).some(candidate => candidate.targetId === registration.targetId))));
+      }
+      return;
+    }
+    if (value.kind !== 'initializer') { bindings.set(keyFor(storage), direct(value)); return; }
     for (const entry of value.entries) {
       // Positional and computed designators require type/array propagation.
       if (!entry.path.length || entry.path.some(part => typeof part !== 'string' || part === '*')) continue;
       const field = { ...storage, path: [...storage.path, ...entry.path as string[]] };
-      if (entry.value.kind === 'initializer') initializer(field, entry.value, bindings);
-      else bindings.set(keyFor(field), direct(entry.value));
+      initializer(field, entry.value, bindings);
     }
   }
   const persistentOwners = new Map<string, { functionId: string; name: string }>();
@@ -135,8 +148,7 @@ export function suggestExplicitCallbacks(raw: FileAnalysis[], derived: FileAnaly
     if (symbol?.kind === 'variable' || local) {
       register(init.value, local?.functionId ?? init.id, local?.functionId, symbol?.name ?? local!.name);
       const object = { root: init.id, path: [], evidence: [], address: false };
-      if (init.value.kind === 'initializer') initializer(object, init.value, initial);
-      else initial.set(keyFor(object), direct(init.value));
+      initializer(object, init.value, initial);
     }
   }
   for (const file of raw) for (const program of file.programs ?? []) {
@@ -183,8 +195,7 @@ export function suggestExplicitCallbacks(raw: FileAnalysis[], derived: FileAnaly
           const own = { root: value.left.localId, path: [], evidence: [], address: false };
           discardObject(own);
           if (value.operator === '=') {
-            if (value.right.kind === 'initializer') initializer(own, value.right, bindings);
-            else bindings.set(keyFor(own), direct(value.right));
+            initializer(own, value.right, bindings);
           }
           aliases.delete(value.left.localId);
           if (object?.address && object.evidence.length < maxAliasDepth) aliases.set(value.left.localId, { ...object, evidence: [...object.evidence,
@@ -194,8 +205,7 @@ export function suggestExplicitCallbacks(raw: FileAnalysis[], derived: FileAnaly
           if (object) {
             discardObject(object);
             if (value.operator === '=') {
-              if (value.right.kind === 'initializer') initializer(object, value.right, bindings);
-              else bindings.set(keyFor(object), direct(value.right));
+              initializer(object, value.right, bindings);
             }
           }
         }

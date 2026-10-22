@@ -83,7 +83,7 @@ function activeText(file: FileAnalysis, start: number, end: number) {
 
 // The analyzer callback uses the already initialized C parser, in the Worker.
 export function deriveMacroCalls(raw: FileAnalysis[], analyze: Analyze, parseCalls: (uri: string, text: string, original?: (start: number, end: number) => Location, namespace?: string, context?: (location: Location) => string[]) => { references: ReferenceRecord[]; issues: string[]; programs: FlowProgram[]; initializers: GlobalInitializer[] },
-  parseInitializer: (uri: string, text: string, original: (start: number, end: number) => Location) => { value: FlowExpression; issues: string[] }, memoryPressure?: () => boolean, analyzeCallbacks = true, shouldCancel?: () => boolean): FileAnalysis[] {
+  parseInitializer: (uri: string, text: string, original: (start: number, end: number) => Location, context?: (location: Location) => string[]) => { value: FlowExpression; issues: string[] }, memoryPressure?: () => boolean, analyzeCallbacks = true, shouldCancel?: () => boolean): FileAnalysis[] {
   const files = new Map(raw.map(file => [file.uri, file]));
   let cache = caches.get(analyze); if (!cache) caches.set(analyze, cache = new Map());
   for (const uri of cache.keys()) if (!files.has(uri)) cache.delete(uri);
@@ -127,10 +127,12 @@ export function deriveMacroCalls(raw: FileAnalysis[], analyze: Analyze, parseCal
     }
     // Initializer values feed callback propagation, not ordinary references or
     // literal function arguments. Keep raw facts intact for later re-enabling.
+    const sourceConditions = new Map([...file.symbols.map(symbol => [symbol.location.start, symbol.conditions] as const), ...file.references.map(ref => [ref.location.start, ref.conditions] as const),
+      ...(file.statementConditions ?? []).map(statement => [statement.start, statement.conditions] as const)]);
     let initializers = (analyzeCallbacks ? file.initializers ?? [] : []).map(init => {
       if (shouldCancel?.()) { issues.add(macroCancelled); return init; }
       if (memoryPressure?.()) { issues.add(macroMemoryLimit); return init; }
-      const tokens = tokenizeC(file.text.slice(init.location.start, init.location.end), (start, end) => sourceLocation(init.location.start + start, init.location.start + end));
+      const tokens = tokenizeC(activeText(file, init.location.start, init.location.end), (start, end) => sourceLocation(init.location.start + start, init.location.start + end));
       const expander = new MacroExpander(lookup, memoryPressure, shouldCancel), variants = expander.expand(tokens);
       expander.issues.forEach(issue => issues.add(issue));
       if (issues.has(macroMemoryLimit)) return init;
@@ -145,7 +147,7 @@ export function deriveMacroCalls(raw: FileAnalysis[], analyze: Analyze, parseCal
           const a = pick(start), b = pick(Math.max(start, end - 1));
           return { ...a, end: Math.max(a.end, b.end), endLine: b.endLine, endColumn: b.endColumn };
         };
-        const parsed = parseInitializer(file.uri, joinTokens(variant.tokens), original);
+        const parsed = parseInitializer(file.uri, joinTokens(variant.tokens), original, location => sourceConditions.get(location.start) ?? []);
         if (parsed.issues.length) issues.add('Macro-expanded initializer near line ' + (init.location.line + 1) + ' has unsupported syntax');
         return parsed.value;
       });
@@ -154,8 +156,6 @@ export function deriveMacroCalls(raw: FileAnalysis[], analyze: Analyze, parseCal
     });
     if (shouldCancel?.()) return partial(macroCancelled);
     if (issues.has(macroMemoryLimit)) return partial(macroMemoryLimit);
-    const sourceConditions = new Map([...file.symbols.map(symbol => [symbol.location.start, symbol.conditions] as const), ...file.references.map(ref => [ref.location.start, ref.conditions] as const),
-      ...(file.statementConditions ?? []).map(statement => [statement.start, statement.conditions] as const)]);
     let programs = file.programs ?? [];
     for (const fn of file.functions ?? []) {
       if (shouldCancel?.()) return partial(macroCancelled);

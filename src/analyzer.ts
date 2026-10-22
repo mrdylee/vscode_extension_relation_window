@@ -7,6 +7,8 @@ import { flowFacts } from './flow-parser';
 import { clearPointerCache, inferPointerCalls } from './pointer-targets';
 import { suggestPartialCallbacks } from './partial-callbacks';
 import { suggestExplicitCallbacks } from './explicit-callbacks';
+import { locationIn, tokenizeC } from './c-tokens';
+import { initializerPreprocessor, InitializerRecovery } from './initializer-preprocessor';
 
 function ancestor(node: Node, type: string): Node | null {
   for (let current = node.parent; current; current = current.parent) if (current.type === type) return current;
@@ -37,23 +39,56 @@ export async function createAnalyzer(runtime: string, grammar: string) {
   await Parser.init({ locateFile: () => runtime });
   const parser = new Parser();
   parser.setLanguage(await Language.load(grammar));
-  function parseSource(text: string) {
+  function parseSource(text: string, recovery?: InitializerRecovery, skipInactive = true) {
     const tree = parser.parse(text);
-    if (!tree?.rootNode.hasError || !text.includes('__attribute')) return tree;
+    if (!tree?.rootNode.hasError) return tree;
     const attributes: { start: number; end: number }[] = [], pending = [tree.rootNode];
+    const directives: { start: number; end: number }[] = [];
     while (pending.length) {
       const node = pending.pop()!;
+      if (['preproc_def', 'preproc_function_def', 'preproc_include', 'preproc_call'].includes(node.type)) directives.push({ start: node.startIndex, end: node.endIndex });
       // Recover placement unsupported by this grammar, using only attribute
       // groups it parsed without errors. Malformed groups remain diagnostics.
       if (node.type === 'attribute_specifier' && !node.hasError && /^__attribute__?\s*\(/.test(node.text))
         attributes.push({ start: node.startIndex, end: node.endIndex });
+      else if (node.type === 'type_identifier' && /^(?:__IO|__I|__O|INLINE)$/.test(node.text) &&
+        node.parent?.hasError && node.parent.childForFieldName('type')?.id === node.id &&
+        ['field_declaration', 'declaration', 'function_definition', 'parameter_declaration'].includes(node.parent.type))
+        attributes.push({ start: node.startIndex, end: node.endIndex });
       else if (!['preproc_def', 'preproc_function_def', 'preproc_include', 'preproc_call'].includes(node.type)) pending.push(...node.namedChildren);
     }
+    // This placement is parsed as a bogus function, so no attribute node exists.
+    if (text.includes('__attribute')) {
+      const tokens = tokenizeC(text, locationIn(text, ''));
+      for (let i = 1; i < tokens.length; i++) {
+        if (!/^__attribute__?$/.test(tokens[i].text) || !['struct', 'union', 'enum'].includes(tokens[i - 1].text) || tokens[i + 1]?.text !== '(') continue;
+        let depth = 0, end = i + 1;
+        for (; end < tokens.length; end++) {
+          if (tokens[end].text === '(') depth++;
+          if (tokens[end].text === ')' && --depth === 0) break;
+        }
+        if (end === tokens.length) continue;
+        const start = tokens[i].location.start, stop = tokens[end].location.end;
+        if (directives.some(range => start >= range.start && start < range.end)) continue;
+        const probe = parser.parse(`void ${text.slice(start, stop)} __attribute_probe(void);`);
+        if (probe && !probe.rootNode.hasError) attributes.push({ start, end: stop });
+        probe?.delete(); i = end;
+      }
+    }
+    const initializers = initializerPreprocessor(tree.rootNode, text, skipInactive, condition => {
+      const probe = parser.parse(`#if ${condition}\nint __conditional_probe;\n#endif`);
+      const valid = !!probe && !probe.rootNode.hasError;
+      probe?.delete(); return valid;
+    });
+    if (recovery) Object.assign(recovery, initializers);
+    attributes.push(...initializers.directives, ...initializers.inactive);
     if (!attributes.length) return tree;
     attributes.sort((a, b) => a.start - b.start);
     let normalized = '', cursor = 0;
     for (const range of attributes) {
-      normalized += text.slice(cursor, range.start) + text.slice(range.start, range.end).replace(/[^\r\n]/g, ' ');
+      if (range.start < cursor) continue;
+      const masked = text.slice(range.start, range.end).replace(/[^\r\n]/g, ' ');
+      normalized += text.slice(cursor, range.start) + (initializers.separators.includes(range.start) ? ',' + masked.slice(1) : masked);
       cursor = range.end;
     }
     normalized += text.slice(cursor);
@@ -62,9 +97,12 @@ export async function createAnalyzer(runtime: string, grammar: string) {
     tree.delete(); return recovered;
   }
   const analyzer = { analyze(uri: string, text: string, skipInactive = true): FileAnalysis {
-    const tree = parseSource(text);
+    const recovery: InitializerRecovery = { directives: [], inactive: [], contexts: [], separators: [] };
+    const tree = parseSource(text, recovery, skipInactive);
     if (!tree) throw new Error('C parser returned no tree');
     const file: FileAnalysis = { uri, text, symbols: [], references: [], includes: [], issues: [] };
+    if (recovery.directives.length) file.directives = recovery.directives;
+    if (recovery.inactive.length) file.inactive = recovery.inactive;
     const nodes: Node[] = [];
     const conditions = new Map<number, string[]>();
     const declarationNames = new Set<number>();
@@ -76,8 +114,9 @@ export async function createAnalyzer(runtime: string, grammar: string) {
       endLine: node.endPosition.row, endColumn: node.endPosition.column });
 
     function visit(node: Node, context: string[]) {
+      const recovered = recovery.contexts.find(range => node.startIndex >= range.start && node.startIndex < range.end);
       nodes.push(node);
-      conditions.set(node.id, context);
+      conditions.set(node.id, recovered ? [...context, ...recovered.conditions] : context);
       if (['preproc_if', 'preproc_elif', 'preproc_ifdef', 'preproc_elifdef'].includes(node.type)) {
         const condition = node.childForFieldName('condition') ?? node.childForFieldName('name');
         const alternative = node.childForFieldName('alternative');
@@ -146,7 +185,9 @@ export async function createAnalyzer(runtime: string, grammar: string) {
         (file.directives ??= []).push({ start: child.startIndex, end: end < 0 ? text.length : end + 1 });
       }
       if (node.type === 'ERROR') file.issues.push(`Line ${node.startPosition.row + 1}: incomplete or unsupported C syntax`);
-      if (node.isMissing) file.issues.push(`Line ${node.startPosition.row + 1}: missing ${node.type}`);
+      const unnamedBitfield = node.isMissing && node.type === 'field_identifier' && node.parent?.type === 'field_declaration' &&
+        node.parent.namedChildren.some(child => child.type === 'bitfield_clause' && !child.hasError);
+      if (node.isMissing && !unnamedBitfield) file.issues.push(`Line ${node.startPosition.row + 1}: missing ${node.type}`);
       if (node.type === 'preproc_include') {
         const path = node.childForFieldName('path')?.text;
         if (path) file.includes.push(path.slice(1, -1));
@@ -203,7 +244,7 @@ export async function createAnalyzer(runtime: string, grammar: string) {
         for (const child of declarations) {
           const target = child.type === 'init_declarator' ? child.childForFieldName('declarator')! : child;
           const info = declarator(target);
-          if (!info.name) continue;
+          if (!info.name || info.name.isMissing) continue;
           const kind = node.type === 'type_definition' ? 'type' : info.functionLike && node.type !== 'parameter_declaration' ? 'function' : 'variable';
           const external = node.namedChildren.some(n => n.type === 'storage_class_specifier' && n.text === 'extern');
           const symbol = addSymbol(info.name, node, kind, kind !== 'function' && (!external || child.type === 'init_declarator'), info.pointer || (node.type === 'parameter_declaration' && info.functionLike));
@@ -251,7 +292,7 @@ export async function createAnalyzer(runtime: string, grammar: string) {
       if (!inBody && !inInitializer) continue;
       if (node.type === 'field_identifier') {
         const designator = node.parent?.type === 'field_designator';
-        const expression = designator ? initializerMember(node, location) : node.parent?.type === 'field_expression' ? typedExpression(node.parent, location) : undefined;
+        const expression = designator ? initializerMember(node, location, node => conditions.get(node.id) ?? []) : node.parent?.type === 'field_expression' ? typedExpression(node.parent, location) : undefined;
         if (expression?.kind === 'member') {
           const functionId = fn ? functionOwners.get(fn.id) : undefined;
           const terminal = !designator || node.parent!.parent!.childrenForFieldName('designator').at(-1)?.id === node.parent!.id;
@@ -278,7 +319,7 @@ export async function createAnalyzer(runtime: string, grammar: string) {
         conditions: conditions.get(node.id) ?? [] });
     }
     file.issues = [...new Set(file.issues)];
-    file.statementConditions = nodes.filter(node => ['return_statement', 'expression_statement'].includes(node.type) && conditions.get(node.id)?.length)
+    file.statementConditions = nodes.filter(node => (['return_statement', 'expression_statement'].includes(node.type) || node.parent?.type === 'initializer_list') && conditions.get(node.id)?.length)
       .map(node => ({ start: node.startIndex, conditions: conditions.get(node.id)! }));
     Object.assign(file, flowFacts(tree.rootNode, uri, location, new Set(nodes.map(node => node.id)), skipInactive, '', node => conditions.get(node.id) ?? []));
     tree.delete();
@@ -312,10 +353,11 @@ export async function createAnalyzer(runtime: string, grammar: string) {
     const issues = tree.rootNode.hasError ? ['Expanded C contains incomplete or unsupported syntax'] : [];
     const facts = flowFacts(tree.rootNode, uri, locate, undefined, true, namespace, node => context?.(locate(node)) ?? []);
     tree.delete(); return { references, issues, ...facts };
-  }, initializer(uri: string, text: string, original: (start: number, end: number) => Location) {
+  }, initializer(uri: string, text: string, original: (start: number, end: number) => Location, context?: (location: Location) => string[]) {
     const prefix = 'int __macro_value = ', tree = parseSource(prefix + text + ';');
     if (!tree) throw new Error('C parser returned no initializer tree');
-    const facts = flowFacts(tree.rootNode, uri, node => original(Math.max(0, node.startIndex - prefix.length), Math.max(0, node.endIndex - prefix.length)));
+    const locate = (node: Node) => original(Math.max(0, node.startIndex - prefix.length), Math.max(0, node.endIndex - prefix.length));
+    const facts = flowFacts(tree.rootNode, uri, locate, undefined, true, '', node => context?.(locate(node)) ?? []);
     const value: FlowExpression = facts.initializers[0]?.value ?? { kind: 'unknown', location: original(0, text.length) };
     const issues = tree.rootNode.hasError ? ['Expanded initializer has incomplete or unsupported syntax'] : [];
     tree.delete(); return { value, issues };

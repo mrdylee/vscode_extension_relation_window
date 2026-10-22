@@ -908,7 +908,9 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     if (expr.kind === 'sequence') { let value = blank(); for (const child of expr.values) value = evaluate(child, state, ctx); return value; }
     if (expr.kind === 'assign') {
       const targets = slots(expr.left, state, ctx, true), record = valueType(expr.left, ctx);
-      if (expr.right.kind === 'initializer') {
+      const initializerValue = (value: Expr): boolean => value.kind === 'initializer' ||
+        (value.kind === 'choice' && value.values.length > 0 && value.values.every(initializerValue));
+      if (initializerValue(expr.right)) {
         for (const target of targets) initializer(target, expr.right, record ? index.layout(record) : [], state, ctx, record);
         return union(...targets.map(target => read(target, state)));
       }

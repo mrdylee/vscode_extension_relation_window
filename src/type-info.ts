@@ -97,7 +97,7 @@ function designatorPath(pair: Node, object: TypedExpression | undefined, stop?: 
   return object;
 }
 
-function initializerTarget(list: Node, location: (node: Node) => Location, depth: number): TypedExpression | undefined {
+function initializerTarget(list: Node, location: (node: Node) => Location, depth: number, context?: (node: Node) => string[]): TypedExpression | undefined {
   if (depth >= 32) return undefined;
   const parent = list.parent;
   if (parent?.type === 'init_declarator') {
@@ -106,21 +106,25 @@ function initializerTarget(list: Node, location: (node: Node) => Location, depth
   }
   if (parent?.type === 'compound_literal_expression') return typedExpression(parent, location, depth + 1);
   if (parent?.type === 'initializer_pair' && parent.parent?.type === 'initializer_list')
-    return designatorPath(parent, initializerTarget(parent.parent, location, depth + 1));
+    return designatorPath(parent, initializerTarget(parent.parent, location, depth + 1, context));
   if (parent?.type === 'initializer_list') {
     const entries = parent.namedChildren.filter(child => child.type !== 'comment');
-    const index = entries.findIndex(child => child.id === list.id);
+    const position = entries.findIndex(child => child.id === list.id);
+    const chosen = context?.(list) ?? [], enclosing = context?.(parent) ?? [];
+    const preceding = entries.slice(0, position).filter(child => !(context?.(child) ?? []).some(label =>
+      chosen.includes(label.startsWith('else of ') ? label.slice(8) : `else of ${label}`)));
+    if (preceding.some(child => (context?.(child) ?? []).some(label => !chosen.includes(label) && !enclosing.includes(label)))) return undefined;
     // Designator continuation and scalar brace elision need a C layout cursor;
     // only preceding braced entries safely correspond to whole elements.
-    if (index < 0 || entries.slice(0, index).some(child => child.type !== 'initializer_list')) return undefined;
-    const object = initializerTarget(parent, location, depth + 1);
-    return object ? { kind: 'position', object, index } : undefined;
+    if (position < 0 || preceding.some(child => child.type !== 'initializer_list')) return undefined;
+    const object = initializerTarget(parent, location, depth + 1, context);
+    return object ? { kind: 'position', object, index: preceding.length } : undefined;
   }
   return undefined;
 }
 
-export function initializerMember(node: Node, location: (node: Node) => Location): TypedExpression | undefined {
+export function initializerMember(node: Node, location: (node: Node) => Location, context?: (node: Node) => string[]): TypedExpression | undefined {
   const designator = node.parent, pair = designator?.parent, list = pair?.parent;
   return designator?.type === 'field_designator' && pair?.type === 'initializer_pair' && list?.type === 'initializer_list'
-    ? designatorPath(pair, initializerTarget(list, location, 0), designator) : undefined;
+    ? designatorPath(pair, initializerTarget(list, location, 0, context), designator) : undefined;
 }

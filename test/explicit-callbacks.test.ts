@@ -243,3 +243,24 @@ test('existing static edges and repeated projection never duplicate candidates',
   const basic = project({ 'main.c': source });
   assert.equal(suggestExplicitCallbacks(basic.raw, basic.files)[0], basic.files[0]);
 });
+
+test('conditional scalar fields preserve unconditional registrations and simple member calls', () => {
+  for (const local of [false, true]) for (const callbacks of [false, true]) {
+    const declaration = 'struct Ops ops={.cb=target,\n#if BOARD\n.flag=1,\n#else\n.flag=2,\n#endif\n};';
+    const source = 'void target(void){}struct Ops{void(*cb)(void);int flag;};' +
+      (local ? 'void run(void){' + declaration + 'ops.cb();}' : declaration + 'void run(void){ops.cb();}');
+    const {files,index} = project({'main.c':source}, callbacks);
+    assert.deepEqual(files.flatMap(file=>file.issues), []);
+    assert.deepEqual(files[0].callbackRegistrations?.map(ref=>ref.name), ['target']);
+    const run = index.symbols().find(symbol=>symbol.name==='run')!;
+    assert.ok(index.relations(run.id,'callees').some(group=>group.name==='target' && group.sites.some(site=>site.kind==='call')), `${local}/${callbacks}`);
+  }
+});
+
+test('conditional aggregate alternatives retain branch-specific registrations without inventing definite basic bindings', () => {
+  const source = 'void first(void){}void second(void){}struct Ops{void(*cb)(void);};struct Ops ops={\n#if BOARD\n.cb=first,\n#else\n.cb=second,\n#endif\n};void run(void){ops.cb();}';
+  const {files} = project({'main.c':source});
+  const registrations = files[0].callbackRegistrations ?? [];
+  assert.deepEqual(registrations.map(ref=>ref.name).sort(), ['first','second']);
+  assert.ok(registrations.every(ref=>ref.conditions.length === 1));
+});

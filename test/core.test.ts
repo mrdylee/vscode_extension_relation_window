@@ -517,3 +517,145 @@ test('conditional block extern retains both linked global and outer local uses',
   assert.deepEqual(candidates.map(s => s.storage).sort(), ['global', 'local']);
   for (const candidate of candidates) assert.equal(value.relations(candidate.id, 'references')[0].sites[0].access, 'write');
 });
+
+test('embedded declaration qualifiers recover actual field and function types without shifting source', () => {
+  const source = '#define INLINE inline\nstruct Reg { __IO uint32_t value; __I uint32_t status; };\nstatic INLINE void run(struct Reg *r){r->value=1;target();}';
+  const file = parse(source);
+  assert.deepEqual(file.issues, []);
+  const field = file.symbols.find(symbol => symbol.name === 'value')!;
+  assert.equal(field.type?.name, 'uint32_t');
+  assert.equal(field.location.start, source.indexOf('value;'));
+  assert.equal(file.symbols.find(symbol => symbol.name === 'run')?.type?.name, 'void');
+  assert.ok(file.references.some(ref => ref.name === 'target' && ref.kind === 'call'));
+  assert.equal(file.text, source);
+  assert.equal(file.preprocessor?.find(event => event.kind === 'define')?.kind, 'define');
+});
+
+test('GNU attributes between aggregate keyword and tag preserve members and callback targets', () => {
+  const source = 'void target(void){}union __attribute__((packed, aligned(4))) Data {void(*cb)(void);};union Data data={.cb=target};void run(void){data.cb();}';
+  const files = analyzer.derive([parse(source)]), value = new RelationIndex();
+  files.forEach(file => value.update(file));
+  assert.deepEqual(files.flatMap(file => file.issues), []);
+  assert.ok(!value.symbols().some(symbol => symbol.name === 'packed'));
+  const run = value.symbols().find(symbol => symbol.name === 'run')!;
+  assert.ok(value.relations(run.id, 'callees').some(group => group.name === 'target' && group.callKind === 'inferred'));
+  const member = value.resolveAt('file:///demo/a.c', source.lastIndexOf('cb()'))[0];
+  assert.equal(member?.name, 'cb');
+});
+
+test('unnamed bit fields have no symbol or diagnostic and retain named fields', () => {
+  const source = 'struct Data {uint32_t :32;unsigned :0;unsigned value:3;};';
+  const file = parse(source);
+  assert.deepEqual(file.issues, []);
+  assert.deepEqual(file.symbols.map(symbol => symbol.name), ['Data', 'value']);
+  assert.equal(file.symbols[1].location.start, source.indexOf('value'));
+  assert.ok(parse('struct Data {unsigned value:;};').issues.length);
+});
+
+test('conditional designated initializers retain alternative member writes and callback targets', () => {
+  const source = 'void first(void){}void second(void){}void hidden(void){}struct Ops {void(*cb)(void);};struct Ops ops={\n#if BOARD\n.cb=first,\n#else\n.cb=second,\n#endif\n#if 0\n.cb=hidden,\n#endif\n};void run(void){ops.cb();}';
+  const file = parse(source);
+  assert.deepEqual(file.issues, []);
+  const writes = file.references.filter(ref => ref.name === 'cb' && ref.access === 'write');
+  assert.equal(writes.length, 2);
+  assert.deepEqual(writes.map(ref => ref.conditions), [['#if BOARD'], ['else of #if BOARD']]);
+  assert.ok(!file.references.some(ref => ref.name === 'hidden'));
+  const value = new RelationIndex();analyzer.derive([file]).forEach(file => value.update(file));
+  const run = value.symbols().find(symbol => symbol.name === 'run')!;
+  const targets = value.relations(run.id, 'callees').filter(group => group.callKind === 'inferred').map(group => group.name).sort();
+  assert.deepEqual(targets, ['first', 'second']);
+});
+
+test('conditional initializer macro values preserve both branches after expansion', () => {
+  const source = '#define PICK first\nvoid first(void){}void second(void){}struct Ops{void(*cb)(void);};struct Ops ops={\n#if BOARD\n.cb=PICK,\n#else\n.cb=second,\n#endif\n};void run(void){ops.cb();}';
+  const value = new RelationIndex(), files = analyzer.derive([parse(source)]);
+  assert.deepEqual(files.flatMap(file => file.issues), []);
+  files.forEach(file => value.update(file));
+  const run = value.symbols().find(symbol => symbol.name === 'run')!;
+  assert.deepEqual(value.relations(run.id, 'callees').filter(group => group.callKind === 'inferred').map(group => group.name).sort(), ['first', 'second']);
+});
+
+test('nested conditional positional initializers retain indices and skip literal inactive alternatives', () => {
+  const source = 'void first(void){}void second(void){}void last(void){}void hidden(void){}void(*ops[])(void)={\n#if 0\nhidden,\n#elif BOARD\n#if 1\nfirst,\n#else\nhidden,\n#endif\n#else\nsecond,\n#endif\nlast};void run(void){ops[0]();ops[1]();}';
+  const file = parse(source);
+  assert.deepEqual(file.issues, []);
+  assert.ok(!file.references.some(ref => ref.name === 'hidden'));
+  const value = new RelationIndex();analyzer.derive([file]).forEach(file => value.update(file));
+  const run = value.symbols().find(symbol => symbol.name === 'run')!;
+  assert.deepEqual(value.relations(run.id, 'callees').filter(group => group.callKind === 'inferred').map(group => group.name).sort(), ['first', 'last', 'second']);
+  const all = analyzer.analyze('file:///demo/all.c', source, false);
+  assert.ok(all.references.some(ref => ref.name === 'hidden'));
+});
+
+test('initializer recovery retains real errors and ignores directive text inside comments and strings', () => {
+  for (const source of [
+    'struct Ops{int value;};struct Ops ops={\n#if BOARD\n.value=,\n#endif\n};',
+    'struct Ops{int value;};struct Ops ops={\n#if BOARD\n.value=1,\n};',
+    'struct Ops{int value;};struct Ops ops={\n#else\n.value=1,\n#endif\n};'
+  ]) assert.ok(parse(source).issues.length, source);
+  const source = 'const char *text="__IO INLINE __attribute__((packed))";\n/*\n#if BOARD\n#endif\n*/\n#define TYPE union __attribute__((packed)) Data\nunion __attribute__((packed)) Data{int value;};';
+  const file = parse(source);
+  assert.deepEqual(file.issues, []);
+  assert.equal(file.preprocessor?.find(event => event.kind === 'define' && event.macro.name === 'TYPE')?.kind, 'define');
+  assert.ok(file.preprocessor?.some(event => event.kind === 'define' && event.macro.body === 'union __attribute__((packed)) Data'));
+  assert.equal(file.text, source);
+});
+
+test('spliced initializer conditions and directive comments preserve branches without hiding malformed conditions', () => {
+  const source = 'struct Data{int value;};struct Data data={\n#if BOARD && \\\n (A || B)\n.value=1,\n#else /* fallback */\n.value=2,\n#endif /* BOARD */\n};';
+  const file = parse(source);
+  assert.deepEqual(file.issues, []);
+  assert.equal(file.references.filter(ref => ref.name === 'value' && ref.access === 'write').length, 2);
+  for (const directive of ['#if BOARD @ BAD', '#ifdef A B']) {
+    assert.ok(parse(`struct Data{int value;};struct Data data={\n${directive}\n.value=1,\n#endif\n};`).issues.length, directive);
+  }
+});
+
+test('conditional braced initializer alternatives resolve members at the same aggregate position', () => {
+  const source = 'struct First{int state;};struct Second{int state;};struct Outer{struct First first;struct Second second;};struct Outer data={\n#if BOARD\n{.state=1},\n#else\n{.state=2},\n#endif\n};';
+  const value = index({'a.c':source}), file = parse(source);
+  assert.deepEqual(file.issues, []);
+  for (const suffix of ['state=1', 'state=2']) {
+    assert.equal(value.resolveAt('file:///demo/a.c', source.indexOf(suffix))[0]?.containerName, 'First');
+  }
+});
+
+test('conditional initializer alternatives without trailing commas keep separate callback values', () => {
+  const source = 'void first(void){}void second(void){}struct Ops{void(*cb)(void);};struct Ops ops={\n#if BOARD\n.cb=first\n#else\n.cb=second\n#endif\n};void run(void){ops.cb();}';
+  const value = new RelationIndex(), files = analyzer.derive([parse(source)]);
+  assert.deepEqual(files.flatMap(file => file.issues), []);
+  files.forEach(file => value.update(file));
+  const run = value.symbols().find(symbol => symbol.name === 'run')!;
+  assert.deepEqual(value.relations(run.id, 'callees').filter(group => group.callKind === 'inferred').map(group => group.name).sort(), ['first', 'second']);
+});
+
+test('local conditional aggregate initializers initialize member storage for every alternative', () => {
+  for (const storage of ['', 'static ']) {
+    const source = 'void first(void){}void second(void){}struct Ops{void(*cb)(void);};void run(void){' + storage + 'struct Ops ops={\n#if BOARD\n.cb=first,\n#else\n.cb=second,\n#endif\n};ops.cb();}';
+    const value = new RelationIndex(), files = analyzer.derive([parse(source)]);
+    assert.deepEqual(files.flatMap(file => file.issues), []);
+    files.forEach(file => value.update(file));
+    const run = value.symbols().find(symbol => symbol.name === 'run')!;
+    assert.deepEqual(value.relations(run.id, 'callees').filter(group => group.callKind === 'inferred').map(group => group.name).sort(), ['first', 'second'], storage);
+  }
+});
+
+test('initializer separators preserve elif, inactive branches and scalar-expression diagnostics', () => {
+  const prelude = 'void first(void){}void second(void){}struct Ops{void(*cb)(void);};';
+  for (const [branch, expected] of [
+    ['#if BOARD\n.cb=first\n#elif OTHER\n.cb=second\n#endif', ['first','second']],
+    ['#if 0\n.cb=first\n#else\n.cb=second\n#endif', ['second']],
+    ['#if 1\n.cb=first\n#else\n.cb=second\n#endif', ['first']]
+  ] as const) {
+    const source = prelude + `struct Ops ops={\n${branch}\n};void run(void){ops.cb();}`;
+    const files = analyzer.derive([parse(source)]), value = new RelationIndex();
+    assert.deepEqual(files.flatMap(file=>file.issues), []);
+    files.forEach(file=>value.update(file));
+    const run = value.symbols().find(symbol=>symbol.name==='run')!;
+    assert.deepEqual(value.relations(run.id,'callees').filter(group=>group.callKind==='inferred').map(group=>group.name).sort(), expected);
+  }
+  for (const source of [
+    'struct Ops{int value;};struct Ops ops={.value=(\n#if BOARD\n1\n#else\n2\n#endif\n)};',
+    'struct Ops{int value;};struct Ops ops={\n#if BOARD\n.value=1 +\n#else\n.value=2\n#endif\n};'
+  ]) assert.ok(parse(source).issues.length, source);
+});

@@ -41,13 +41,25 @@ export function flowFacts(root: Node, uri: string, locate: Locate, active?: Set<
     if (node.type === 'conditional_expression') return {kind:'sequence',values:[field('condition'),{kind:'choice',values:[field('consequence'),field('alternative')],location}],location};
     if (node.type === 'comma_expression') return {kind:'sequence',values:node.namedChildren.map(expr),location};
     if (node.type === 'call_expression') return {kind:'call',callee:field('function'),args:node.childForFieldName('arguments')!.namedChildren.filter(n=>n.type!=='comment').map(expr),key:`${fn}${namespace}:call:${node.startIndex}`,location};
-    if (node.type === 'initializer_list') return {kind:'initializer',entries:node.namedChildren.filter(n=>n.type!=='comment').map(child=>({
+    if (node.type === 'initializer_list') {
+      const children=node.namedChildren.filter(n=>n.type!=='comment'&&present(n));
+      const enclosing=context?.(node)??[];
+      const guards=children.map(child=>(context?.(child)??[]).filter(condition=>!enclosing.includes(condition)));
+      const labels=[...new Set(guards.flat().map(label=>label.replace(/^else of /,'')))];
+      const entries=children.map(child=>({
       path: child.type === 'initializer_pair' ? child.childrenForFieldName('designator').flatMap<string | number>(designator=> {
         if (designator.type === 'field_designator' || designator.type === 'field_identifier') return [designator.type==='field_identifier'?designator.text:designator.namedChildren[0].text];
         const value=designator.namedChildren[0]?.text.replace(/[uUlL]+$/,'');
         const number=value&&/^0[0-7]+$/.test(value)?parseInt(value,8):Number(value);
         return Number.isSafeInteger(number)&&number>=0?[number]:['*'];
-      }) : [], value:expr(child.type === 'initializer_pair'?child.childForFieldName('value'):child) })),location};
+      }) : [], value:expr(child.type === 'initializer_pair'?child.childForFieldName('value'):child) }));
+      if(!labels.length)return{kind:'initializer',entries,location};
+      if(labels.length>5)return unknown();
+      // Branch on whole lists: treating both .cb writes as sequential would
+      // overwrite one candidate, and positional entries would shift indices.
+      return{kind:'choice',values:Array.from({length:2**labels.length},(_,mask)=>({kind:'initializer' as const,
+        entries:entries.filter((_,i)=>guards[i].every(label=>!!(mask&(1<<labels.indexOf(label.replace(/^else of /,''))))!==label.startsWith('else of '))),location})),location};
+    }
     const effects:Node[]=[];
     function sideEffects(current:Node){
       if(['sizeof_expression','alignof_expression'].includes(current.type))return;

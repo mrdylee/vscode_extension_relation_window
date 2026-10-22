@@ -7,7 +7,7 @@ export interface CachedAnalysis { raw: FileAnalysis; derived: FileAnalysis; skip
 interface Entry { uri: string; name: string; digest: string; source: string; skip: boolean; expandMacros: boolean }
 // Bump only when parsing, macro expansion, callback derivation or stored analysis
 // semantics change. UI, packaging and other compatible releases keep this value.
-export const ANALYSIS_CACHE_VERSION = 3;
+export const ANALYSIS_CACHE_VERSION = 4;
 export type CacheIncompatibility = 'analysis-version' | 'workspace-settings' | 'legacy-format';
 interface Manifest { schema: 2; analysisVersion: number; key: string; generation: string; previous?: string; entries: Entry[]; callbackPolicy?: string; retryable?: boolean }
 const workerFields = new Set(['text', 'programs', 'initializers', 'argumentPrograms', 'statementConditions']);
