@@ -106,8 +106,9 @@ unchanged by that review.
 
 ## Implementation after review
 
-The user requested the fixes after review. The working tree now addresses all
-three product findings; these changes are not published yet.
+The user requested the fixes after review. Release 0.1.69 addresses all three
+product findings; publication evidence is recorded in
+[the release review](2026-10-22-release-0.1.69.md).
 
 - Array values and addresses of individual elements/objects have distinct
   abstract representations. A common offset composer is used for returned
@@ -144,7 +145,7 @@ Node 22 was used for Worker and memory/performance checks. The Worker integratio
 fixture confirms Index ready with 400 dynamic-offset writes, GNU declaration
 recovery and the corrected callback target. The native Extension Host fixture
 was updated to include dynamic-offset packing and a trailing GNU section
-attribute; that native fixture has not been run locally.
+attribute; it passed release CI on Windows, macOS and Ubuntu (not run locally).
 
 Evidence logs: `/tmp/dynsight-offset-fixes-complete-unit.log`,
 `/tmp/dynsight-offset-fixes-complete-workers.log`,
