@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.64 — 2026-10-22
+
+- Prefer locally derived callback registration/flow candidates and their source
+  evidence when constructing Copilot requests. Limit this review context to
+  eight candidates, ten snippets and 8,000 source characters; retain the broader
+  source search when no usable local candidates are available.
+- Keep local shortlists explicitly incomplete and invalidate prior AI prompt
+  caches without making new requests during startup or ordinary navigation.
+
 ## 0.1.63 — 2026-10-22
 
 - Arrange index status, Copilot progress and Analysis notices from left to right

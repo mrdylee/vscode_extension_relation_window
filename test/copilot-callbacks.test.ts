@@ -237,3 +237,93 @@ test('raw bbb registration and ccc member calls retain original source evidence 
     assert.ok(context.snippets.some(snippet=>snippet.text.includes('const struct xxx *ccc=&bbb')));
   }
 });
+
+test('local registration candidates are selected before unrelated callback table entries', () => {
+  const text = 'struct Ops{' + Array.from({length:40}, (_, n) => `void(*cb_${n})(void);`).join('') + '};\n' +
+    Array.from({length:40}, (_, n) => `void target_${n}(void){}`).join('\n') + '\nstruct Ops table={' +
+    Array.from({length:40}, (_, n) => `.cb_${n}=target_${n}`).join(',') +
+    '};\nvoid run(void){struct Ops*p=&table;p->cb_39();}';
+  const files = analyzer.derive([{...analyzer.analyze('file:///shortlist.c', text), expandMacros:false}], () => false, undefined, false);
+  const context = callbackContexts(files)[0];
+  assert.equal(context.selection, 'local-candidates');
+  assert.deepEqual(context.targets.map(target => target.name), ['target_39']);
+  assert.ok(context.snippets.some(snippet => snippet.text.includes('.cb_39=target_39')));
+  assert.ok(context.snippets.some(snippet => snippet.text.includes('struct Ops*p=&table')));
+  assert.ok(context.snippets.length <= 10);
+  assert.ok(Buffer.byteLength(JSON.stringify(context)) < 5000, 'local evidence should replace the broad 9KB context');
+  assert.equal(context.truncated, true, 'a local candidate does not prove exhaustive target coverage');
+});
+
+test('local object bindings keep unrelated same-named fields out of the LLM shortlist', () => {
+  const text = `struct A{void(*read)(void);};struct B{void(*read)(void);};
+    void wanted(void){}void unrelated(void){}
+    struct A first={.read=wanted};struct B second={.read=unrelated};
+    void run(void){struct A*p=&first;p->read();}`;
+  const files = analyzer.derive([{...analyzer.analyze('file:///objects.c', text), expandMacros:false}], () => false, undefined, false);
+  const context = callbackContexts(files)[0];
+  assert.equal(context.selection, 'local-candidates');
+  assert.deepEqual(context.targets.map(target => target.name), ['wanted']);
+});
+
+test('preselected local flow candidates retain getter and parameter-slot evidence across files', () => {
+  const raw = snapshot([
+    'struct Ops{void(*cb)(void);};void target(void){}struct Ops table={.cb=target};struct Ops*get_ops(void){return &table;}',
+    'struct Ops;struct Ops*get_ops(void);void init(int,struct Ops*,int);void configure(void){init(11,get_ops(),22);}',
+    'struct Ops{void(*cb)(void);};struct Ops*active;void init(int a,struct Ops*p,int b){active=p;}void run(void){active->cb();}'
+  ]).files;
+  const files = analyzer.derive(raw.map(file => ({...file, expandMacros:false})), () => false, undefined, true)
+    .map(file => ({...file, references:file.references.map(ref => ref.callKind === 'inferred' && ref.inference
+      ? {...ref, inference:{...ref.inference, incomplete:true}} : ref)}));
+  const context = callbackContexts(files).find(context => context.expression === 'active->cb')!;
+  assert.equal(context.selection, 'local-candidates');
+  assert.deepEqual(context.targets.map(target => target.name), ['target']);
+  const evidence = context.targets[0].evidenceIds.map(id => context.snippets.find(snippet => snippet.id === id)!.text).join('\n');
+  assert.match(evidence, /return &table/);
+  assert.match(evidence, /init\(11,get_ops\(\),22\)/);
+  assert.match(evidence, /init\(int a,struct Ops\*p,int b\)/);
+});
+
+test('local shortlist prompts ask for review and reuse cache until the registration changes', async () => temporary(async cacheDir => {
+  const text = `typedef void(*CB)(void);void target(void){}void other(void){}
+    void run(void){CB cb=target;cb();}`;
+  const makeSnapshot = (text: string): CopilotSnapshot => ({generation:1, settingsKey:'local',
+    files:analyzer.derive([{...analyzer.analyze('file:///local.c', text), expandMacros:false}], () => false, undefined, false)});
+  const s = makeSnapshot(text); let requests = 0;
+  const c = controller(cacheDir, {modelKey:'local-model', complete:async prompt => {
+    requests++;
+    assert.match(prompt, /^Review the callback candidates already found by local/);
+    const payload = JSON.parse(prompt.split('CONTEXT_JSON\n')[1]);
+    assert.equal(payload.selection, 'local-candidates');
+    assert.deepEqual(payload.targets.map((target: any) => target.name), ['target']);
+    assert.ok(payload.targets[0].trace.length);
+    return validReply(s);
+  }});
+  const result = await c.analyzeUnresolved(s, {reason:'enabled'});
+  assert.equal(result.requested, 1); assert.equal(result.failures, 0);
+  assert.equal(result.hints[0].contextLimited, true);
+  assert.equal((await c.restore(s)).cached, 1);
+  assert.equal((await c.restore(makeSnapshot(text.replace('CB cb=target', 'CB cb=other')))).cached, 0);
+  assert.equal(requests, 1, 'invalidated cache must not trigger a new request during restore');
+}));
+
+test('local shortlists reject replies naming a function outside the local candidates', async () => temporary(async cacheDir => {
+  const text = `struct Ops{void(*read)(void);};void target(void){}void other(void){}
+    struct Ops table={.read=target};void run(void){struct Ops*p=&table;p->read();}`;
+  const files = analyzer.derive([{...analyzer.analyze('file:///local.c', text), expandMacros:false}], () => false, undefined, false);
+  const s = {generation:1, settingsKey:'local', files}, context = callbackContexts(files)[0];
+  const other = files[0].symbols.find(symbol => symbol.name === 'other')!;
+  const c = controller(cacheDir, {modelKey:'local-model', complete:async () => JSON.stringify({status:'candidates',
+    candidates:[{targetId:other.id, evidenceIds:context.targets[0].evidenceIds, reason:'Nearby name'}]})});
+  const result = await c.analyzeUnresolved(s, {reason:'enabled'});
+  assert.equal(result.failures, 1);
+  assert.equal(result.hints.length, 0);
+  assert.equal((await c.restore(s)).cached, 0);
+}));
+
+test('missing local evidence falls back to source search without inventing a bridge', () => {
+  const s = snapshot();
+  const context = callbackContexts(s.files)[0];
+  assert.equal(context.selection, 'source-search');
+  assert.ok(context.targets.some(target => target.name === 'target'));
+  assert.ok(context.snippets.some(snippet => snippet.text.includes('configure(void){init(get_ops())')));
+});

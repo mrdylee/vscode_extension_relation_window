@@ -64,6 +64,15 @@ Relevant source snippets are sent to Copilot's service; account usage limits and
 organization policies apply. Dynsight does not inherit Copilot chat history or
 Agent search. It selects bounded source evidence from the local index.
 
+When local registration and data-flow analysis has candidates, Dynsight first
+selects up to eight of them and asks Copilot to review their evidence. This path
+supplies at most ten source snippets and 8,000 source characters, including bounded
+getter/caller context when available. When no local candidate is available, it
+uses the broader source search. Local shortlists are incomplete and count as
+**Context limited**; a negative reply only describes the offered candidates.
+Prompt-format changes invalidate old AI results. Startup still makes no new
+requests; use **Analyze Callbacks with Copilot** to refresh missing results.
+
 - Unchanged startup, navigation and normal **Rebuild index** only reuse AI cache.
 - Saved changes can analyze unresolved callbacks, up to five new requests per
   batch. No requests are made during unsaved editing. Diagnostics shows requests,
