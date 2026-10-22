@@ -70,9 +70,22 @@ export type PreprocessorEvent =
   | { kind: 'undef'; location: Location; conditions: string[]; name: string }
   | { kind: 'include'; location: Location; conditions: string[]; path: string; system: boolean };
 export interface FunctionBody { id: string; location: Location; body: Location }
+export interface CallbackProgress {
+  stage: 'setup' | 'initializers' | 'propagation' | 'registrations';
+  elapsedMs: number; round: number; maxRounds: number;
+  functionsDone: number; functionsTotal: number; evaluations: number;
+  symbol?: string; scopeElapsedMs: number; scopeEvaluations: number;
+  outcome?: 'completed' | 'time' | 'memory' | 'work' | 'cancelled' | 'limited';
+  cached?: boolean;
+}
+export interface CallbackAnalysisOptions {
+  shouldCancel?: () => boolean;
+  onProgress?: (progress: CallbackProgress) => void;
+  now?: () => number;
+}
 export interface CallbackDiagnostic {
-  kind: 'memory' | 'time' | 'work' | 'mutation' | 'loop' | 'array' | 'propagation';
-  stage: 'setup' | 'initializers' | 'propagation';
+  kind: 'memory' | 'time' | 'work' | 'mutation' | 'loop' | 'array' | 'propagation' | 'cancelled';
+  stage: 'setup' | 'initializers' | 'propagation' | 'registrations';
   message: string; location?: Location; symbol?: string;
   elapsedMs: number; scopeElapsedMs: number;
   evaluations: number; scopeEvaluations: number; slots?: number;

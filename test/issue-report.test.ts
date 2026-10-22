@@ -63,11 +63,15 @@ test('browser URL is fixed and never carries diagnostic data or requires a templ
 test('cache and AI diagnostics expose bounded counters without model names or source data', () => {
   const value = input();
   value.diagnostics.index = { sessionStartedAt: now, rebuildCount: 0, sourceParses: 0, relationPasses: 0, rebuilds: [],
-    cache: { state: 'restored', restored: 196, saved: 196 } };
+    cache: { state: 'restored', restored: 196, saved: 196 }, callbackAnalysis: { running: true, paused: false,
+      progress: { stage: 'propagation', elapsedMs: 12000, round: 2, maxRounds: 12, functionsDone: 10, functionsTotal: 100,
+        evaluations: 500, symbol: 'SECRET_CURRENT_FUNCTION', scopeElapsedMs: 7000, scopeEvaluations: 80 } } };
   value.diagnostics.copilot = { state: 'model-selection-required', requests: 5, cacheHits: 7, remaining: 2, failures: 1,
     candidates: 3, notFound: 4, contextLimited: 2, model: 'SECRET_MODEL', prompt: 'SECRET_SOURCE' } as any;
   const report = createIssueReport(value), data = JSON.parse(report.split('```json\n')[1].split('\n```')[0]);
   assert.equal(data.diskCache.restored, 196);
+  assert.equal(data.localAnalysis.scopeElapsedMs, 7000);
+  assert.doesNotMatch(report, /SECRET_CURRENT_FUNCTION/);
   assert.equal(data.copilot.state, 'model-selection-required');
   assert.equal(data.copilot.requests, 5);
   assert.equal(data.copilot.contextLimited, 2);

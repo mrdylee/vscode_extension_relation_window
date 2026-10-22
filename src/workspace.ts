@@ -3,7 +3,7 @@ import { Worker } from 'node:worker_threads';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { ANALYSIS_CACHE_VERSION, CacheIncompatibility } from './analysis-cache';
-import { FileAnalysis } from './model';
+import { CallbackProgress, FileAnalysis } from './model';
 import { RelationIndex } from './relations';
 import { Minimatch } from 'minimatch';
 import { getHeapStatistics } from 'node:v8';
@@ -34,6 +34,9 @@ export class WorkspaceIndex implements vscode.Disposable {
   private revision = 0;
   private derivedRevision = -1;
   private deriving?: Promise<void>;
+  private analysisPaused = false;
+  private activeAnalysis?: { id: number; cancellation: Int32Array };
+  private callbackProgress?: CallbackProgress;
   private indexing = false;
   private jobs = new Set<Promise<void>>();
   private timers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -49,12 +52,13 @@ export class WorkspaceIndex implements vscode.Disposable {
   private indexDiagnostics: IndexDiagnostics = { sessionStartedAt: Date.now(), rebuildCount: 0, sourceParses: 0, relationPasses: 0, rebuilds: [] };
   copilotDiagnostics?: Diagnostics['copilot'];
   get generation() { return this.revision; }
-  get stable() { return !this.disposed && !this.cacheBlocked && !this.workerError && !this.indexing && !this.jobs.size && !this.timers.size && this.derivedRevision === this.revision; }
+  get stable() { return !this.disposed && !this.analysisPaused && !this.cacheBlocked && !this.workerError && !this.indexing && !this.jobs.size && !this.timers.size && this.derivedRevision === this.revision; }
   get hasDirtySources() { return vscode.workspace.textDocuments.some(doc => !doc.isClosed && doc.isDirty && this.eligible(doc.uri)); }
   get copilotWaitReason(): CopilotWaitReason | undefined {
     if (this.disposed) return 'closed';
     if (this.cacheBlocked) return 'cache-rebuild-required';
     if (this.workerError) return 'worker-unavailable';
+    if (this.analysisPaused) return 'analysis-paused';
     if (this.failures.has('derived')) return 'analysis-failed';
     if (this.hasDirtySources) return 'unsaved-sources';
     if (this.indexing) return 'indexing';
@@ -68,7 +72,8 @@ export class WorkspaceIndex implements vscode.Disposable {
       host: { at: Date.now(), heapUsed: heap.used_heap_size, heapLimit: heap.heap_size_limit, external: heap.external_memory },
       copilot: this.copilotDiagnostics?.state === 'waiting-for-saved-index'
         ? { ...this.copilotDiagnostics, waitReason: this.copilotWaitReason } : this.copilotDiagnostics,
-      index: { ...this.indexDiagnostics, cache: this.indexDiagnostics.cache && { ...this.indexDiagnostics.cache }, rebuilds: this.indexDiagnostics.rebuilds.map(record => ({ ...record,
+      index: { ...this.indexDiagnostics, callbackAnalysis: { paused: this.analysisPaused, running: !!this.activeAnalysis,
+        progress: this.callbackProgress }, cache: this.indexDiagnostics.cache && { ...this.indexDiagnostics.cache }, rebuilds: this.indexDiagnostics.rebuilds.map(record => ({ ...record,
         files: record.files ? { ...record.files } : undefined })) },
       worker: this.workerDiagnostics, workerError: this.workerError
         ? [(this.workerError as NodeJS.ErrnoException).code, this.workerError.message].filter(Boolean).join(': ') : undefined };
@@ -84,9 +89,13 @@ export class WorkspaceIndex implements vscode.Disposable {
     const assets = path.join(this.extensionPath, 'dist');
     const worker = new Worker(path.join(assets, 'analysis-worker.cjs'), { workerData: { assets } });
     this.worker = worker; this.workerError = undefined; this.workerDiagnostics = undefined;
-    worker.on('message', ({ id, result, error, type, diagnostics }) => {
+    worker.on('message', ({ id, result, error, type, diagnostics, progress, requestId }) => {
       if (this.disposed || this.worker !== worker) return;
       if (type === 'diagnostics') { this.workerDiagnostics = diagnostics; this.diagnosticsChanged.fire(); return; }
+      if (type === 'callback-progress') {
+        if (requestId === this.activeAnalysis?.id) { this.callbackProgress = progress; this.diagnosticsChanged.fire(); }
+        return;
+      }
       const request = this.requests.get(id);
       this.requests.delete(id);
       if (error) request?.reject(new Error(error)); else request?.resolve(result);
@@ -117,6 +126,7 @@ export class WorkspaceIndex implements vscode.Disposable {
         const settings = ['skipInactive', 'include', 'exclude', 'macroExpansionFolders'].filter(key => event.affectsConfiguration(`dynsight.${key}`));
         if (settings.length) { this.sourceChanged.fire('configuration'); void this.reconcile(); }
         else if (event.affectsConfiguration('dynsight.analyzeCallbacks')) {
+          this.cancelActiveAnalysis(); this.analysisPaused = false;
           this.sourceChanged.fire('configuration'); this.revision++;
           void (async () => { if (this.storagePath) await this.initCache(); await this.derive(); })();
         }
@@ -224,6 +234,7 @@ export class WorkspaceIndex implements vscode.Disposable {
     return this.saving;
   }
   private reconcile() {
+    this.cancelActiveAnalysis();
     const epoch = ++this.epoch;
     this.indexing = true; this.scopes.clear(); this.cacheBlocked = false;
     this.reconciling = (async () => {
@@ -263,6 +274,7 @@ export class WorkspaceIndex implements vscode.Disposable {
       !scope.excluded.some(matcher => matcher.match(relative));
   }
   private remove(uri: vscode.Uri) {
+    this.cancelActiveAnalysis();
     const key = uri.toString();
     this.deleted.add(key);
     this.versions.set(key, (this.versions.get(key) ?? 0) + 1);
@@ -318,6 +330,8 @@ export class WorkspaceIndex implements vscode.Disposable {
       const options = this.options(uri);
       if (this.rawVersions.has(key) && this.index.files.get(key)?.text === text && this.rawOptions.get(key) === JSON.stringify(options)) return;
       if (text.length > 2_000_000) throw new Error('File exceeds the 2,000,000 character analysis limit');
+      // Ignore duplicate watcher/close events before interrupting a live pass.
+      this.cancelActiveAnalysis();
       // Once dispatched, the Worker may hold this input even if its response is
       // superseded. Do not reuse the old host text until a new result is accepted.
       this.rawVersions.delete(key);
@@ -346,6 +360,8 @@ export class WorkspaceIndex implements vscode.Disposable {
   }
   private completedStatus() {
     if (this.workerError) return this.status;
+    if (this.analysisPaused || [...this.index.files.values()].some(file => file.callbackDiagnostics?.some(diagnostic => diagnostic.kind === 'cancelled')))
+      return 'Partial index: local analysis paused. Resume local analysis to retry.';
     if (this.failures.has('derived')) return 'Partial index: call analysis failed. See Analysis notices.';
     if ([...this.failures.values()].some(error => error.includes('memory budget')) ||
       [...this.index.files.values()].some(file => file.issues.some(issue => issue.includes('memory budget'))))
@@ -358,14 +374,22 @@ export class WorkspaceIndex implements vscode.Disposable {
   }
   private derive(): Promise<void> {
     if (this.deriving) return this.deriving;
-    if (this.disposed || this.cacheBlocked || this.workerError || this.indexing || this.jobs.size || this.timers.size) return Promise.resolve();
+    if (this.disposed || this.analysisPaused || this.cacheBlocked || this.workerError || this.indexing || this.jobs.size || this.timers.size) return Promise.resolve();
     if (this.derivedRevision === this.revision) return this.saveCache().then(() => this.settled.fire());
     this.deriving = (async () => {
-      while (!this.disposed && !this.indexing && !this.jobs.size && !this.timers.size && this.derivedRevision !== this.revision) {
+      while (!this.disposed && !this.analysisPaused && !this.indexing && !this.jobs.size && !this.timers.size && this.derivedRevision !== this.revision) {
         const revision = this.revision;
         this.indexDiagnostics.relationPasses++;
         const versions = this.workerVersions();
-        const result = await this.request<{ stale: boolean; files: FileAnalysis[]; versions: [string, number][] }>({ type: 'derive', versions, analyzeCallbacks: this.analyzeCallbacks }).promise;
+        const cancellation = new Int32Array(new SharedArrayBuffer(4));
+        this.callbackProgress = undefined;
+        const request = this.request<{ stale: boolean; files: FileAnalysis[]; versions: [string, number][] }>({ type: 'derive', versions,
+          analyzeCallbacks: this.analyzeCallbacks, cancellation: cancellation.buffer });
+        this.activeAnalysis = { id: request.id, cancellation };
+        this.status = 'Resolving calls and callbacks…'; this.changed.fire(); this.diagnosticsChanged.fire();
+        let result;
+        try { result = await request.promise; }
+        finally { if (this.activeAnalysis?.id === request.id) this.activeAnalysis = undefined; this.diagnosticsChanged.fire(); }
         if (this.disposed || revision !== this.revision) continue;
         if (result.stale) throw new Error('Analysis input changed unexpectedly. Rebuild index to retry.');
         for (const file of result.files) this.index.update(file);
@@ -382,7 +406,23 @@ export class WorkspaceIndex implements vscode.Disposable {
     }).finally(async () => { this.deriving = undefined; await this.saveCache(); this.settled.fire(); });
     return this.deriving;
   }
+  private cancelActiveAnalysis() {
+    if (this.activeAnalysis) Atomics.store(this.activeAnalysis.cancellation, 0, 1);
+  }
+  stopAnalysis() {
+    if (!this.activeAnalysis) return;
+    this.analysisPaused = true; this.cancelActiveAnalysis();
+    this.sourceChanged.fire('configuration');
+    this.status = 'Stopping local analysis…'; this.changed.fire(); this.diagnosticsChanged.fire();
+  }
+  async resumeAnalysis() {
+    if (this.disposed || this.cacheBlocked || this.workerError) return;
+    this.analysisPaused = false; this.revision++;
+    this.sourceChanged.fire('configuration');
+    await this.deriving; await this.derive();
+  }
   async reindex(reason: RebuildReason = 'command', settings?: string[]) {
+    this.cancelActiveAnalysis(); this.analysisPaused = false;
     this.sourceChanged.fire('configuration');
     const record: RebuildRecord = { number: ++this.indexDiagnostics.rebuildCount, at: Date.now(), reason, settings, outcome: 'running' };
     this.indexDiagnostics.rebuilds.push(record);
@@ -479,7 +519,7 @@ export class WorkspaceIndex implements vscode.Disposable {
       await Promise.all([...this.jobs]);
       await this.reconciling; await this.saving;
       await this.derive();
-      if (this.disposed || this.cacheBlocked || this.workerError || this.failures.has('derived')) break;
+      if (this.disposed || this.analysisPaused || this.cacheBlocked || this.workerError || this.failures.has('derived')) break;
       if (this.jobs.size || this.timers.size || this.indexing) await new Promise(r => setTimeout(r, 30));
     }
   }

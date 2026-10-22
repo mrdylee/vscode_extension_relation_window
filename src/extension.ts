@@ -29,6 +29,8 @@ export async function activate(context: vscode.ExtensionContext) {
       view.track(vscode.window.activeTextEditor);
     }),
     vscode.commands.registerCommand('dynsight.reindex', () => workspace.reindex()),
+    vscode.commands.registerCommand('dynsight.stopLocalAnalysis', () => workspace.stopAnalysis()),
+    vscode.commands.registerCommand('dynsight.resumeLocalAnalysis', () => workspace.resumeAnalysis()),
     vscode.commands.registerCommand('dynsight.selectMacroExpansionFolders', () => selectMacroExpansionFolders().catch(error =>
       vscode.window.showErrorMessage(`Could not save macro expansion folders: ${String(error)}`))),
     vscode.commands.registerCommand('dynsight.openSettings', () => vscode.commands.executeCommand(

@@ -19,8 +19,8 @@ export class IncrementalAnalysis {
         previous.results.forEach(file => results.set(file.uri, file));
       } else inputs.forEach(file => dirty.add(file));
     }
-    // One batch retains the existing project time/work budget. Deriving each
-    // dirty component separately would silently multiply that budget.
+    // Keep dirty components in one batch so project work/convergence limits
+    // are not multiplied by the number of components.
     if (dirty.size || !files.length) {
       const fresh = derive(files.filter(file => dirty.has(file)));
       fresh.forEach(file => results.set(file.uri, file));
@@ -48,8 +48,8 @@ export class IncrementalAnalysis {
   clear(): void { this.cached.clear(); this.facts = new WeakMap(); }
 
   private limited(files: FileAnalysis[]): boolean {
-    return files.some(file => file.callbackDiagnostics?.some(diagnostic => ['memory', 'time', 'work'].includes(diagnostic.kind)) ||
-      file.issues.some(issue => /memory budget|analysis (?:time )?budget|work limit/i.test(issue)));
+    return files.some(file => file.callbackDiagnostics?.some(diagnostic => ['memory', 'time', 'work', 'cancelled'].includes(diagnostic.kind)) ||
+      file.issues.some(issue => /memory budget|analysis (?:time )?budget|work limit|analysis cancelled/i.test(issue)));
   }
 
   private dependencies(file: FileAnalysis): Facts {

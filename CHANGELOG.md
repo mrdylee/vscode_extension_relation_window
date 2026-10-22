@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.70 — 2026-10-22
+
+- Remove the project-wide 10-second callback cutoff. Show the current function's
+  elapsed time, reset it at each function visit, and highlight visits taking at
+  least five seconds without interrupting them automatically.
+- Add Stop Local Analysis and Resume Local Analysis commands, plus Stop/Retry
+  controls in the footer. Shared cancellation reaches the busy Worker during
+  callback and macro analysis; retain found targets as incomplete after stopping.
+- Retry cancelled/transient analysis instead of reusing partial project caches.
+  Migrate old fixed-deadline disk caches by reusing parsed sources and recomputing
+  relationships. Keep existing memory, work and convergence protections.
+- Observe Stop during final registration-candidate collection too, retaining
+  collected facts without caching partial output. Report cancellation instead of
+  the removed time-budget reason, including stops at the propagation boundary.
+
 ## 0.1.69 — 2026-10-22
 
 - Separate address-selection dependencies from pointed-to data so dynamic or

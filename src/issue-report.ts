@@ -72,11 +72,21 @@ export function createIssueReport(input: IssueReportInput): string {
       macroFolderModes: Object.fromEntries(['all', 'selected', 'none'].map(mode => [mode, scopes.filter(s => s.macroMode === mode).length])) },
     noticeCount: state.issues.length, notices,
     callbackLimits: (state.callbackDiagnostics ?? []).slice(0, 64).map(detail => ({
-      kind: choice(detail.kind, ['memory', 'time', 'work', 'mutation', 'loop', 'array', 'propagation']),
-      stage: choice(detail.stage, ['setup', 'initializers', 'propagation']), located: !!detail.location,
+      kind: choice(detail.kind, ['memory', 'time', 'work', 'mutation', 'loop', 'array', 'propagation', 'cancelled']),
+      stage: choice(detail.stage, ['setup', 'initializers', 'propagation', 'registrations']), located: !!detail.location,
       elapsedMs: number(detail.elapsedMs), scopeElapsedMs: number(detail.scopeElapsedMs),
       evaluations: number(detail.evaluations), scopeEvaluations: number(detail.scopeEvaluations), slots: number(detail.slots)
     })),
+    localAnalysis: index?.callbackAnalysis ? {
+      paused: index.callbackAnalysis.paused, running: index.callbackAnalysis.running,
+      stage: choice(index.callbackAnalysis.progress?.stage ?? '', ['setup', 'initializers', 'propagation', 'registrations']),
+      outcome: choice(index.callbackAnalysis.progress?.outcome ?? '', ['completed', 'memory', 'work', 'cancelled', 'limited']),
+      elapsedMs: number(index.callbackAnalysis.progress?.elapsedMs),
+      scopeElapsedMs: number(index.callbackAnalysis.progress?.scopeElapsedMs),
+      scopeEvaluations: number(index.callbackAnalysis.progress?.scopeEvaluations),
+      round: number(index.callbackAnalysis.progress?.round), functionsDone: number(index.callbackAnalysis.progress?.functionsDone),
+      functionsTotal: number(index.callbackAnalysis.progress?.functionsTotal)
+    } : null,
     workerError: diagnostics.workerError ? noticeKind(diagnostics.workerError) : 'none',
     diskCache: index?.cache ? { state: choice(index.cache.state, ['disabled', 'checking', 'restored', 'updated', 'missing', 'incompatible', 'invalid', 'deferred', 'error']),
       reason: choice(index.cache.reason ?? '', ['analysis-version', 'workspace-settings', 'legacy-format']),

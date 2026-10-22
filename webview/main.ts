@@ -34,6 +34,37 @@ graph.addEventListener('dblclick', event => {
 const graphHeader = el('div', 'pane-heading');
 const candidates = el('div', 'candidates');
 const footer = el('footer');
+const localProgress = el('span', 'local-progress');
+const localText = el('span');
+const localStop = button('Stop local', () => send('localStop'), 'Stop local analysis and keep incomplete results');
+const localRetry = button('Retry local', () => send('localResume'), 'Retry local analysis using parsed sources');
+localProgress.append(localText, localStop, localRetry);
+let localDiagnostics: Diagnostics | undefined, localSampleAt = 0, localSample = '';
+function renderLocal(diagnostics?: Diagnostics, tick = false) {
+  const analysis = diagnostics?.index?.callbackAnalysis, progress = analysis?.progress;
+  if (!tick) {
+    localDiagnostics = diagnostics;
+    const sample = JSON.stringify([analysis?.running, analysis?.paused, progress]);
+    if (sample !== localSample) { localSample = sample; localSampleAt = Date.now(); }
+  }
+  const sinceSample = analysis?.running ? Math.max(0, Date.now() - localSampleAt) : 0;
+  const scopeMs = (progress?.scopeElapsedMs ?? 0) + sinceSample;
+  localStop.hidden = !analysis?.running; localRetry.hidden = true;
+  localText.classList.remove('warning');
+  localProgress.hidden = true;
+  if (analysis?.running) {
+    const label = progress?.symbol ? `Local · ${(scopeMs / 1000).toFixed(1)}s${scopeMs >= 5000 ? ' · Taking longer' : ''} · ${progress.symbol}` : 'Local analysis…';
+    localText.textContent = analysis.paused ? 'Stopping local analysis…' : label;
+    localText.classList.toggle('warning', scopeMs >= 5000 && !!progress?.symbol);
+    localText.title = `${progress?.symbol ?? 'Local analysis'} · ${progress?.stage === 'registrations' ? 'Registration candidates' : `Round ${progress?.round ?? 0}/${progress?.maxRounds ?? 12}`} · ${progress?.functionsDone ?? 0}/${progress?.functionsTotal ?? 0} functions · ${progress?.scopeEvaluations ?? 0} ${progress?.stage === 'registrations' ? 'checks' : 'evaluations'} in current function. Timer resets for each function; no automatic time cutoff.`;
+    localStop.disabled = analysis.paused; localProgress.hidden = false;
+  } else if (analysis?.paused || progress?.outcome === 'cancelled' || progress?.outcome === 'time') {
+    localText.textContent = analysis?.paused || progress?.outcome === 'cancelled' ? 'Local analysis paused' : 'Local analysis needs retry';
+    localText.classList.add('warning'); localText.title = '';
+    localRetry.hidden = false; localProgress.hidden = false;
+  }
+}
+if (!contextOnly) setInterval(() => { if (localDiagnostics?.index?.callbackAnalysis?.running) renderLocal(localDiagnostics, true); }, 500);
 const copilotProgress = el('div', 'copilot-progress'); copilotProgress.hidden = true;
 function renderCopilot(ai: Diagnostics['copilot']) {
   copilotProgress.hidden = !ai;
@@ -482,6 +513,7 @@ function render(state: ViewState) {
   const indexStatus = el('span', 'index-status', `${state.status} · ${state.fileCount} files`);
   indexStatus.title = indexStatus.textContent ?? '';
   footer.replaceChildren(indexStatus);
+  footer.append(localProgress); renderLocal(state.diagnostics);
   footer.append(copilotProgress); renderCopilot(state.diagnostics?.copilot);
   diagnostics?.update(state.diagnostics, state);
   if (state.issues.length) {
@@ -492,7 +524,7 @@ function render(state: ViewState) {
   footer.append(button('Diagnostics', () => diagnostics?.open(), 'Show memory measurements for a screenshot'));
 }
 window.addEventListener('message', event => {
-  if (event.data?.type === 'diagnostics') { diagnostics?.update(event.data.diagnostics); renderCopilot(event.data.diagnostics?.copilot); }
+  if (event.data?.type === 'diagnostics') { diagnostics?.update(event.data.diagnostics); renderCopilot(event.data.diagnostics?.copilot); renderLocal(event.data.diagnostics); }
   if (event.data?.type === 'state' && !contextOnly) render(event.data.state);
   if (event.data?.type === 'context' && contextOnly) renderContext(event.data.context);
 });

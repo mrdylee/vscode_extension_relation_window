@@ -14,6 +14,18 @@ function project(sources: Record<string, string>) {
 }
 const calls = (index: RelationIndex, name = 'run') => index.relations(index.symbols().find(s => s.name === name && s.kind === 'function' && s.definition)!.id, 'callees');
 
+test('Stop interrupts macro expansion without retaining a cancelled macro cache', () => {
+  const text = '#define CALL target()\nvoid target(void){}void run(void){' + 'CALL;'.repeat(800) + '}';
+  const raw = analyzer.analyze('file:///manual-stop/macros.c', text);
+  let checks = 0;
+  const stopped = analyzer.derive([raw], undefined, undefined, true, { shouldCancel: () => ++checks > 8 });
+  assert.ok(stopped[0].issues.some(issue => issue.startsWith('Macro analysis cancelled')));
+  assert.ok(stopped[0].callbackDiagnostics?.some(detail => detail.kind === 'cancelled'));
+  const retried = analyzer.derive([raw]);
+  assert.ok(!retried[0].issues.some(issue => /cancelled/.test(issue)));
+  assert.ok(retried[0].references.some(ref => ref.kind === 'call' && ref.name === 'target' && ref.callKind === 'expanded'));
+});
+
 test('expanded local declarations with GNU attributes retain callback initialization and source mapping', () => {
   const source = '#define LOCAL static struct Ops slot __attribute__((section(".data")))={target}\n' +
     'struct Ops{void(*cb)(void);};void target(void){}void run(void){LOCAL;slot.cb();}';

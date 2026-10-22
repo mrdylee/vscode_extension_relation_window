@@ -1,4 +1,4 @@
-import { CallbackDiagnostic, FileAnalysis, FlowExpression as Expr, FlowLocal, FlowProgram, FlowStatement, Location, ReferenceRecord, SymbolRecord } from './model';
+import { CallbackAnalysisOptions, CallbackProgress, CallbackDiagnostic, FileAnalysis, FlowExpression as Expr, FlowLocal, FlowProgram, FlowStatement, Location, ReferenceRecord, SymbolRecord } from './model';
 import { RelationIndex } from './relations';
 import { FunctionArguments } from './function-arguments';
 
@@ -34,7 +34,7 @@ function coalesceObjects(objects: ReadonlySet<string>): ReadonlySet<string> {
   if (!patterns.length) return objects;
   return new Set([...objects].filter(object => !patterns.some(other => other.object !== object && other.pattern.test(object))));
 }
-const projectCache = new WeakMap<object, { inputs: FileAnalysis[]; results: FileAnalysis[]; analyzeCallbacks: boolean; memoryLimited?: boolean }>();
+const projectCache = new WeakMap<object, { inputs: FileAnalysis[]; results: FileAnalysis[]; analyzeCallbacks: boolean; memoryLimited?: boolean; progress?: CallbackProgress }>();
 const callbackMemoryLimit = 'Callback analysis memory budget reached; targets may be incomplete. Narrow Include/Exclude scope.';
 const fileCaches = new WeakMap<object, WeakMap<FileAnalysis, { fingerprint: string; result: FileAnalysis }>>();
 export function clearPointerCache(owner: object) { projectCache.delete(owner); fileCaches.delete(owner); }
@@ -151,12 +151,16 @@ function uniqueCalls(refs: ReferenceRecord[]): ReferenceRecord[] {
 }
 
 // Static may-target propagation. Every produced edge is labelled as inferred.
-export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => boolean, owner: object = files[0], analyzeCallbacks = true): FileAnalysis[] {
+export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => boolean, owner: object = files[0], analyzeCallbacks = true, options: CallbackAnalysisOptions = {}): FileAnalysis[] {
   if (!files.length) { if (owner) clearPointerCache(owner); return files; }
+  const now = options.now ?? (() => performance.now());
   const cached = projectCache.get(owner);
   if (cached && cached.analyzeCallbacks !== analyzeCallbacks) clearPointerCache(owner);
-  if (cached && cached.analyzeCallbacks === analyzeCallbacks && cached.inputs.length === files.length && files.every((file, n) => file === cached.inputs[n]) &&
-    (!cached.memoryLimited || memoryPressure?.())) return cached.results;
+  if (cached && cached.analyzeCallbacks === analyzeCallbacks && !options.shouldCancel?.() && cached.inputs.length === files.length && files.every((file, n) => file === cached.inputs[n]) &&
+    (!cached.memoryLimited || memoryPressure?.())) {
+    if (cached.progress) options.onProgress?.({ ...cached.progress, elapsedMs: 0, cached: true });
+    return cached.results;
+  }
   let fileCache = fileCaches.get(owner);
   if (!fileCache) fileCaches.set(owner, fileCache = new WeakMap());
   const index = new RelationIndex(); files.forEach(file => index.update(file));
@@ -166,7 +170,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
   const references = analyzeCallbacks ? files.flatMap(file => file.references.filter(ref => ref.kind === 'call' && ref.flowKey)) : [];
   const localNames = new Set(programs.flatMap(program => program.locals.map(local => local.name)));
   const memoryLimited = analyzeCallbacks && memoryPressure?.() === true;
-  if (!analyzeCallbacks || memoryLimited || !references.some(ref => ref.indirect || localNames.has(ref.name) || index.resolveReference(ref).some(s => s.kind === 'variable'))) {
+  if (!analyzeCallbacks || memoryLimited || (!options.shouldCancel?.() && !references.some(ref => ref.indirect || localNames.has(ref.name) || index.resolveReference(ref).some(s => s.kind === 'variable')))) {
     const results = files.map(file => {
       const references = uniqueCalls(file.references), argumentsFound = functionArguments.forFile(file.uri);
       const warnings = memoryLimited && file === files[0] ? [callbackMemoryLimit] : [];
@@ -179,12 +183,25 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
         functionArguments: argumentsFound.length ? argumentsFound : undefined };
       fileCache!.set(file, { fingerprint, result }); return result;
     });
-    projectCache.set(owner, { inputs: files, results, analyzeCallbacks, memoryLimited }); return results;
+    const progress: CallbackProgress = { stage: 'setup', elapsedMs: 0, round: 0, maxRounds: 12, functionsDone: 0,
+      functionsTotal: byFunction.size, evaluations: 0, scopeElapsedMs: 0, scopeEvaluations: 0, outcome: memoryLimited ? 'memory' : 'completed' };
+    options.onProgress?.(progress);
+    projectCache.set(owner, { inputs: files, results, analyzeCallbacks, memoryLimited, progress }); return results;
   }
   const heap = new Map<string, Value>(), summaries = new Map<string, Summary>();
-  const started = performance.now(), deadline = started + 10_000;
+  const started = now();
   let activeSymbol: SymbolRecord | undefined, currentLocation: Location | undefined;
   let stage: CallbackDiagnostic['stage'] = 'setup', evaluations = 0, functionStart = started, functionStartEvaluations = 0;
+  let roundNumber = 0, functionsDone = 0, lastProgress = -Infinity;
+  function progress(force = false, outcome?: CallbackProgress['outcome']) {
+    const at = now();
+    const value: CallbackProgress = { stage, elapsedMs: Math.max(0, Math.round(at - started)), round: roundNumber, maxRounds: 12,
+      functionsDone, functionsTotal: byFunction.size, evaluations, outcome, symbol: activeSymbol?.name,
+      scopeElapsedMs: activeSymbol ? Math.max(0, Math.round(at - functionStart)) : 0,
+      scopeEvaluations: activeSymbol ? evaluations - functionStartEvaluations : 0 };
+    if (force || at - lastProgress >= 500) { lastProgress = at; options.onProgress?.(value); }
+    return value;
+  }
   const details = new Map<string, CallbackDiagnostic>();
   const omitted = new Set<string>();
   const costs = new Map<string, NonNullable<CallbackDiagnostic['costs']>[number]>();
@@ -195,13 +212,13 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     const key = `${message}:${stage}:${activeSymbol?.id ?? ''}`;
     if (details.has(key)) return;
     if (details.size >= 64) { omitted.add(message); return; }
-    const now = performance.now();
-    const kind: CallbackDiagnostic['kind'] = message.includes('memory') ? 'memory' : message.includes('10 seconds') ? 'time'
+    const at = now();
+    const kind: CallbackDiagnostic['kind'] = message.includes('cancelled') ? 'cancelled' : message.includes('memory') ? 'memory' : message.startsWith('Callback analysis budget:') ? 'time'
       : message.includes('work limit') ? 'work' : message.includes('mutation') ? 'mutation' : message.includes('loop') ? 'loop'
       : message.includes('array') ? 'array' : 'propagation';
     details.set(key, { kind, stage, message, symbol: activeSymbol?.name,
       location: currentLocation ?? activeSymbol?.location,
-      elapsedMs: Math.max(0, Math.round(now - started)), scopeElapsedMs: activeSymbol ? Math.max(0, Math.round(now - functionStart)) : 0,
+      elapsedMs: Math.max(0, Math.round(at - started)), scopeElapsedMs: activeSymbol ? Math.max(0, Math.round(at - functionStart)) : 0,
       evaluations, scopeEvaluations: activeSymbol ? evaluations - functionStartEvaluations : 0, slots, storage: storage?.() });
   }
   function storageDetail(operation: NonNullable<CallbackDiagnostic['storage']>['operation'], keys: Iterable<string>, omitted: string, retained: number) {
@@ -231,11 +248,10 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
   let changed = false, steps = 0;
   let timedOut = false, checks = 0;
   function expired(force = false) {
+    if (!timedOut && options.shouldCancel?.()) { timedOut = true; notice('Callback analysis cancelled; targets may be incomplete. Resume local analysis to retry.'); }
     if (!timedOut && (force || (++checks & 255) === 0)) {
       if (memoryPressure?.()) { timedOut = true; notice(callbackMemoryLimit); }
-      else if (performance.now() >= deadline) {
-        timedOut = true; notice('Callback analysis budget: 10 seconds; targets may be incomplete. Narrow Include/Exclude scope.');
-      }
+      if (options.onProgress) progress();
     }
     return timedOut;
   }
@@ -832,7 +848,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
   }
   function evaluate(expr: Expr, state: State, ctx: Context): Value {
     currentLocation = expr.location; evaluations++;
-    if (expired()) return unknown(notices.has(callbackMemoryLimit) ? callbackMemoryLimit : 'Callback analysis time budget reached');
+    if (expired()) return unknown(notices.has(callbackMemoryLimit) ? callbackMemoryLimit : 'Callback analysis cancelled');
     if (++steps > 2_000_000) { notice('Callback analysis work limit reached'); return unknown('Callback analysis work limit'); }
     if (expr.kind === 'number') {
       const text = expr.value.replace(/[uUlL]+$/, ''), n = /^0[0-7]+$/.test(text) ? parseInt(text, 8) : Number(text);
@@ -1030,8 +1046,13 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
   const globalProgram: FlowProgram = { id: 'global', locals: [], params: [], body: [] };
   const persistent = new Map(programs.flatMap(program => program.locals.filter(local => local.persistent).map(local => [local.id, local] as const)));
   const globalContext: Context = { program: globalProgram, locals: persistent, exits: [], returned: blank() };
-  for (const program of programs) collectBodyReads(program.body, { program, locals: new Map(program.locals.map(local => [local.id, local])), exits: [], returned: blank() });
+  progress(true);
+  for (const program of programs) {
+    if (expired()) break;
+    collectBodyReads(program.body, { program, locals: new Map(program.locals.map(local => [local.id, local])), exits: [], returned: blank() });
+  }
   for (const file of files) for (const init of file.initializers ?? []) {
+    if (expired()) break;
     const reads = collectReads(init.value, globalContext);
     linkScalar([init.id], reads);
     if (init.value.kind === 'address') linkScalar(reads, [init.id]);
@@ -1043,21 +1064,27 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
   scalarDependencies.clear();
   expired(true);
   stage = 'initializers';
+  progress(true);
   for (const file of files) for (const init of file.initializers ?? []) {
     if (timedOut) break;
     const local = persistent.get(init.id);
     const symbol = index.symbol(init.id) ?? (local && valueType({ kind: 'name', name: local.name, localId: local.id, location: local.location }, globalContext));
-    activeSymbol = symbol; currentLocation = init.location; functionStart = performance.now(); functionStartEvaluations = evaluations;
+    activeSymbol = symbol; currentLocation = init.location; functionStart = now(); functionStartEvaluations = evaluations;
     if (symbol) initializer(init.id, init.value, index.layout(symbol), { memory: new Map(), effects: new Map(), alive: true }, globalContext);
   }
   activeSymbol = undefined; currentLocation = undefined;
   stage = 'propagation';
   let converged = false;
+  let lastObservations = new Map<string, Observation>(), lastArguments = new Map<string, ArgumentObservation>();
   for (let round = 0; round < 12; round++) {
+    activeSymbol = undefined; currentLocation = undefined;
+    roundNumber = round + 1; functionsDone = 0; progress(true);
+    lastObservations = new Map(observations); lastArguments = new Map(argumentObservations);
     changed = false; observations.clear(); argumentObservations.clear(); steps = 0;
     for (const [id, list] of byFunction) {
       activeSymbol = index.symbol(id); currentLocation = activeSymbol?.location;
-      functionStart = performance.now(); functionStartEvaluations = evaluations;
+      functionStart = now(); functionStartEvaluations = evaluations;
+      progress(true);
       if (expired()) break;
       const exits: State[] = [], target = summaries.get(id)!; let returned = blank();
       let cost = costs.get(id);
@@ -1070,7 +1097,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
         [...previous.dependencies.shapes].every(([root, version]) => (heapShapes.get(root) ?? 0) === version)) {
         cost.cacheHits++;
         previous.observations.forEach((value, key) => observations.set(key, value));
-        previous.arguments.forEach((value, key) => argumentObservations.set(key, value)); continue;
+        previous.arguments.forEach((value, key) => argumentObservations.set(key, value)); functionsDone++; continue;
       }
       cost.runs++;
       const beforeParams = [...target.params];
@@ -1142,13 +1169,25 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
       completed.set(id, { dependencies, params: beforeParams, observations: new Map([...dependencies.observations].map(key => [key, observations.get(key)!])),
         arguments: new Map([...dependencies.arguments].map(key => [key, argumentObservations.get(key)!])) });
       cost.evaluations += evaluations - functionStartEvaluations;
-      cost.elapsedMs += Math.max(0, performance.now() - functionStart);
+      cost.elapsedMs += Math.max(0, now() - functionStart);
+      functionsDone++;
       dependencies = undefined;
     }
     if (timedOut) break;
     if (!changed) { converged = true; break; }
   }
   activeSymbol = undefined; currentLocation = undefined;
+  if (timedOut) {
+    for (const [key, previous] of lastObservations) {
+      const current = observations.get(key);
+      observations.set(key, current ? { ...current, value: union(previous.value, current.value) } : previous);
+    }
+    for (const [key, previous] of lastArguments) {
+      const current = argumentObservations.get(key);
+      if (!current) argumentObservations.set(key, previous);
+      else for (const [position, value] of previous.values) current.values.set(position, union(value, current.values.get(position) ?? blank()));
+    }
+  }
   if (!converged && !timedOut) notice('Callback propagation limit: 12 project passes; targets may be incomplete');
   // Attach once, after all measured runs (including a stopped run) have finished.
   // These are cumulative propagation costs, not the location of the first limit.
@@ -1160,7 +1199,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     functionArguments.add(observation.call, n, new Map([...value.targets].map(([id, chain]) => [id, frames([...chain, ...value.evidence])])),
       true, value.unknown || value.nil || !converged || projectIncomplete, [...new Set([...value.reasons, ...(projectIncomplete ? notices : [])])]);
   }
-  const warningFile = files.find(file => file.references.some(ref => ref.kind === 'call'))?.uri;
+  const warningFile = files.find(file => file.references.some(ref => ref.kind === 'call'))?.uri ?? files[0]?.uri;
   const results = files.map(file => {
     let modified = false; const refs: ReferenceRecord[] = [];
     for (const ref of file.references) {
@@ -1196,5 +1235,11 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     const result = { ...file, references: unique, issues: [...file.issues, ...warnings], callbackDiagnostics: diagnostics.length ? diagnostics : undefined, functionArguments: argumentsFound.length ? argumentsFound : undefined };
     fileCache!.set(file, { fingerprint, result }); return result;
   });
-  projectCache.set(owner, { inputs: files, results, analyzeCallbacks, memoryLimited: notices.has(callbackMemoryLimit) }); return results;
+  const kinds = new Set([...details.values()].map(detail => detail.kind));
+  const outcome: CallbackProgress['outcome'] = kinds.has('cancelled') ? 'cancelled' : kinds.has('time') ? 'time'
+    : kinds.has('memory') ? 'memory' : kinds.has('work') ? 'work' : notices.size ? 'limited' : 'completed';
+  const finalProgress = progress(true, outcome);
+  if (timedOut || [...notices].some(message => message.includes('work limit'))) projectCache.delete(owner);
+  else projectCache.set(owner, { inputs: files, results, analyzeCallbacks, progress: finalProgress });
+  return results;
 }

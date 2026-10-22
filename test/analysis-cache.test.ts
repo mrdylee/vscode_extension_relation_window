@@ -34,6 +34,29 @@ test('disk cache restores raw flow and partial derived notices after reopening',
   assert.equal(second.matches(['file:///main.c', 'file:///added.c']), false);
 }));
 
+test('old deadline caches retain parsed sources but recompute relationships under manual stop', async () => temporary(async directory => {
+  const cache = await AnalysisCache.open(directory, 'workspace-v1');
+  await cache.save([entry()]);
+  const filename = path.join(directory, 'manifest.json');
+  const manifest = JSON.parse(await readFile(filename, 'utf8'));
+  delete manifest.callbackPolicy;
+  await writeFile(filename, JSON.stringify(manifest));
+  const reopened = await AnalysisCache.open(directory, 'workspace-v1');
+  assert.equal(reopened.state, 'ready');
+  assert.ok(await reopened.restore('file:///main.c', entry().raw.text, true, false));
+  assert.equal(reopened.matches(['file:///main.c']), false);
+}));
+
+for (const issue of ['Callback analysis cancelled; targets may be incomplete.', 'Callback analysis budget: 10 seconds; targets may be incomplete'])
+test(`transient results retain raw input but are never validated as a finished cache: ${issue}`, async () => temporary(async directory => {
+  const cache = await AnalysisCache.open(directory, 'workspace-v1');
+  const record = entry(); record.derived = { ...record.derived, issues: [issue] };
+  await cache.save([record]);
+  const reopened = await AnalysisCache.open(directory, 'workspace-v1');
+  assert.ok(await reopened.restore('file:///main.c', record.raw.text, true, false));
+  assert.equal(reopened.matches(['file:///main.c']), false);
+}));
+
 test('content, file options and workspace configuration invalidate cached input', async () => temporary(async directory => {
   const cache = await AnalysisCache.open(directory, 'workspace-v1');
   await cache.save([entry()]);

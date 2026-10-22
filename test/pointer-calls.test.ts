@@ -347,15 +347,15 @@ test('review: partial wildcard array writes remain visible at concrete multidime
   const index=project({'main.c':prelude+'CB table[2][2];void run(int i){table[i][0]=bar;table[1][0]();}'});
   assert.deepEqual(inferred(index).map(group=>group.name),['bar']);
 });
-test('review: interactive time budget leaves calls unknown and reports partial analysis', () => {
+test('review: elapsed wall time does not turn completed calls into a partial index', () => {
   const raw=analyzer.analyze('file:///demo/budget.c',prelude+'void run(void){CB fp=foo;'+Array.from({length:1000},()=> 'fp=bar;').join('')+'fp();}');
   const descriptor=Object.getOwnPropertyDescriptor(performance,'now');let tick=0;
   Object.defineProperty(performance,'now',{configurable:true,value:()=>tick+=6000});
   try{
     const result=analyzer.derive([raw])[0];
-    assert.ok(result.issues.some(issue=>issue.includes('analysis budget')));
+    assert.equal(result.issues.some(issue=>issue.includes('analysis budget')),false);
     const index=new RelationIndex();index.update(result);
-    assert.ok(calls(index).some(group=>group.callKind==='indirect'));
+    assert.ok(calls(index).some(group=>group.name==='bar'&&group.callKind==='inferred'));
   }finally{if(descriptor)Object.defineProperty(performance,'now',descriptor);else Reflect.deleteProperty(performance,'now');}
 });
 test('review: unrelated macro alternatives do not duplicate the same direct call site', () => {
@@ -433,16 +433,13 @@ test('callback mutation diagnostics identify the actual file and function instea
   assert.ok(inferred(index).some(g=>g.name==='foo'));
 });
 
-test('project timeout diagnostics are distinct from a function exceeding its own budget', t => {
+test('manual stop during setup does not blame an arbitrary function', () => {
   const raw = [analyzer.analyze('file:///demo/time.c', prelude+'void run(void){CB cb=foo;cb();}')];
-  let clock = 0, checks = 0;
-  t.mock.method(performance, 'now', () => clock);
-  const files = inferPointerCalls(raw, () => { if (++checks === 2) clock = 10001; return false; }, {});
-  const detail = files.flatMap(f=>f.callbackDiagnostics ?? []).find(d=>d.kind==='time')!;
+  const files = inferPointerCalls(raw, undefined, {}, true, { shouldCancel: () => true });
+  const detail = files.flatMap(f=>f.callbackDiagnostics ?? []).find(d=>d.kind==='cancelled')!;
   assert.ok(detail);
   assert.equal(detail.stage, 'setup');
-  assert.equal(detail.location, undefined, 'pre-propagation timeout must not blame the first function');
-  assert.equal(detail.elapsedMs, 10001);
+  assert.equal(detail.location, undefined, 'pre-propagation stop must not blame the first function');
   assert.equal(detail.scopeEvaluations, 0);
 });
 

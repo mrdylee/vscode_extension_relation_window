@@ -9,6 +9,34 @@ let analyzer: Awaited<ReturnType<typeof createAnalyzer>>;
 before(async () => { analyzer = await createAnalyzer(path.resolve('node_modules/web-tree-sitter/web-tree-sitter.wasm'), path.resolve('node_modules/tree-sitter-c/tree-sitter-c.wasm')); });
 const prelude = 'struct xxx {void (*cb_preprocess)(void);void (*cb_process)(void);};static void example_preprocess(void){}static void example_process(void){}';
 const table = 'static const struct xxx bbb={.cb_preprocess=example_preprocess,.cb_process=example_process};';
+
+test('a cancelled registration pass returns before scanning source and retains existing facts', () => {
+  const raw = analyzer.analyze('file:///explicit-stop/early.c', prelude + 'void run(void){void(*cb)(void)=example_preprocess;cb();}');
+  const complete = suggestExplicitCallbacks([raw], [raw]);
+  const stopped = suggestExplicitCallbacks([raw], complete, { shouldCancel: () => true });
+  assert.deepEqual(stopped[0].callbackRegistrations, complete[0].callbackRegistrations);
+  assert.equal(stopped[0].references, complete[0].references);
+  assert.ok(stopped[0].callbackDiagnostics?.some(detail => detail.kind === 'cancelled' && detail.stage === 'registrations'));
+});
+
+test('Stop within registration collection retains its prefix without caching it as complete', () => {
+  const text = prelude + 'void(*cb)(void);void setup(void){' + 'cb=example_preprocess;'.repeat(10000) + '}';
+  const raw = analyzer.analyze('file:///explicit-stop/middle.c', text);
+  let cancelled = false, clock = 0;
+  const stopped = suggestExplicitCallbacks([raw], [raw], {
+    now: () => clock += 1000,
+    shouldCancel: () => cancelled,
+    onProgress: progress => { if (progress.symbol === 'setup' && progress.scopeEvaluations > 0) cancelled = true; }
+  });
+  const retained = stopped[0].callbackRegistrations ?? [];
+  assert.equal(cancelled, true);
+  assert.ok(retained.length > 0 && retained.length < 10000, String(retained.length));
+  assert.ok(stopped[0].callbackDiagnostics?.some(detail => detail.kind === 'cancelled'));
+  const retried = suggestExplicitCallbacks([raw], [raw]);
+  assert.equal(retried[0].callbackRegistrations?.length, 10000);
+  assert.ok(!retried[0].issues.some(issue => /cancelled/.test(issue)));
+  assert.ok(retried[0].callbackRegistrations?.some(ref => ref.id === retained[0].id));
+});
 function project(sources: Record<string, string>, callbacks = false) {
   const raw = Object.entries(sources).map(([name, text]) => ({ ...analyzer.analyze('file:///demo/' + name, text), expandMacros: false }));
   const derived = analyzer.derive(raw, undefined, undefined, callbacks);

@@ -1,4 +1,5 @@
 import type { CacheIncompatibility } from './analysis-cache';
+import type { CallbackProgress } from './model';
 
 export type AnalysisPhase = 'sources' | 'macros' | 'callbacks' | 'transfer';
 export const copilotWaitMessages = {
@@ -9,6 +10,7 @@ export const copilotWaitMessages = {
   'cache-rebuild-required': 'Saved index is unavailable. Run Rebuild index.',
   'worker-unavailable': 'Analysis Worker stopped. Run Rebuild index.',
   'analysis-failed': 'Local relation analysis failed. Check Analysis notices, then Rebuild index.',
+  'analysis-paused': 'Local analysis is paused. Resume local analysis to continue.',
   'closed': 'Workspace analysis has closed.'
 } as const;
 export type CopilotWaitReason = keyof typeof copilotWaitMessages;
@@ -27,6 +29,7 @@ export interface RebuildRecord {
   };
 }
 export interface IndexDiagnostics {
+  callbackAnalysis?: { paused: boolean; running: boolean; progress?: CallbackProgress };
   sessionStartedAt: number; rebuildCount: number; sourceParses: number; relationPasses: number;
   rebuilds: RebuildRecord[]; lastSourceEvent?: { at: number; kind: SourceEvent };
   cache?: { state: 'disabled' | 'checking' | 'restored' | 'updated' | 'missing' | 'incompatible' | 'invalid' | 'deferred' | 'error';
@@ -40,6 +43,7 @@ export interface WorkerDiagnostics {
   phases: Partial<Record<AnalysisPhase, { before: MemorySample; after?: MemorySample }>>;
   firstLimit?: { phase: AnalysisPhase | 'idle'; sample: MemorySample };
   counts: { files: number; sourceChars: number; references: number; programs: number; macroFiles: number };
+  callbacks?: CallbackProgress;
 }
 export interface Diagnostics {
   environment: string;

@@ -222,6 +222,8 @@ export class RelationView implements vscode.Disposable {
       case 'reportIssue': await vscode.commands.executeCommand('dynsight.reportIssue'); break;
       case 'copilotAnalyze': await vscode.commands.executeCommand('dynsight.analyzeCallbacksWithCopilot'); break;
       case 'copilotStop': await vscode.commands.executeCommand('dynsight.stopCopilotAnalysis'); break;
+      case 'localStop': this.workspace.stopAnalysis(); break;
+      case 'localResume': await this.workspace.resumeAnalysis(); break;
       case 'ready': this.refresh(); this.track(vscode.window.activeTextEditor); break;
       case 'readyContext': void this.contextView?.webview.postMessage({ type: 'context', context: this.state.context }); break;
       case 'settings': await vscode.commands.executeCommand('dynsight.openSettings'); break;

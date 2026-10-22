@@ -1,4 +1,4 @@
-import { FileAnalysis, FlowExpression as Expr, FlowStatement, ReferenceRecord } from './model';
+import { CallbackAnalysisOptions, FileAnalysis, FlowExpression as Expr, FlowStatement, ReferenceRecord, SymbolRecord } from './model';
 import { RelationIndex } from './relations';
 
 type Evidence = NonNullable<ReferenceRecord['inference']>['evidence'];
@@ -10,30 +10,54 @@ const projectionCache = new WeakMap<FileAnalysis, { signature: string; result: F
 
 // A written registration is useful evidence even when full pointer propagation is
 // disabled or incomplete. This deliberately does not prove a runtime invocation.
-export function suggestExplicitCallbacks(raw: FileAnalysis[], derived: FileAnalysis[]): FileAnalysis[] {
+export function suggestExplicitCallbacks(raw: FileAnalysis[], derived: FileAnalysis[], options: CallbackAnalysisOptions = {}): FileAnalysis[] {
+  const now = options.now ?? (() => performance.now()), started = now();
+  const cancelled = {}, added = new Map<string, ReferenceRecord[]>(), registrations = new Map<string, Map<string, ReferenceRecord>>();
+  let stopped = false, symbol: SymbolRecord | undefined, scopeStarted = started, operations = 0, scopeOperations = 0;
+  let functionsDone = 0, functionsTotal = 0, lastProgress = -Infinity;
+  const progress = (force = false, outcome?: 'completed' | 'cancelled') => {
+    if (!options.onProgress) return;
+    const at = now();
+    if (force || at - lastProgress >= 500) {
+      lastProgress = at;
+      options.onProgress({ stage: 'registrations', elapsedMs: Math.max(0, Math.round(at - started)),
+        round: 0, maxRounds: 0, functionsDone, functionsTotal, evaluations: operations, symbol: symbol?.name,
+        scopeElapsedMs: symbol ? Math.max(0, Math.round(at - scopeStarted)) : 0, scopeEvaluations: symbol ? operations - scopeOperations : 0, outcome });
+    }
+  };
+  const check = () => {
+    if (options.shouldCancel?.()) throw cancelled;
+    if ((++operations & 255) === 0) progress();
+  };
+  try {
+  check();
+  functionsTotal = raw.reduce((count, file) => count + (file.programs?.length ?? 0), 0);
+  progress(true);
   const index = new RelationIndex();
-  raw.forEach(file => index.update({ ...file, references: [], functionArguments: undefined }));
+  raw.forEach(file => { check(); index.update({ ...file, references: [], functionArguments: undefined }); });
   const initial = new Map<string, Registration[]>();
   const pathsByRoot = new Map<string, Map<string, string[]>>();
   function keyFor(storage: Storage) {
     const key = storageKey(storage), paths = pathsByRoot.get(storage.root) ?? new Map<string, string[]>();
     paths.set(key, storage.path); pathsByRoot.set(storage.root, paths); return key;
   }
-  const added = new Map<string, ReferenceRecord[]>();
   const callsites = new Map<string, ReferenceRecord>();
   const existing = new Set<string>(), complete = new Set<string>();
   const siteKey = (ref: ReferenceRecord) => `${ref.location.uri}:${ref.location.start}:${ref.location.end}`;
-  for (const file of derived) for (const ref of file.references) if (ref.kind === 'call' && ref.access) {
+  for (const file of derived) for (const ref of file.references) { check(); if (ref.kind === 'call' && ref.access) {
     const key = siteKey(ref);
     if (ref.targetId) existing.add(`${key}:${ref.targetId}`);
     if (ref.callKind === 'inferred' && !ref.inference?.incomplete) complete.add(key);
-  }
-  for (const file of raw) for (const ref of file.references)
+  } }
+  for (const file of raw) for (const ref of file.references) {
+    check();
     if (ref.kind === 'call' && ref.access && ref.flowKey) callsites.set(ref.flowKey, ref);
+  }
   const resolve = (value: Extract<Expr, { kind: 'name' }>) => index.resolveReference({
     id: '', kind: 'reference', name: value.name, location: value.location, conditions: []
   });
   function direct(value: Expr): Registration[] {
+    check();
     if (value.kind === 'cast' || value.kind === 'address') return direct(value.object);
     if (value.kind !== 'name' || value.localId) return [];
     const symbols = resolve(value);
@@ -41,11 +65,11 @@ export function suggestExplicitCallbacks(raw: FileAnalysis[], derived: FileAnaly
     return symbols.map(symbol => ({ targetId: symbol.id,
       evidence: [{ location: value.location, reason: `Explicit function registration: ${value.name}` }] }));
   }
-  const registrations = new Map<string, Map<string, ReferenceRecord>>();
   const functionNames = new Set(index.symbols().filter(symbol => symbol.kind === 'function').map(symbol => symbol.name));
-  const sourceConditions = new Map(raw.flatMap(file => file.references.filter(ref => ref.kind === 'reference' && functionNames.has(ref.name))
+  const sourceConditions = new Map(raw.flatMap(file => file.references.filter(ref => { check(); return ref.kind === 'reference' && functionNames.has(ref.name); })
     .map(ref => [`${file.uri}:${ref.location.start}`, ref.conditions] as const)));
   function register(value: Expr, ownerId: string, functionId: string | undefined, expression: string) {
+    check();
     if (value.kind === 'initializer') {
       for (const entry of value.entries) {
         if (!entry.path.length || entry.path.some(part => typeof part !== 'string' || part === '*')) continue;
@@ -67,6 +91,7 @@ export function suggestExplicitCallbacks(raw: FileAnalysis[], derived: FileAnaly
     }
   }
   function collect(value: Expr, functionId: string) {
+    check();
     if (value.kind === 'assign') {
       if (value.operator === '=') register(value.right, functionId, functionId,
         index.files.get(value.left.location.uri)!.text.slice(value.left.location.start, value.left.location.end));
@@ -80,6 +105,7 @@ export function suggestExplicitCallbacks(raw: FileAnalysis[], derived: FileAnaly
   }
   function collectStatements(body: FlowStatement[], functionId: string) {
     for (const statement of body) {
+      check();
       if (statement.kind === 'branch') {
         collect(statement.condition, functionId); collectStatements(statement.then, functionId); collectStatements(statement.otherwise, functionId);
       } else if (statement.kind === 'loop') { collect(statement.condition, functionId); collectStatements(statement.body, functionId); }
@@ -87,6 +113,7 @@ export function suggestExplicitCallbacks(raw: FileAnalysis[], derived: FileAnaly
     }
   }
   function initializer(storage: Storage, value: Expr, bindings: Map<string, Registration[]>) {
+    check();
     if (value.kind !== 'initializer') return;
     for (const entry of value.entries) {
       // Positional and computed designators require type/array propagation.
@@ -97,9 +124,12 @@ export function suggestExplicitCallbacks(raw: FileAnalysis[], derived: FileAnaly
     }
   }
   const persistentOwners = new Map<string, { functionId: string; name: string }>();
-  for (const file of raw) for (const program of file.programs ?? []) for (const local of program.locals)
+  for (const file of raw) for (const program of file.programs ?? []) for (const local of program.locals) {
+    check();
     if (local.persistent) persistentOwners.set(local.id, { functionId: program.id, name: local.name });
+  }
   for (const file of raw) for (const init of file.initializers ?? []) {
+    check();
     const symbol = index.symbol(init.id);
     const local = persistentOwners.get(init.id);
     if (symbol?.kind === 'variable' || local) {
@@ -110,11 +140,13 @@ export function suggestExplicitCallbacks(raw: FileAnalysis[], derived: FileAnaly
     }
   }
   for (const file of raw) for (const program of file.programs ?? []) {
+    check(); symbol = index.symbol(program.id); scopeStarted = now(); scopeOperations = operations; progress(true);
     collectStatements(program.body, program.id);
     const aliases = new Map<string, Storage>(), bindings = new Map<string, Registration[]>();
     let useInitial = true;
     const clear = () => { aliases.clear(); bindings.clear(); useInitial = false; };
     function storage(value: Expr): Storage | undefined {
+      check();
       if (value.kind === 'cast') return storage(value.object);
       if (value.kind === 'address' || value.kind === 'dereference') {
         const object = storage(value.object);
@@ -137,10 +169,13 @@ export function suggestExplicitCallbacks(raw: FileAnalysis[], derived: FileAnaly
       return undefined;
     }
     function discardObject(object: Storage) {
-      for (const [key, parts] of pathsByRoot.get(object.root) ?? [])
+      for (const [key, parts] of pathsByRoot.get(object.root) ?? []) {
+        check();
         if (object.path.every((part, n) => parts[n] === part)) bindings.set(key, []);
+      }
     }
     function visit(value: Expr) {
+      check();
       if (value.kind === 'assign') {
         visit(value.right); visit(value.left);
         if (value.left.kind === 'name' && value.left.localId) {
@@ -207,22 +242,54 @@ export function suggestExplicitCallbacks(raw: FileAnalysis[], derived: FileAnaly
     }
     function statements(body: FlowStatement[]) {
       for (const statement of body) {
+        check();
         if (statement.kind === 'branch' || statement.kind === 'loop') clear();
         else { visit(statement.value); if (statement.kind === 'return') break; }
       }
     }
     statements(program.body);
+    functionsDone++;
   }
-  return derived.map(file => {
+  check();
+  } catch (error) {
+    if (error !== cancelled) throw error;
+    stopped = true;
+  }
+  let result = derived.map(file => {
+    stopped ||= options.shouldCancel?.() === true;
     const refs = added.get(file.uri);
     const written = [...(registrations.get(file.uri)?.values() ?? [])];
+    if (stopped) {
+      if (!refs?.length && !written.length) return file;
+      const retained = new Map((file.callbackRegistrations ?? []).map(ref => [ref.id, ref]));
+      for (const ref of written) retained.set(ref.id, ref);
+      return { ...file, references: refs?.length ? [...file.references, ...refs] : file.references,
+        callbackRegistrations: retained.size ? [...retained.values()] : undefined };
+    }
     const same = JSON.stringify(written) === JSON.stringify(file.callbackRegistrations ?? []);
     if (!refs?.length && same) return file;
     const signature = JSON.stringify([refs, written]), previous = projectionCache.get(file);
-    if (previous?.signature === signature) return previous.result;
+    if (!stopped && previous?.signature === signature) return previous.result;
     const result = { ...file, references: refs?.length ? [...file.references, ...refs] : file.references,
       callbackRegistrations: same ? file.callbackRegistrations : written.length ? written : undefined };
-    projectionCache.set(file, { signature, result });
+    if (!stopped) projectionCache.set(file, { signature, result });
     return result;
   });
+  stopped ||= options.shouldCancel?.() === true;
+  if (stopped && !result.some(file => file.callbackDiagnostics?.some(detail => detail.kind === 'cancelled')) && result.length) {
+    const target = result.find(file => file.uri === symbol?.location.uri) ?? result[0];
+    const message = 'Callback registration analysis cancelled; targets may be incomplete. Resume local analysis to retry.';
+    let remaining = 63;
+    result = result.map(file => {
+      const callbackDiagnostics = file.callbackDiagnostics?.slice(0, remaining);
+      remaining -= callbackDiagnostics?.length ?? 0;
+      return file === target ? { ...file, issues: [...file.issues, message], callbackDiagnostics: [...(callbackDiagnostics ?? []), {
+        kind: 'cancelled' as const, stage: 'registrations' as const, message, symbol: symbol?.name, location: symbol?.location,
+        elapsedMs: Math.max(0, Math.round(now() - started)), scopeElapsedMs: symbol ? Math.max(0, Math.round(now() - scopeStarted)) : 0,
+        evaluations: operations, scopeEvaluations: symbol ? operations - scopeOperations : 0
+      }] } : callbackDiagnostics?.length === file.callbackDiagnostics?.length ? file : { ...file, callbackDiagnostics };
+    });
+  }
+  symbol = undefined; progress(true, stopped ? 'cancelled' : 'completed');
+  return result;
 }

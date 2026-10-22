@@ -89,6 +89,86 @@ test('cache startup validates content, additions and removals made while the edi
 });
 
 const latest = 'typedef void(*CB)(void);void new_target(void){}void task(void){CB cb=new_target;cb();}';
+test('Stop reaches a busy Worker, keeps partial targets, and Retry reuses parsed sources', async t => {
+  const file = uri('stop.c');
+  const source = 'typedef void(*CB)(void);void target(void){}static CB cb=target;void run(void){cb();}void busy(void){int i=0;' + 'i++;'.repeat(20000) + '}';
+  const { workspace } = fixture(t, [file], { sources: new Map([[file.toString(), source]]) });
+  let stopped = false;
+  const listener = workspace.diagnosticsChanged.event(() => {
+    const analysis = workspace.diagnostics.index.callbackAnalysis;
+    if (!stopped && analysis.running && analysis.progress?.symbol === 'busy') { stopped = true; workspace.stopAnalysis(); }
+  });
+  t.after(() => listener.dispose());
+  await workspace.ready; await bounded(workspace.whenIdle());
+  assert.equal(stopped, true);
+  assert.match(workspace.status, /^Partial index: local analysis paused/);
+  assert.equal(workspace.stable, false);
+  assert.equal(workspace.copilotWaitReason, 'analysis-paused');
+  const partial = workspace.index.callbackAt(file.toString(), source.indexOf('cb();') + 1);
+  assert.deepEqual(Array.from(partial.targets, target => target.name), ['target']);
+  assert.equal(partial.incomplete, true);
+  assert.ok(workspace.index.files.get(file.toString()).callbackDiagnostics.some(detail => detail.kind === 'cancelled'));
+  const parses = workspace.diagnostics.index.sourceParses;
+  await bounded(workspace.resumeAnalysis()); await bounded(workspace.whenIdle());
+  assert.equal(workspace.diagnostics.index.sourceParses, parses);
+  assert.equal(workspace.status, 'Index ready');
+  assert.equal(workspace.stable, true);
+  assert.equal(workspace.index.callbackAt(file.toString(), source.indexOf('cb();') + 1).incomplete, false);
+});
+
+test('startup migrates fixed-deadline derived cache without reparsing unchanged sources', async t => {
+  const storage = await mkdtemp(path.join(os.tmpdir(), 'dynsight-manual-stop-cache-'));
+  t.after(() => rm(storage, { recursive: true, force: true }));
+  const file = uri('cached.c'), sources = new Map([[file.toString(), latest]]);
+  const first = fixture(t, [file], { storage, sources }).workspace;
+  await first.ready; await bounded(first.whenIdle()); first.dispose();
+  const filename = path.join(storage, 'analysis-cache', 'manifest.json');
+  const manifest = JSON.parse(await readFile(filename, 'utf8')); delete manifest.callbackPolicy;
+  await writeFile(filename, JSON.stringify(manifest));
+  const { workspace } = fixture(t, [file], { storage, sources });
+  await workspace.ready; await bounded(workspace.whenIdle());
+  assert.equal(workspace.diagnostics.index.sourceParses, 0);
+  assert.equal(workspace.diagnostics.index.relationPasses, 1);
+  assert.equal(workspace.status, 'Index ready');
+});
+
+test('Stop reaches registration postprocessing in the Worker and Retry completes the missing facts', async t => {
+  const file = uri('stop-registrations.c'), count = 5000;
+  const source = 'typedef void(*CB)(void);void target(void){}static CB cb;void setup(void){' + 'cb=target;'.repeat(count) + '}void run(void){cb();}';
+  const { workspace } = fixture(t, [file], { sources: new Map([[file.toString(), source]]) });
+  let stopped = false;
+  const listener = workspace.diagnosticsChanged.event(() => {
+    const analysis = workspace.diagnostics.index.callbackAnalysis;
+    if (!stopped && analysis.running && analysis.progress?.stage === 'registrations' && analysis.progress.symbol === 'setup') {
+      stopped = true; workspace.stopAnalysis();
+    }
+  });
+  t.after(() => listener.dispose());
+  await workspace.ready; await bounded(workspace.whenIdle());
+  assert.equal(stopped, true);
+  assert.match(workspace.status, /^Partial index: local analysis paused/);
+  const partial = workspace.index.files.get(file.toString());
+  assert.ok(partial.callbackDiagnostics.some(detail => detail.kind === 'cancelled' && detail.stage === 'registrations'));
+  assert.ok((partial.callbackRegistrations?.length ?? 0) < count);
+  assert.ok(partial.references.some(ref => ref.name === 'target' && ref.callKind === 'inferred'));
+  const parses = workspace.diagnostics.index.sourceParses;
+  await bounded(workspace.resumeAnalysis()); await bounded(workspace.whenIdle());
+  assert.equal(workspace.diagnostics.index.sourceParses, parses);
+  assert.equal(workspace.status, 'Index ready');
+  assert.equal(workspace.index.files.get(file.toString()).callbackRegistrations.length, count);
+});
+
+test('an unchanged source notification cannot cancel a running relationship pass', async t => {
+  const file = uri('duplicate.c');
+  const { workspace } = fixture(t, [file], { sources: new Map([[file.toString(), latest]]) });
+  await workspace.ready;
+  const cancellation = new Int32Array(new SharedArrayBuffer(4));
+  workspace.activeAnalysis = { id: -1, cancellation };
+  await workspace.analyze(file);
+  assert.equal(Atomics.load(cancellation, 0), 0);
+  workspace.activeAnalysis = undefined;
+});
+
 test('Copilot readiness identifies blockers without blocking stable partial results', async t => {
   const { workspace, adapter } = fixture(t);
   await workspace.ready; await bounded(workspace.whenIdle());

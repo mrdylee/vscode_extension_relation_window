@@ -20,8 +20,9 @@ export function macroArguments(tokens: CToken[], open: number): Arguments | unde
 export class MacroExpander {
   readonly issues = new Set<string>();
   private operations = 0;
-  constructor(private lookup: (name: string, offset: number) => (MacroDefinition | undefined)[], private memoryPressure?: () => boolean) {}
+  constructor(private lookup: (name: string, offset: number) => (MacroDefinition | undefined)[], private memoryPressure?: () => boolean, private shouldCancel?: () => boolean) {}
   expand(input: CToken[], nesting = 0): ExpansionVariant[] {
+    if (this.shouldCancel?.()) { this.issues.add('Macro analysis cancelled; call relationships may be incomplete.'); return [{ tokens: input, changed: false, conditions: [] }]; }
     if (this.memoryPressure?.()) {
       this.issues.add(macroMemoryLimit); return [{ tokens: input, changed: false, conditions: [] }];
     }
@@ -38,6 +39,9 @@ export class MacroExpander {
         if (++this.operations > 80_000 || variant.tokens.length > 40_000) {
           this.issues.add('Macro expansion work/token limit reached; some calls remain unexpanded');
           variant.tokens = variant.tokens.map((token, i) => i >= variant.index ? { ...token, unexpanded: true } : token); break;
+        }
+        if ((this.operations & 255) === 0 && this.shouldCancel?.()) {
+          this.issues.add('Macro analysis cancelled; call relationships may be incomplete.'); return [{ tokens: input, changed: false, conditions: [] }];
         }
         if ((this.operations & 255) === 0 && this.memoryPressure?.()) {
           this.issues.add(macroMemoryLimit); return [{ tokens: input, changed: false, conditions: [] }];

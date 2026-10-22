@@ -9,7 +9,7 @@ interface Entry { uri: string; name: string; digest: string; source: string; ski
 // semantics change. UI, packaging and other compatible releases keep this value.
 export const ANALYSIS_CACHE_VERSION = 3;
 export type CacheIncompatibility = 'analysis-version' | 'workspace-settings' | 'legacy-format';
-interface Manifest { schema: 2; analysisVersion: number; key: string; generation: string; previous?: string; entries: Entry[] }
+interface Manifest { schema: 2; analysisVersion: number; key: string; generation: string; previous?: string; entries: Entry[]; callbackPolicy?: string; retryable?: boolean }
 const workerFields = new Set(['text', 'programs', 'initializers', 'argumentPrograms', 'statementConditions']);
 const maxFiles = 10_000, maxRecordBytes = 64 * 1024 * 1024, maxGenerationBytes = 1024 * 1024 * 1024;
 const maxManifestBytes = 4 * 1024 * 1024;
@@ -45,6 +45,8 @@ export class AnalysisCache {
         new Set(data.entries.map(entry => entry.uri)).size !== data.entries.length) throw new Error('Invalid analysis cache');
       if (data.schema !== 2) { cache.state = 'incompatible'; cache.reason = 'legacy-format'; return cache; }
       if (!Number.isSafeInteger(data.analysisVersion) || data.analysisVersion < 1) throw new Error('Invalid analysis cache version');
+      if (data.callbackPolicy !== undefined && typeof data.callbackPolicy !== 'string') throw new Error('Invalid callback policy');
+      if (data.retryable !== undefined && typeof data.retryable !== 'boolean') throw new Error('Invalid callback retry state');
       cache.savedVersion = data.analysisVersion;
       if (data.analysisVersion !== analysisVersion || data.key !== key) {
         cache.state = 'incompatible'; cache.reason = data.analysisVersion !== analysisVersion ? 'analysis-version' : 'workspace-settings'; return cache;
@@ -69,7 +71,9 @@ export class AnalysisCache {
     } catch { this.state = 'invalid'; return; }
   }
   matches(uris: string[]) {
-    return this.state === 'ready' && uris.length === this.entries.size && new Set(uris).size === uris.length && uris.every(uri => this.entries.has(uri));
+    // Recompute relationships from old fixed-deadline caches while retaining IR.
+    return this.state === 'ready' && this.manifest?.callbackPolicy === 'manual-stop' && !this.manifest.retryable &&
+      uris.length === this.entries.size && new Set(uris).size === uris.length && uris.every(uri => this.entries.has(uri));
   }
   async save(records: Iterable<CachedAnalysis>, reuseUris: ReadonlySet<string> = new Set()): Promise<{ saved: boolean; reason?: string }> {
     const generation = `generation-${randomUUID()}`, directory = path.join(this.directory, generation);
@@ -79,11 +83,13 @@ export class AnalysisCache {
     let committed = false;
     try {
       await mkdir(directory, { recursive: true });
-      const entries: Entry[] = [], seen = new Set<string>(); let bytes = 0;
+      const entries: Entry[] = [], seen = new Set<string>(); let bytes = 0, retryable = false;
       for (const record of records) {
         if (seen.has(record.raw.uri) || seen.size >= maxFiles || record.derived.uri !== record.raw.uri || record.derived.text !== record.raw.text)
           throw new Error('Invalid analysis cache generation');
         seen.add(record.raw.uri);
+        retryable ||= record.derived.callbackDiagnostics?.some(detail => ['cancelled', 'time', 'memory', 'work'].includes(detail.kind)) ?? false;
+        retryable ||= record.derived.issues.some(issue => /analysis cancelled|memory budget|analysis (?:time )?budget|work limit/i.test(issue));
         const cached = this.entries.get(record.raw.uri);
         // The Worker proves both raw input and derived identity unchanged.
         if (reuseUris.has(record.raw.uri) && previous && cached && cached.skip === record.skip && cached.expandMacros === record.expandMacros) {
@@ -107,7 +113,7 @@ export class AnalysisCache {
         await writeFile(path.join(directory, name), data);
         entries.push({ uri: record.raw.uri, name, digest: hash(data), source: hash(record.raw.text), skip: record.skip, expandMacros: record.expandMacros });
       }
-      const manifest: Manifest = { schema: 2, analysisVersion: this.analysisVersion, key: this.key, generation, previous, entries };
+      const manifest: Manifest = { schema: 2, analysisVersion: this.analysisVersion, key: this.key, generation, previous, entries, callbackPolicy: 'manual-stop', retryable };
       const serialized = JSON.stringify(manifest);
       if (Buffer.byteLength(serialized) > maxManifestBytes) throw new Error('Analysis cache manifest size limit');
       await writeFile(temporary, serialized);

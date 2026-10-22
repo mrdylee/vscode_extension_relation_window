@@ -8,7 +8,7 @@ import { AnalysisCache, CachedAnalysis } from './analysis-cache';
 import { IncrementalAnalysis } from './incremental-analysis';
 const analyzer = createAnalyzer(path.join(workerData.assets, 'web-tree-sitter.wasm'), path.join(workerData.assets, 'tree-sitter-c.wasm'));
 type Request = { id: number; uri: string; text: string; skip: boolean; expandMacros?: boolean; type?: 'analyze' }
-  | { type: 'derive'; id: number; analyzeCallbacks?: boolean; versions: [string, number, number][] }
+  | { type: 'derive'; id: number; analyzeCallbacks?: boolean; cancellation?: SharedArrayBuffer; versions: [string, number, number][] }
   | { type: 'cache-init'; id: number; directory: string; key: string }
   | { type: 'cache-restore'; id: number; uri: string; text: string; skip: boolean; expandMacros?: boolean }
   | { type: 'cache-validate'; id: number; versions: [string, number, number][]; analyzeCallbacks?: boolean }
@@ -129,7 +129,16 @@ parentPort!.on('message', (request: Request) => {
         const active = new Set(request.versions.map(([uri]) => uri));
         for (const uri of raw.keys()) if (!active.has(uri)) remove(uri);
         const changed: FileAnalysis[] = [], versions: [string, number][] = [];
-        const derived = incremental.derive(files, dirty => parser.derive(dirty, memoryPressure, phase, request.analyzeCallbacks), request.analyzeCallbacks);
+        const cancellation = request.cancellation && new Int32Array(request.cancellation);
+        diagnostics.callbacks = undefined;
+        const derived = incremental.derive(files, dirty => parser.derive(dirty, memoryPressure, phase, request.analyzeCallbacks, {
+          shouldCancel: cancellation ? () => Atomics.load(cancellation, 0) !== 0 : undefined,
+          onProgress: progress => {
+            diagnostics.callbacks = progress;
+            parentPort!.postMessage({ type: 'callback-progress', requestId: request.id, progress });
+            report();
+          }
+        }), request.analyzeCallbacks);
         const snapshot: Snapshot = new Map();
         phase('transfer');
         derived.forEach((file, i) => {

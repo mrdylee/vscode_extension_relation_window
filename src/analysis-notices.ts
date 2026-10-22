@@ -17,7 +17,7 @@ export function analysisNotices(files: FileAnalysis[], relative: (uri: string) =
     for (const issue of file.issues) {
       if (details.some(detail => detail.message === issue)) continue;
       const text = issue.startsWith('Callback ') ? `Project callback analysis: ${issue}` : `${relative(file.uri)}: ${issue}`;
-      (/^(Callback|Macro) .*(limit|budget)/i.test(issue) ? limits : ordinary).push(text);
+      (/^(Callback|Macro) .*(limit|budget|cancelled)/i.test(issue) ? limits : ordinary).push(text);
     }
   }
   return [...limits, ...ordinary];

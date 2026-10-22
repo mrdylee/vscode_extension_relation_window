@@ -1,4 +1,5 @@
 import { Parser, Language, Node } from 'web-tree-sitter';
+import { CallbackAnalysisOptions, CallbackProgress } from './model';
 import { Access, FileAnalysis, FlowExpression, Location, ReferenceRecord, SymbolRecord } from './model';
 import { aggregateId, declaredType, declarator, initializerMember, typedExpression } from './type-info';
 import { clearMacroCache, deriveMacroCalls } from './project-analysis';
@@ -320,14 +321,22 @@ export async function createAnalyzer(runtime: string, grammar: string) {
     tree.delete(); return { value, issues };
   }, reset() {
     clearMacroCache(analyzer.analyze); clearPointerCache(analyzer.analyze);
-  }, derive(files: FileAnalysis[], memoryPressure?: () => boolean, phase?: (value: 'macros' | 'callbacks') => void, analyzeCallbacks = true): FileAnalysis[] {
+  }, derive(files: FileAnalysis[], memoryPressure?: () => boolean, phase?: (value: 'macros' | 'callbacks') => void, analyzeCallbacks = true, options: CallbackAnalysisOptions = {}): FileAnalysis[] {
+    const now = options.now ?? (() => performance.now()), started = now();
+    let outcome: CallbackProgress['outcome'];
+    const observed = options.onProgress && ((value: CallbackProgress) => {
+      if (value.stage !== 'registrations' && value.outcome) outcome = value.outcome;
+      options.onProgress!({ ...value, elapsedMs: Math.max(0, Math.round(now() - started)),
+        outcome: value.stage === 'registrations' && value.outcome === 'completed' ? outcome ?? value.outcome : value.outcome });
+    });
+    const control = { ...options, onProgress: observed };
     phase?.('macros');
-    const expanded = deriveMacroCalls(files, analyzer.analyze, analyzer.calls, analyzer.initializer, memoryPressure, analyzeCallbacks);
+    const expanded = deriveMacroCalls(files, analyzer.analyze, analyzer.calls, analyzer.initializer, memoryPressure, analyzeCallbacks, options.shouldCancel);
     phase?.('callbacks');
-    const derived = inferPointerCalls(expanded, memoryPressure, analyzer.analyze, analyzeCallbacks);
+    const derived = inferPointerCalls(expanded, memoryPressure, analyzer.analyze, analyzeCallbacks, control);
     if (memoryPressure?.()) return derived;
-    const partial = analyzeCallbacks ? suggestPartialCallbacks(expanded, derived, memoryPressure) : derived;
-    return suggestExplicitCallbacks(files, partial);
+    const partial = analyzeCallbacks && !options.shouldCancel?.() ? suggestPartialCallbacks(expanded, derived, memoryPressure, options.shouldCancel) : derived;
+    return suggestExplicitCallbacks(files, partial, control);
   } };
   return analyzer;
 }

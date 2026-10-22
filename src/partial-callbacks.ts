@@ -6,7 +6,8 @@ const cache = new WeakMap<FileAnalysis[], FileAnalysis[]>();
 // A timeout must not hide a short registration chain behind unrelated bodies.
 // Reuse storage propagation over a bounded projection, exporting candidates only:
 // omitted functions/mutations mean this pass cannot prove runtime call targets.
-export function suggestPartialCallbacks(raw: FileAnalysis[], derived: FileAnalysis[], memoryPressure?: () => boolean): FileAnalysis[] {
+export function suggestPartialCallbacks(raw: FileAnalysis[], derived: FileAnalysis[], memoryPressure?: () => boolean, shouldCancel?: () => boolean): FileAnalysis[] {
+  if (shouldCancel?.()) return derived;
   if (!derived.some(file => file.issues.some(issue => issue.startsWith('Callback analysis budget:') || issue.startsWith('Callback analysis work limit'))) ||
     derived.some(file => file.issues.some(issue => issue.startsWith('Callback analysis memory budget')))) return derived;
   const previous = cache.get(derived); if (previous) return previous;
@@ -33,7 +34,7 @@ export function suggestPartialCallbacks(raw: FileAnalysis[], derived: FileAnalys
   }));
   if (performance.now() >= deadline) { cache.set(derived, derived); return derived; }
   if (memoryPressure?.()) return derived;
-  const projected = inferPointerCalls(projection, () => performance.now() >= deadline || memoryPressure?.() === true, projection, true);
+  const projected = inferPointerCalls(projection, () => performance.now() >= deadline || memoryPressure?.() === true, projection, true, { shouldCancel });
   const key = (ref: FileAnalysis['references'][number]) => `${ref.location.start}:${ref.location.end}:${ref.targetId}`;
   const results = derived.map((file, n) => {
     const existing = new Set(file.references.filter(ref => ref.kind === 'call' && ref.targetId).map(key));

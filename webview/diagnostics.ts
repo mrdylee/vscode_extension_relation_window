@@ -36,6 +36,10 @@ export function createDiagnostics(version: string, refresh: () => void, reportIs
     body.append(el('div', `${state?.mode ?? 'references'} · ${state?.graph?.root.name ?? 'No symbol selected'} · ${state?.fileCount ?? 0} indexed files`, 'diagnostics-selection'));
     if (data.index) {
       const index = data.index;
+      if (index.callbackAnalysis) {
+        const analysis = index.callbackAnalysis, progress = analysis.progress;
+        body.append(el('div', `Local analysis: ${analysis.paused ? 'paused' : analysis.running ? 'running' : progress?.outcome ?? 'idle'}${progress ? ` · Total ${progress.elapsedMs}ms · ${progress.stage === 'registrations' ? 'Registration candidates' : `Round ${progress.round}/${progress.maxRounds}`} · Functions ${progress.functionsDone}/${progress.functionsTotal} · ${progress.stage === 'registrations' ? 'Checks' : 'Evaluations'} ${progress.evaluations}${progress.symbol ? ` · Current ${progress.symbol}: ${progress.scopeElapsedMs}ms / ${progress.scopeEvaluations}` : ''}` : ''}`));
+      }
       if (index.cache) {
         const cache = index.cache;
         const compatibility = cache.version === undefined ? '' : ` · Analysis v${cache.version} / saved ${cache.savedVersion === undefined ? 'unversioned' : `v${cache.savedVersion}`}`;

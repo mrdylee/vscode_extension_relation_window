@@ -502,7 +502,7 @@ struct Ops ops = { .run = target };
 void run(void) { ops.run(); }
 ```
 
-Analysis runs in the Worker. Macro expansion is bounded to 32 alternatives, 32 nested steps and 40,000 tokens per function. Callback propagation is bounded to 64 value/alias candidates, 256 mutation slots per function, 12 project passes, 4 loop passes and an approximately 10-second budget for additional callback inference. **Analysis notices** and unknown targets identify partial results; narrowing Include/Exclude scope can reveal more targets. Ordinary integer values are not propagated across functions, so array candidates may be broader; addresses stored in integer variables and converted back remain unknown. This is not a complete compiler preprocessor or a proof of every build/runtime path; computed include paths and build-specific header instantiation are outside the supported scope.
+Analysis runs in the Worker. Macro expansion is bounded to 32 alternatives, 32 nested steps and 40,000 tokens per function. Callback propagation is bounded to 64 value/alias candidates, 256 mutation slots per function, 12 project passes and 4 loop passes. There is no project time cutoff; use **Stop local** to interrupt it. **Analysis notices** and unknown targets identify partial results; narrowing Include/Exclude scope can reveal more targets. Ordinary integer values are not propagated across functions, so array candidates may be broader; addresses stored in integer variables and converted back remain unknown. This is not a complete compiler preprocessor or a proof of every build/runtime path; computed include paths and build-specific header instantiation are outside the supported scope.
 
 ## Skip inactive branches
 
@@ -521,11 +521,21 @@ details include the observed file, line and function, followed by `stage`,
 or global initializer, not its accumulated cost across all propagation passes.
 Up to 64 distinct limit/location records are retained per inference run.
 
-The 10-second callback budget covers project inference. **Project budget observed
-at** identifies where a time/memory check stopped it; that function did not
-necessarily consume the whole budget. A setup or project-wide limit has no
-arbitrary file attribution. The 256-slot limit applies to function mutation
-summaries; global initializers no longer build that unused summary.
+The former project-wide 10-second cutoff has been removed. The footer shows the
+current function and elapsed time for that visit, resetting at the next function.
+**Taking longer** highlights visits of at least five seconds without stopping
+them. This measures a static function-summary evaluation, not a callback's runtime.
+Hover for the round and function counts; rounds repeat until convergence, so the
+count is not an overall completion percentage.
+
+**Stop local** interrupts the busy Worker and retains discovered targets as
+incomplete. **Retry local** recomputes relationships using parsed sources; it does
+not continue from the exact interrupted instruction. Both actions are also in the
+command palette as **Dynsight: Stop Local Analysis / Resume Local Analysis**.
+Stopped analysis remains paused across source edits until Retry or Rebuild.
+Old fixed-deadline caches retain parsed sources but recompute relationships once.
+These controls do not enable Copilot. Memory, work and convergence limits
+remain, including the 256-slot function mutation limit.
 
 Mutation slots count distinct storage locations retained in a function summary,
 including effects imported from helpers. Repeated writes to the same exact slot
