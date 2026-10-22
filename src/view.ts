@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { randomBytes } from 'node:crypto';
 import { WorkspaceIndex } from './workspace';
 import { GraphNode, Location, SymbolRecord } from './model';
-import { ViewState } from './view-state';
+import { ViewState, nodePreviewId, canExpandNode } from './view-state';
 import { analysisNotices } from './analysis-notices';
 import { highlightC, SyntaxToken } from './syntax';
 
@@ -210,6 +210,7 @@ export class RelationView implements vscode.Disposable {
       case 'diagnostics': this.workspace.refreshDiagnostics(); break;
       case 'reportIssue': await vscode.commands.executeCommand('dynsight.reportIssue'); break;
       case 'copilotAnalyze': await vscode.commands.executeCommand('dynsight.analyzeCallbacksWithCopilot'); break;
+      case 'copilotStop': await vscode.commands.executeCommand('dynsight.stopCopilotAnalysis'); break;
       case 'ready': this.refresh(); this.track(vscode.window.activeTextEditor); break;
       case 'readyContext': void this.contextView?.webview.postMessage({ type: 'context', context: this.state.context }); break;
       case 'settings': await vscode.commands.executeCommand('dynsight.openSettings'); break;
@@ -219,8 +220,8 @@ export class RelationView implements vscode.Disposable {
         const node = typeof m.key === 'string' ? this.nodes.get(m.key) : undefined;
         if (!node) return;
         this.selectedNodeKey = node.key;
-        this.selection = node.callKind || node.direction || node.sites.some(site => site.argument || site.callKind === 'registered') || node.sites[0]?.access ? node.sites[0].id : node.symbolId ?? node.sites[0]?.id;
-        if (node.symbolId && !node.cycle && (!node.callKind || ['direct', 'expanded', 'inferred'].includes(node.callKind))) {
+        this.selection = nodePreviewId(node);
+        if (canExpandNode(node)) {
           // Preserve a deeper inherited expansion, including explicit ancestor overrides.
           let levels = this.state.depth, path = '';
           for (const part of node.key.split('/')) {

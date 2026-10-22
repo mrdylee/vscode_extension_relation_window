@@ -25,6 +25,12 @@ This guide is included with the extension and works offline. You do not need Git
 
 ## Start here
 
+Download the Windows (`-windows.vsix`), macOS (`-macos.vsix`) or WSL (`-wsl.vsix`)
+file from GitHub Releases and use **Extensions: Install from VSIX…** in VS Code.
+All platform filenames contain the same universal JavaScript/WASM package.
+Release CI runs unit and Extension Host tests on Windows, macOS and Ubuntu.
+WSL remote connectivity and remote automatic installation require user-side verification.
+
 1. Open a folder containing your C source files in VS Code. A build, SDK or compilation database is not required.
 2. Run **Dynsight: Open Relation and Context** from the Command Palette.
 3. Click a function or variable name in the main editor. Relation shows its relationships; Context shows the selected code.
@@ -77,15 +83,25 @@ requests; use **Analyze Callbacks with Copilot** to refresh missing results.
 - Saved changes can analyze unresolved callbacks, up to five new requests per
   batch. No requests are made during unsaved editing. Diagnostics shows requests,
   cache hits, pending callbacks and failures.
-- Use **Analyze next 5** in the footer, or run **Analyze Callbacks with Copilot**
-  again, for remaining callbacks. Run
-  **Reanalyze Callback Candidates with Copilot** to bypass valid AI results for
-  a bounded batch. Normal Rebuild does not force AI requests.
+- Click **Analyze all remaining** in the footer, or run **Analyze Callbacks with
+  Copilot**, to process every pending site automatically in batches of five.
+  Each request uses your Copilot allowance. Progress stays cumulative across batches.
+- Click **Stop analysis** or run **Dynsight: Stop Copilot Analysis** to cancel the
+  current request and stop further requests. Completed results are kept; Analyze
+  resumes the missing sites. Saving does not restart a stopped job. Active jobs
+  pause during unsaved edits and resume after saving and local indexing settle.
+- A request error stops automatic continuation. Run **Reanalyze Callback Candidates
+  with Copilot** to invalidate the old AI cache once and process all sites again.
+  Normal Rebuild does not force AI requests.
 - Source, relevant search results, settings, model and prompt versions determine
   cache validity. Changed inputs cancel outstanding work; stale answers are discarded.
 - **AI candidate** labels appear in Callers, Callees and both mode. Their details
   link to source evidence. They are suggestions, never proof of invocation. An
   empty answer means no candidate was found in the supplied bounded context.
+- Click an AI candidate function in Callees to preview its definition in Context
+  and expand its callees. Double-click or press Enter to open the definition in
+  the editor. The details popup keeps separate links to the original callback
+  callsite and evidence; navigating a candidate does not prove the call occurs.
 
 The Copilot footer shows processed/detected call sites, remaining sites, failures,
 candidate count, **No candidate in supplied context**, and **Context limited**.

@@ -6,6 +6,57 @@ import { RelationIndex } from '../src/relations';
 import { applyCallbackHints } from '../src/copilot-relations';
 import { CallbackHint } from '../src/copilot-callbacks';
 import { FileAnalysis, ReferenceRecord, SymbolRecord } from '../src/model';
+import { buildSync } from 'esbuild';
+import { createRequire } from 'node:module';
+import { runInNewContext } from 'node:vm';
+
+const require = createRequire(path.resolve('package.json'));
+const viewBundle = buildSync({entryPoints:['src/view.ts'], bundle:true, write:false, platform:'node', format:'cjs', external:['vscode']}).outputFiles[0].text;
+
+for (const mode of ['callees', 'both']) test(`AI candidate navigation previews its cross-file definition and expands its real callees (${mode})`, async () => {
+  const parser = await createAnalyzer(path.resolve('node_modules/web-tree-sitter/web-tree-sitter.wasm'), path.resolve('node_modules/tree-sitter-c/tree-sitter-c.wasm'));
+  const caller = parser.analyze('file:///caller.c', 'void run(void(*cb)(void)){cb();}');
+  const implementation = parser.analyze('file:///impl.c', 'void leaf(void){}\nvoid target(void){leaf();}');
+  const index = new RelationIndex(); index.update(caller); index.update(implementation);
+  const target = implementation.symbols.find(symbol => symbol.name === 'target')!;
+  const root = caller.symbols.find(symbol => symbol.name === 'run')!;
+  const site = caller.references.find(ref => ref.kind === 'call')!;
+  applyCallbackHints(index, [{key:'navigation', callsite:site.location, expression:'cb', status:'candidates', cached:true,
+    candidates:[{targetId:target.id, evidence:[target.location], reason:'Source registration'}]}]);
+  class Emitter {
+    event = () => ({dispose() {}});
+    fire() {} dispose() {}
+  }
+  const opened: any[] = [];
+  const vscode = {EventEmitter:Emitter, Uri:{parse:(uri:string) => ({path:new URL(uri).pathname, toString:() => uri})},
+    Range:class {start:any;end:any;constructor(line:number,column:number,endLine:number,endColumn:number) {
+      this.start={line,character:column};this.end={line:endLine,character:endColumn};
+    }}, ViewColumn:{One:1},
+    workspace:{getConfiguration:() => ({get:(_key:string, fallback:unknown) => fallback}),
+      onDidChangeConfiguration:() => ({dispose(){}}), asRelativePath:(uri:any) => uri.path},
+    window:{showTextDocument:async (uri:any, options:any) => {opened.push({uri:uri.toString(),options});}}};
+  const module = {exports:{} as any};
+  runInNewContext(viewBundle, {module, exports:module.exports, process, Buffer, URL, setTimeout, clearTimeout,
+    require:(name:string) => name === 'vscode' ? vscode : require(name)});
+  const view = new module.exports.RelationView({index, changed:new Emitter(), diagnosticsChanged:new Emitter(),
+    failures:new Map(), skipInactive:true, status:'Index ready'}, {});
+  try {
+    view.state.mode = mode; view.setRoot(root);
+    const node = view.state.graph.root.children.find((node:any) => node.name === 'target');
+    assert.equal(node.callKind, 'ai-candidate');
+    await view.handleMessage({type:'selectNode', key:node.key});
+    assert.equal(view.state.context.location.uri, implementation.uri);
+    assert.equal(view.state.context.location.start, target.location.start);
+    assert.equal(view.state.graph.root.children.find((node:any) => node.name === 'target').children[0].name, 'leaf');
+    await view.handleMessage({type:'open', id:target.id});
+    assert.equal(opened.at(-1).uri, implementation.uri);
+    assert.equal(opened.at(-1).options.selection.start.line, target.location.line);
+    await view.handleMessage({type:'preview', id:node.sites[0].id});
+    assert.equal(view.state.context.location.uri, caller.uri, 'original callback callsite remains separately navigable');
+    assert.equal(view.state.context.location.start, site.location.start);
+    assert.equal(index.callbackAt(caller.uri, site.location.start)?.incomplete, true, 'navigation must not turn an AI suggestion into a proven call');
+  } finally { view.dispose(); }
+});
 
 function synthetic(refCount: number) {
   const uri = 'file:///large.c';

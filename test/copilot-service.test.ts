@@ -15,17 +15,18 @@ class Emitter {
   event = (listener: (...args: any[]) => void) => { this.listeners.add(listener); return { dispose: () => this.listeners.delete(listener) }; };
   fire(value?: any) { for (const listener of this.listeners) listener(value); }
 }
-async function harness(denied=false, timeoutMs?:number) {
+async function harness(denied=false, timeoutMs?:number, siteCount=denied?2:1) {
   const storage=await mkdtemp(path.join(tmpdir(),'dynsight-service-'));
   const parser=await createAnalyzer(path.resolve('node_modules/web-tree-sitter/web-tree-sitter.wasm'),path.resolve('node_modules/tree-sitter-c/tree-sitter-c.wasm'));
-  const file=parser.analyze('file:///example.c','struct Ops{void(*cb_complete)(void);};void run(struct Ops*p){p->cb_complete();}'+(denied?'void run2(struct Ops*p){p->cb_complete();}':''));
+  const file=parser.analyze('file:///example.c','struct Ops{void(*cb_complete)(void);};'+
+    Array.from({length:siteCount}, (_, n) => `void run${n || ''}(struct Ops*p){p->cb_complete();}`).join(''));
   const config=new Map<string,unknown>([['copilotCallbacks',false],['copilotModel','']]);
   const calls:string[]=[],queries:unknown[]=[],messages:string[]=[];
   const commands=new Map<string,(...args:any[])=>Promise<void>>(),settings=new Emitter(),state=new Map<string,unknown>();
   const permissions=new Map<string,boolean>();let pick='model-a',pickCount=0;
-  let held: {id:string; phase:string; started:()=>void; promise:Promise<void>} | undefined;
+  let held: {id:string; phase:string; afterCalls:number; started:()=>void; promise:Promise<void>} | undefined;
   async function waitHeld(id:string,phase:string) {
-    if(held?.id===id && held.phase===phase){const waiting=held;held=undefined;waiting.started();await waiting.promise;}
+    if(held?.id===id && held.phase===phase && calls.length>=held.afterCalls){const waiting=held;held=undefined;waiting.started();await waiting.promise;}
   }
   const tokens:{cancelled:boolean}[]=[];
   const models=['model-a','model-b'].map(id=>({id,vendor:'copilot',name:id,family:'test',version:'1',maxInputTokens:64000,
@@ -50,11 +51,98 @@ async function harness(denied=false, timeoutMs?:number) {
   function stop(){for(const item of context.subscriptions.splice(0))item.dispose();}
   function start(){const module={exports:{}as any};runInNewContext(bundle,{module,exports:module.exports,process,Buffer,URL,AbortController,setTimeout:(fn:()=>void,ms:number)=>setTimeout(fn,ms===60_000&&timeoutMs!==undefined?timeoutMs:ms),clearTimeout,setImmediate,require:(name:string)=>name==='vscode'?vscode:require(name)});return module.exports.registerCopilotCallbacks(context,workspace);}
   return{start,stop,config,commands,calls,queries,messages,workspace,update,state,tokens,
-    holdNext:(id:string,phase='sendRequest')=>{let release!:()=>void,reject!:(error:Error)=>void,started!:()=>void;const observed=new Promise<void>(done=>{started=done;});const promise=new Promise<void>((done,fail)=>{release=done;reject=fail;});held={id,phase,started,promise};return{started:observed,release,reject};},
+    holdNext:(id:string,phase='sendRequest',afterCalls=0)=>{let release!:()=>void,reject!:(error:Error)=>void,started!:()=>void;const observed=new Promise<void>(done=>{started=done;});const promise=new Promise<void>((done,fail)=>{release=done;reject=fail;});held={id,phase,afterCalls,started,promise};return{started:observed,release,reject};},
     pick:(id:string)=>{pick=id;},pickCount:()=>pickCount,available:(ids:string[])=>{available=models.filter(model=>ids.includes(model.id));},
     dispose:async()=>{stop();await rm(storage,{recursive:true,force:true});}};
 }
 const settle=()=>new Promise(done=>setTimeout(done,1100));
+
+test('one Analyze command processes all 38 sites and a restart makes no new requests', async t => {
+  const h = await harness(false, undefined, 38); t.after(h.dispose); await h.start().ready;
+  await h.commands.get('dynsight.analyzeCallbacksWithCopilot')!();
+  assert.equal(h.calls.length, 38);
+  assert.equal(h.workspace.copilotDiagnostics.completed, 38);
+  assert.equal(h.workspace.copilotDiagnostics.remaining, 0);
+  assert.equal(h.workspace.copilotDiagnostics.automatic, false);
+  assert.equal(h.workspace.copilotDiagnostics.state, 'ready');
+  h.stop(); await h.start().ready;
+  assert.equal(h.calls.length, 38);
+  assert.equal(h.workspace.copilotDiagnostics.cacheHits, 38);
+});
+
+test('Stop cancels a held request, retains progress, and suppresses background requests until Analyze', async t => {
+  const h = await harness(false, undefined, 38); t.after(h.dispose); await h.start().ready;
+  const held = h.holdNext('model-a', 'sendRequest', 8);
+  const pending = h.commands.get('dynsight.analyzeCallbacksWithCopilot')!();
+  await held.started;
+  assert.equal(h.workspace.copilotDiagnostics.completed, 7);
+  assert.equal(h.workspace.copilotDiagnostics.automatic, true);
+  await h.commands.get('dynsight.stopCopilotAnalysis')!();
+  try { await pending; } finally { held.release(); }
+  assert.equal(h.tokens[7].cancelled, true);
+  assert.equal(h.workspace.copilotDiagnostics.state, 'stopped');
+  assert.equal(h.workspace.copilotDiagnostics.completed, 7);
+  assert.equal(h.workspace.copilotDiagnostics.failures, 0);
+  assert.equal(h.workspace.copilotDiagnostics.automatic, false);
+  h.workspace.sourceChanged.fire('editor-save'); h.workspace.settled.fire(); await settle();
+  assert.equal(h.calls.length, 8, 'save/settled events must not restart a stopped job');
+  await h.commands.get('dynsight.analyzeCallbacksWithCopilot')!();
+  assert.equal(h.calls.length, 39, 'seven completed results are reused; only 31 pending sites are requested');
+  assert.equal(h.workspace.copilotDiagnostics.completed, 38);
+});
+
+test('a stopped deferred job does not start after saving unsaved sources', async t => {
+  const h = await harness(false, undefined, 7); t.after(h.dispose); await h.start().ready;
+  h.workspace.hasDirtySources = true;
+  await h.commands.get('dynsight.analyzeCallbacksWithCopilot')!();
+  assert.equal(h.workspace.copilotDiagnostics.automatic, true);
+  assert.equal(h.workspace.copilotDiagnostics.state, 'waiting-for-saved-index');
+  await h.commands.get('dynsight.stopCopilotAnalysis')!();
+  h.workspace.hasDirtySources = false;
+  h.workspace.sourceChanged.fire('editor-save'); h.workspace.settled.fire(); await settle();
+  assert.equal(h.calls.length, 0);
+  assert.equal(h.workspace.copilotDiagnostics.state, 'stopped');
+  await h.commands.get('dynsight.analyzeCallbacksWithCopilot')!();
+  assert.equal(h.calls.length, 7);
+});
+
+test('automatic analysis pauses on edits and resumes all remaining work after saving', async t => {
+  const h = await harness(false, undefined, 7); t.after(h.dispose); await h.start().ready;
+  const held = h.holdNext('model-a'), pending = h.commands.get('dynsight.analyzeCallbacksWithCopilot')!();
+  await held.started;
+  h.workspace.hasDirtySources = true; h.workspace.stable = false;
+  h.workspace.sourceChanged.fire('editor-change');
+  try { await pending; } finally { held.release(); }
+  assert.equal(h.workspace.copilotDiagnostics.automatic, true);
+  assert.equal(h.workspace.copilotDiagnostics.state, 'waiting-for-saved-index');
+  h.workspace.hasDirtySources = false; h.workspace.stable = true; h.workspace.generation++;
+  h.workspace.sourceChanged.fire('editor-save'); h.workspace.settled.fire(); await settle();
+  assert.equal(h.calls.length, 8);
+  assert.equal(h.workspace.copilotDiagnostics.completed, 7);
+  assert.equal(h.workspace.copilotDiagnostics.state, 'ready');
+});
+
+test('Stop while the Analyze command waits for local indexing prevents a late start', async t => {
+  const h = await harness(); t.after(h.dispose); await h.start().ready;
+  let release!:() => void, entered!:() => void;
+  const held = new Promise<void>(done => { release = done; }), started = new Promise<void>(done => { entered = done; });
+  h.workspace.whenIdle = async () => { entered(); await held; };
+  const pending = h.commands.get('dynsight.analyzeCallbacksWithCopilot')!();
+  await started; await h.commands.get('dynsight.stopCopilotAnalysis')!(); release(); await pending;
+  assert.equal(h.calls.length, 0);
+  assert.equal(h.workspace.copilotDiagnostics.state, 'stopped');
+});
+
+test('saved-file background work still requests at most five sites after an explicit job completes', async t => {
+  const h = await harness(false, undefined, 7); t.after(h.dispose); await h.start().ready;
+  await h.commands.get('dynsight.analyzeCallbacksWithCopilot')!();
+  h.workspace.analysisKey = 'edited-settings'; h.workspace.generation++;
+  h.workspace.sourceChanged.fire('editor-save'); h.workspace.settled.fire(); await settle();
+  assert.equal(h.calls.length, 12);
+  assert.equal(h.workspace.copilotDiagnostics.completed, 5);
+  assert.equal(h.workspace.copilotDiagnostics.remaining, 2);
+  assert.equal(h.workspace.copilotDiagnostics.automatic, false);
+});
 test('disabled Copilot stays off while dirty sources or local analysis block the index',async t=>{
   const h=await harness();t.after(h.dispose);await h.start().ready;
   h.workspace.hasDirtySources=true;h.workspace.stable=false;

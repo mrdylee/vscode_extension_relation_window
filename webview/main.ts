@@ -1,5 +1,6 @@
 import type { Access, GraphNode, Kind } from '../src/model';
 import type { ViewState } from '../src/view-state';
+import { nodePreviewId, canExpandNode } from '../src/view-state';
 import type { Diagnostics } from '../src/diagnostics';
 import { copilotWaitMessage } from '../src/diagnostics';
 import { highlightC } from '../src/syntax';
@@ -38,9 +39,11 @@ function renderCopilot(ai: Diagnostics['copilot']) {
   copilotProgress.hidden = !ai;
   copilotProgress.replaceChildren();
   if (!ai) return;
+  const stop = () => copilotProgress.append(button('Stop analysis', () => send('copilotStop'), 'Stop Copilot analysis and keep completed results'));
   if (ai.state === 'waiting-for-saved-index') {
     copilotProgress.append(el('span', '', `Copilot paused: ${copilotWaitMessage(ai.waitReason)}`));
     copilotProgress.title = 'Current callback counts are unavailable while the saved index is not ready. This is not a model response wait.';
+    if (ai.automatic) stop();
     return;
   }
   const total = ai.total ?? 0, completed = ai.completed ?? 0;
@@ -50,7 +53,8 @@ function renderCopilot(ai: Diagnostics['copilot']) {
   copilotProgress.append(el('span', '', `Copilot: ${state} · ${completed}/${total} processed · Remaining: ${ai.remaining} · Failed: ${ai.failures}`));
   if (total) copilotProgress.append(el('span', 'muted', `Candidates: ${ai.candidates} · No candidate in supplied context: ${ai.notFound} · Context limited: ${ai.contextLimited}`));
   copilotProgress.title = 'Coverage of detected callback sites in the current saved index. Failed sites remain pending. Processing every site does not prove every runtime target was found.';
-  if (ai.remaining > 0 && !busy) copilotProgress.append(button('Analyze next 5', () => send('copilotAnalyze'), 'Analyze up to 5 pending callback sites with Copilot'));
+  if (ai.state === 'analyzing' || ai.automatic) stop();
+  else if (ai.remaining > 0 && !busy) copilotProgress.append(button('Analyze all remaining', () => send('copilotAnalyze'), 'Analyze remaining callbacks automatically in batches of 5; requests use your Copilot allowance'));
 }
 const divider = el('div', 'divider'); divider.tabIndex = 0;
 divider.setAttribute('role', 'separator'); divider.setAttribute('aria-label', 'Context width'); divider.setAttribute('aria-orientation', 'vertical');
@@ -263,7 +267,7 @@ function showDetails(node: GraphNode, anchor: HTMLButtonElement) {
     b.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); send('open', { id: site.id }); } };
     popup.append(b);
   }
-  if (node.symbolId && !node.cycle && (!node.callKind || ['direct', 'expanded', 'inferred'].includes(node.callKind))) {
+  if (canExpandNode(node)) {
     const actions = el('div', 'node-actions');
     actions.append(button(node.expanded ? '− Collapse' : '+ Expand', () => send(node.expanded ? 'collapse' : 'expand', { key: node.key })),
       button('Levels…', () => send('expandSpecial', { key: node.key }), 'Levels to expand from this node (Shift+→)'));
@@ -281,11 +285,11 @@ function drawNode(node: GraphNode): HTMLElement {
   if (node.sites.length && node.sites.every(site => site.argument)) branch.classList.add('function-argument');
   if (node.sites.length && node.sites.every(site => site.callKind === 'registered' && site.kind === 'reference')) branch.classList.add('function-registration');
   const card = el('article', 'node'); card.dataset.nodeName = node.name;
-  const openId = node.callKind || node.direction || node.sites.some(site => site.argument || site.callKind === 'registered') || node.sites[0]?.access ? node.sites[0].id : node.symbolId ?? node.sites[0]?.id;
+  const openId = nodePreviewId(node);
   const title = button('', event => { if (event.detail <= 1) send('selectNode', { key: node.key }); }, '');
   title.className = 'node-title'; title.dataset.key = node.key;
   if (node.symbolId) title.dataset.symbolId = node.symbolId;
-  title.dataset.preview = openId;
+  if (openId) title.dataset.preview = openId;
   title.append(icon(node), el('span', 'symbol-name', node.symbolId ? node.name : node.sites[0]?.name ?? node.name));
   if (node.sites.some(site => site.callKind === 'ai-candidate')) title.append(el('span', 'badge', 'AI candidate'));
   if (node.sites.some(site => site.callKind === 'registered' && site.kind === 'reference')) title.append(el('span', 'badge', 'Registration'));
@@ -309,7 +313,7 @@ function drawNode(node: GraphNode): HTMLElement {
     }
     if (event.key === 'ArrowRight') { event.preventDefault(); send(event.shiftKey ? 'expandSpecial' : 'expand', { key: node.key }); }
     if (event.key === 'ArrowLeft') { event.preventDefault(); send('collapse', { key: node.key }); }
-    if (event.key === 'Enter') { event.preventDefault(); send('open', { id: openId }); }
+    if (event.key === 'Enter' && openId) { event.preventDefault(); send('open', { id: openId }); }
   };
   card.append(title);
   branch.append(card);

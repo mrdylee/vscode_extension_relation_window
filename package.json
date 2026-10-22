@@ -2,7 +2,7 @@
   "name": "dynsight",
   "displayName": "Dynsight — C Code Explorer",
   "description": "Build-free C references, caller/callee graphs and a linked Context preview.",
-  "version": "0.1.64",
+  "version": "0.1.65",
   "publisher": "dylee",
   "author": "dylee",
   "license": "MIT",
@@ -33,6 +33,10 @@
       {
         "command": "dynsight.reanalyzeCallbacksWithCopilot",
         "title": "Dynsight: Reanalyze Callback Candidates with Copilot"
+      },
+      {
+        "command": "dynsight.stopCopilotAnalysis",
+        "title": "Dynsight: Stop Copilot Analysis"
       },
       {
         "command": "dynsight.reportIssue",
@@ -96,7 +100,7 @@
           "type": "boolean",
           "default": false,
           "scope": "window",
-          "markdownDescription": "Optional AI candidates for unresolved callbacks using your existing GitHub Copilot account. Start with [Analyze Callbacks with Copilot](command:dynsight.analyzeCallbacksWithCopilot) to select a model and grant access. Relevant source is sent to Copilot and account usage limits apply. Saved file changes can request up to 5 uncached analyses per batch. Startup and navigation only reuse the local cache. AI candidates are suggestions, not proven calls. Rebuild Index preserves valid AI cache."
+          "markdownDescription": "Optional AI candidates for unresolved callbacks using your existing GitHub Copilot account. Start with [Analyze Callbacks with Copilot](command:dynsight.analyzeCallbacksWithCopilot) to select a model and grant access. Relevant source is sent to Copilot and account usage limits apply. Analyze processes all pending callbacks automatically in batches of 5; each request uses your allowance. Stop Copilot Analysis cancels the current request and keeps completed results. Saved file changes can request up to 5 uncached analyses when no full run is active. Startup and navigation only reuse the local cache. AI candidates are suggestions, not proven calls. Rebuild Index preserves valid AI cache."
         },
         "dynsight.copilotModel": {
           "type": "string",
@@ -188,7 +192,7 @@
     "test:freertos": "npm run build && node scripts/test-freertos.mjs",
     "test:ui": "npm run build && tsx test/create-ui-fixture.ts && node test/ui.mjs",
     "vscode:prepublish": "npm run build",
-    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license --out artifacts/dynsight-0.1.64.vsix"
+    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license --out artifacts/dynsight-0.1.65.vsix"
   },
   "dependencies": {
     "minimatch": "10.2.6",

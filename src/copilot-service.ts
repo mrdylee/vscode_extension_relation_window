@@ -12,6 +12,7 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
   let savedModel = context.workspaceState.get<SavedModel>('copilotCallbackModel');
   let disposed = false, userAction = false, pendingChange = false, running: Promise<void> | undefined;
   let observedGeneration = -1;
+  let automatic = false, stoppedByUser = false, stopRevision = 0;
   let deferredReason: 'enabled' | 'force' | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const activity = { state: 'off', waitReason: undefined as CopilotWaitReason | undefined, total: 0, completed: 0, requests: 0, cacheHits: 0, remaining: 0, failures: 0, candidates: 0, notFound: 0, contextLimited: 0 };
@@ -21,7 +22,7 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
     activity.state = value;
     activity.waitReason = value === 'waiting-for-saved-index'
       ? workspace.copilotWaitReason ?? (workspace.hasDirtySources ? 'unsaved-sources' : 'source-update') : undefined;
-    workspace.copilotDiagnostics = { ...activity }; workspace.diagnosticsChanged.fire();
+    workspace.copilotDiagnostics = { ...activity, automatic }; workspace.diagnosticsChanged.fire();
   }
   function clearProgress() {
     activity.total = activity.completed = activity.cacheHits = activity.remaining = activity.failures = activity.candidates = activity.notFound = activity.contextLimited = 0;
@@ -31,6 +32,7 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
     status(enabled() ? 'waiting-for-saved-index' : 'off'); workspace.changed.fire();
   }
   function resetModel() {
+    automatic = false; stoppedByUser = false;
     clear(); controller?.dispose(); controller = undefined; model = undefined; userAction = false;
     deferredReason = undefined;
     pendingChange = false; clearTimeout(timer); observedGeneration = workspace.generation;
@@ -99,11 +101,11 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
     if (result.stale) return;
     recordProgress(result);
     if (!['permission-required', 'model-unavailable'].includes(activity.state))
-      status(result.failures ? 'request-failed' : result.remaining ? 'more-callbacks-available' : 'ready');
+      status(result.stopped || (stoppedByUser && result.remaining) ? 'stopped' : result.failures ? 'request-failed' : result.remaining ? 'more-callbacks-available' : 'ready');
     else status(activity.state);
   }
   async function run(reason?: 'enabled' | 'saved-change' | 'force') {
-    if (disposed || !enabled()) { status('off'); return; }
+    if (disposed || !enabled()) { automatic = false; status('off'); return; }
     if (!workspace.stable || workspace.hasDirtySources) {
       if (reason === 'enabled' || reason === 'force') deferredReason = reason;
       status('waiting-for-saved-index'); return;
@@ -117,9 +119,13 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
     const active = controller;
     observedGeneration = workspace.generation;
     running = (async () => {
-      try { account(await (reason ? active.analyzeUnresolved(snapshot(), { reason }) : active.restore(snapshot()))); }
-      catch { activity.failures++; status('request-failed'); }
-      finally { running = undefined; userAction = false; if (pendingChange) schedule(); }
+      try {
+        const result = await (reason ? active.analyzeUnresolved(snapshot(), { reason, automatic }) : active.restore(snapshot()));
+        if (!result.stale) automatic = false;
+        account(result);
+      }
+      catch { automatic = false; activity.failures++; status('request-failed'); }
+      finally { running = undefined; userAction = false; if (pendingChange || deferredReason) schedule(); }
     })();
     return running;
   }
@@ -131,7 +137,7 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
       if (running) { void running.then(schedule); return; }
       if (!workspace.stable || workspace.hasDirtySources) { status('waiting-for-saved-index'); return; }
       const changed = pendingChange && observedGeneration !== workspace.generation; pendingChange = false;
-      void run(changed ? 'saved-change' : undefined);
+      void run(changed && !stoppedByUser ? 'saved-change' : undefined);
     }, 1000);
   }
   async function selectModel(picker: boolean) {
@@ -140,7 +146,7 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
     const chosen = picker || !id
       ? (await vscode.window.showQuickPick(models.map(value => ({ label: value.name, description: `${value.id} · ${value.version}`, value })),
         { title: 'Select Copilot model for Dynsight', placeHolder: picker ? 'Selection alone sends no source and makes no AI request.' :
-          'Analyze with this model: relevant source is sent to Copilot, using up to 5 requests from your allowance.' }))?.value
+          'Analyze all pending callbacks in batches of 5. Relevant source is sent to Copilot and each request uses your allowance. You can stop at any time.' }))?.value
       : models.find(value => value.id === id);
     if (!chosen) {
       if (id && !picker) {
@@ -160,18 +166,32 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
   async function command(force = false, selectOnly = false) {
     if (!vscode.workspace.isTrusted || !context.storageUri) { await vscode.window.showInformationMessage('Dynsight: Open a trusted workspace to use Copilot callback analysis.'); return; }
     try {
+      const revision = stopRevision;
       if (!await selectModel(selectOnly)) return;
+      if (revision !== stopRevision || disposed) return;
       if (selectOnly) { clearTimeout(timer); await run(); return; }
+      automatic = true; stoppedByUser = false;
       await vscode.workspace.getConfiguration('dynsight').update('copilotCallbacks', true, vscode.ConfigurationTarget.Workspace);
-      await workspace.whenIdle(); await running; userAction = true; pendingChange = false; clearTimeout(timer);
+      await workspace.whenIdle(); await running;
+      if (revision !== stopRevision || disposed || !enabled()) return;
+      userAction = true; pendingChange = false; clearTimeout(timer);
       await run(force ? 'force' : 'enabled');
     } catch { status('request-failed'); await vscode.window.showErrorMessage('Dynsight: Copilot callback analysis could not start. Check Copilot sign-in and model access.'); }
+  }
+  function stop() {
+    stopRevision++; automatic = false; stoppedByUser = true;
+    deferredReason = undefined; pendingChange = false; userAction = false;
+    clearTimeout(timer); controller?.stop(); status(enabled() ? 'stopped' : 'off');
   }
   context.subscriptions.push(
     vscode.commands.registerCommand('dynsight.analyzeCallbacksWithCopilot', () => command()),
     vscode.commands.registerCommand('dynsight.reanalyzeCallbacksWithCopilot', () => command(true)),
     vscode.commands.registerCommand('dynsight.selectCopilotModel', () => command(false, true)),
-    workspace.sourceChanged.event(kind => { clear(); if (kind !== 'editor-change' && kind !== 'configuration') pendingChange = true; schedule(); }),
+    vscode.commands.registerCommand('dynsight.stopCopilotAnalysis', stop),
+    workspace.sourceChanged.event(kind => {
+      if (automatic) deferredReason ??= 'enabled';
+      clear(); if (kind !== 'editor-change' && kind !== 'configuration') pendingChange = true; schedule();
+    }),
     workspace.settled.event(schedule),
     vscode.workspace.onDidChangeConfiguration(event => {
       if (event.affectsConfiguration('dynsight.copilotModel')) {
@@ -179,7 +199,10 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
         schedule(); return;
       }
       if (!event.affectsConfiguration('dynsight.copilotCallbacks')) return;
-      clear(); if (!enabled()) { pendingChange = false; deferredReason = undefined; userAction = false; clearTimeout(timer); status('off'); } else schedule();
+      clear(); if (!enabled()) {
+        stopRevision++; automatic = false; pendingChange = false; deferredReason = undefined;
+        userAction = false; clearTimeout(timer); status('off');
+      } else schedule();
     }),
     { dispose: () => { disposed = true; clearTimeout(timer); controller?.dispose(); } });
   const ready = workspace.ready.then(() => run());

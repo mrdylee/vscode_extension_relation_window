@@ -50,7 +50,8 @@ try {
     if (message.type === 'selectNode') {
       const find = node => node.key === message.key ? node : node.children.map(find).find(Boolean);
       const node = find(state.graph.root) ?? state.graph.callers?.map(find).find(Boolean);
-      preview(node.callKind || node.direction || node.sites.some(s => s.argument || s.callKind === 'registered') || node.sites[0]?.access ? node.sites[0].id : node.symbolId ?? node.sites[0]?.id);
+      preview(node.callKind === 'ai-candidate' && node.symbolId ? node.symbolId :
+        node.callKind || node.direction || node.sites.some(s => s.argument || s.callKind === 'registered') || node.sites[0]?.access ? node.sites[0].id : node.symbolId ?? node.sites[0]?.id);
       if (node.name === 'control_task') state.graph = fixture.expandedGraph;
       if (node.name === 'entry') state.graph = fixture.navigation.bothExpanded;
     }
@@ -84,13 +85,22 @@ try {
   assert.equal(await page.locator('.copilot-progress').count(),1,'AI progress must be visible outside Diagnostics');
   assert.match(await page.locator('.copilot-progress').textContent(),/5\/7 processed.*Remaining: 2/);
   assert.equal(await page.locator('.graph > .branch').getAttribute('data-ai-progress'),'retained','progress does not rerender the graph');
-  await page.getByRole('button',{name:'Analyze next 5',exact:true}).click();
+  await page.getByRole('button',{name:'Analyze all remaining',exact:true}).click();
   assert.ok(await page.evaluate(()=>window.sent.some(m=>m.type==='copilotAnalyze')));
+  Object.assign(aiDiagnostics.copilot,{state:'analyzing',automatic:true});
+  await page.evaluate(diagnostics=>window.dispatchEvent(new MessageEvent('message',{data:{type:'diagnostics',diagnostics}})),aiDiagnostics);
+  assert.equal(await page.getByRole('button',{name:'Analyze all remaining',exact:true}).count(),0);
+  await page.getByRole('button',{name:'Stop analysis',exact:true}).click();
+  assert.ok(await page.evaluate(()=>window.sent.some(m=>m.type==='copilotStop')));
+  Object.assign(aiDiagnostics.copilot,{state:'stopped',automatic:false});
+  await page.evaluate(diagnostics=>window.dispatchEvent(new MessageEvent('message',{data:{type:'diagnostics',diagnostics}})),aiDiagnostics);
+  assert.match(await page.locator('.copilot-progress').textContent(),/stopped.*5\/7/);
+  assert.equal(await page.getByRole('button',{name:'Analyze all remaining',exact:true}).count(),1);
   Object.assign(aiDiagnostics.copilot,{state:'ready',completed:7,remaining:0,notFound:7});
   await page.evaluate(diagnostics=>window.dispatchEvent(new MessageEvent('message',{data:{type:'diagnostics',diagnostics}})),aiDiagnostics);
   assert.match(await page.locator('.copilot-progress').textContent(),/All detected sites processed.*7\/7/);
   assert.match(await page.locator('.copilot-progress').textContent(),/No candidate in supplied context: 7/);
-  assert.equal(await page.getByRole('button',{name:'Analyze next 5',exact:true}).count(),0);
+  assert.equal(await page.getByRole('button',{name:'Analyze all remaining',exact:true}).count(),0);
   await page.getByRole('button', { name: 'Diagnostics', exact: true }).click();
   for (const [waitReason, message] of [
     ['unsaved-sources', 'Save all modified C/H files'],
@@ -102,7 +112,7 @@ try {
     ['analysis-failed', 'Local relation analysis failed'],
     ['closed', 'Workspace analysis has closed']
   ]) {
-    Object.assign(aiDiagnostics.copilot,{state:'waiting-for-saved-index',waitReason,total:0,completed:0});
+    Object.assign(aiDiagnostics.copilot,{state:'waiting-for-saved-index',automatic:true,waitReason,total:0,completed:0});
     await page.evaluate(diagnostics=>window.dispatchEvent(new MessageEvent('message',{data:{type:'diagnostics',diagnostics}})),aiDiagnostics);
     const footer = await page.locator('.copilot-progress').textContent();
     assert.ok(footer.includes(message));
@@ -111,10 +121,11 @@ try {
     assert.ok(details.includes(message));
     assert.match(details,/Requests this session: 5/);
     assert.doesNotMatch(details,/Processed: 0\/0/);
-    assert.equal(await page.getByRole('button',{name:'Analyze next 5',exact:true}).count(),0);
+    assert.equal(await page.getByRole('button',{name:'Analyze all remaining',exact:true}).count(),0);
+    assert.equal(await page.getByRole('button',{name:'Stop analysis',exact:true}).count(),1,'a paused automatic job can be stopped');
   }
   await page.screenshot({ path: 'output/playwright/copilot-waiting.png' });
-  Object.assign(aiDiagnostics.copilot,{state:'ready',waitReason:undefined,total:7,completed:7});
+  Object.assign(aiDiagnostics.copilot,{state:'ready',automatic:false,waitReason:undefined,total:7,completed:7});
   await page.evaluate(diagnostics=>window.dispatchEvent(new MessageEvent('message',{data:{type:'diagnostics',diagnostics}})),aiDiagnostics);
   assert.match(await page.locator('.copilot-progress').textContent(),/7\/7 processed/);
   assert.doesNotMatch(await page.locator('.memory-diagnostics').textContent(),/Copilot paused/);
@@ -393,9 +404,19 @@ try {
   aiTarget.callKind = 'ai-candidate'; aiTarget.sites.forEach(site => site.callKind = 'ai-candidate');
   await configure({ graph: aiGraph });
   assert.ok((await pointerTarget.textContent()).includes('AI candidate'));
+  assert.equal(await pointerTarget.getAttribute('data-preview'), aiTarget.symbolId, 'AI title opens the candidate definition');
+  await pointerTarget.click();
+  assert.match(await page.locator('.code-line.highlight').textContent(), /void callback_target/);
+  await pointerTarget.press('Enter');
+  assert.equal(await page.evaluate(() => window.sent.filter(message => message.type === 'open').at(-1).id), aiTarget.symbolId);
+  await pointerTarget.dblclick();
+  assert.equal(await page.evaluate(() => window.sent.filter(message => message.type === 'open').at(-1).id), aiTarget.symbolId);
   await pointerTarget.focus(); await pointerTarget.press('Space');
   assert.ok((await popup.textContent()).includes('This is not proof of invocation.'));
   assert.ok((await popup.textContent()).includes('Copilot candidate · callbacks.run'));
+  assert.equal(await popup.locator('.node-actions').count(), 1, 'candidate definition retains expansion actions');
+  await popup.locator('.site:not(.evidence)').first().click();
+  assert.match(await page.locator('.code-line.highlight').textContent(), /callbacks\.run\(\)/, 'the original callback invocation remains available');
   await page.screenshot({ path: 'output/playwright/copilot-candidates.png', fullPage: true });
   await page.keyboard.press('Escape');
   aiTarget.callKind = 'registered'; aiTarget.sites.forEach(site => site.callKind = 'registered');

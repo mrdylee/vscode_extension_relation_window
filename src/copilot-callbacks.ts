@@ -10,7 +10,7 @@ export interface CallbackHint {
   candidates: {targetId: string; evidence: Location[]; reason: string}[]; cached: boolean; contextLimited?: boolean;
 }
 export interface CopilotProgress { total: number; completed: number; requested: number; cached: number; remaining: number; failures: number; candidates: number; notFound: number; contextLimited: number }
-export interface CopilotRunResult extends CopilotProgress { hints: CallbackHint[]; stale: boolean }
+export interface CopilotRunResult extends CopilotProgress { hints: CallbackHint[]; stale: boolean; stopped?: boolean }
 interface Options { cacheDir: string; provider: CopilotProvider; isCurrent: (snapshot: CopilotSnapshot) => boolean; onHints?: (hints: CallbackHint[]) => void; onProgress?: (progress: CopilotProgress) => void; maxRequests?: number }
 const version = 'copilot-callbacks-2';
 const maxReplyBytes = 64 * 1024;
@@ -51,12 +51,14 @@ export class CopilotCallbackController {
   private disposed = false;
   constructor(private options: Options) {}
   restore(snapshot: CopilotSnapshot) { return this.run(snapshot); }
-  analyzeUnresolved(snapshot: CopilotSnapshot, options: {reason:'enabled'|'saved-change'|'force'}) { return this.run(snapshot, options.reason); }
+  analyzeUnresolved(snapshot: CopilotSnapshot, options: {reason:'enabled'|'saved-change'|'force'; automatic?: boolean}) { return this.run(snapshot, options.reason, options.automatic); }
+  stop() { this.abort?.abort('user-stop'); }
   invalidate() { this.revision++; this.abort?.abort(); }
   dispose() { this.disposed = true; this.invalidate(); }
-  private async run(snapshot: CopilotSnapshot, reason?: 'enabled'|'saved-change'|'force'): Promise<CopilotRunResult> {
+  private async run(snapshot: CopilotSnapshot, reason?: 'enabled'|'saved-change'|'force', automatic = false): Promise<CopilotRunResult> {
     this.invalidate(); const revision = this.revision, abort = this.abort = new AbortController();
-    const current = () => !this.disposed && !abort.signal.aborted && this.revision === revision && this.options.isCurrent(snapshot);
+    const snapshotCurrent = () => !this.disposed && this.revision === revision && this.options.isCurrent(snapshot);
+    const current = () => !abort.signal.aborted && snapshotCurrent();
     const result: CopilotRunResult = {hints:[],total:0,completed:0,requested:0,cached:0,remaining:0,failures:0,candidates:0,notFound:0,contextLimited:0,stale:false};
     if (!current()) return {...result,stale:true};
     const builder = await prepareCallbackContexts(snapshot.files,current);
@@ -75,6 +77,8 @@ export class CopilotCallbackController {
     };
     result.total = result.remaining = builder.sites.length; progress();
     const maximum = Math.max(0,Math.min(20,Math.floor(this.options.maxRequests ?? 5)));
+    let batchRequests = 0, failed = false;
+    const canRequest = () => !!reason && !failed && maximum > 0 && (automatic || result.requested < maximum);
     if(reason === 'force') for(const site of builder.sites) {
       if(!current())break;
       await rm(path.join(this.options.cacheDir,callbackDigest(site.key)+'.json'),{force:true});
@@ -95,12 +99,18 @@ export class CopilotCallbackController {
       } catch { /* Missing or invalid cache is a miss, never a new request during restore. */ }
       if (!current()) { result.stale = true; break; }
       // Do not construct prompts for the unrequested remainder or cache misses on startup.
-      if (!saved && (!reason || result.requested >= maximum)) continue;
+      if (!saved && !canRequest()) continue;
       const context=builder.context(site);
       const digest = callbackDigest(JSON.stringify([version,this.options.provider.modelKey,snapshot.settingsKey,context.fingerprint]));
       if (saved?.digest === digest) try { reply=validate(saved.reply,context); } catch { /* Invalid evidence is a cache miss. */ }
       if (reply) { result.cached++; accept(hint(context,reply,true)); continue; }
-      if (!reason || result.requested >= maximum) continue;
+      if (!canRequest()) continue;
+      if (automatic && batchRequests >= maximum) {
+        batchRequests = 0;
+        await new Promise<void>(resolve => setImmediate(resolve));
+        if (!current()) { result.stale = true; break; }
+      }
+      batchRequests++;
       result.requested++; progress();
       try {
         const request=prompt(context);
@@ -119,9 +129,11 @@ export class CopilotCallbackController {
         finally { await rm(temporary,{force:true}).catch(()=>{}); }
         if (!current()) { result.stale = true; break; }
         accept(hint(context,reply,false));
+        if (automatic && batchRequests === maximum) this.options.onHints?.(result.hints);
       } catch {
         if (!current()) { result.stale = true; break; }
         result.failures++; progress();
+        if (automatic) failed = true;
       }
     }
     if(reason && current()) {
@@ -131,7 +143,8 @@ export class CopilotCallbackController {
         if(/^[a-f0-9]{64}\.json$/.test(name)&&!live.has(name))await rm(path.join(this.options.cacheDir,name),{force:true}).catch(()=>{});
       }
     }
-    if (current()) this.options.onHints?.(result.hints);
+    if (abort.signal.reason === 'user-stop' && snapshotCurrent()) { result.stopped = true; result.stale = false; }
+    if (current() || result.stopped) this.options.onHints?.(result.hints);
     else { result.stale = true; result.hints = []; }
     return result;
   }

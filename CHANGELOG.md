@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.65 — 2026-10-22
+
+- Restore Windows, macOS and WSL download filenames and the Windows/macOS/Ubuntu
+  CI matrix. Platform downloads contain the same universal JavaScript/WASM VSIX.
+
+- Make AI candidate function nodes preview their definitions in Context, open
+  the definition with double-click/Enter, and expand the candidate's callees.
+  Preserve AI uncertainty labels and separate callsite/evidence navigation.
+- Process all pending callback sites from one Analyze command, automatically
+  continuing in batches of five with cumulative progress and cache reuse.
+- Add Stop analysis in the footer and Command Palette. Cancel the current request,
+  keep completed results, and require Analyze to resume a stopped job. Active jobs
+  wait for saved sources and local indexing; request errors stop continuation.
+- Retain cache-only startup/navigation and the five-request limit for background
+  saved-file analysis when no explicit automatic job is active.
+
 ## 0.1.64 — 2026-10-22
 
 - Prefer locally derived callback registration/flow candidates and their source

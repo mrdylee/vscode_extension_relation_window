@@ -14,6 +14,60 @@ function snapshot(count = 7): CopilotSnapshot {
 }
 const noCandidate = JSON.stringify({status:'not-found',candidates:[]});
 
+test('automatic analysis processes all 38 sites with cumulative progress and reuses cache', async t => {
+  const cacheDir = await mkdtemp(path.join(tmpdir(), 'dynsight-auto-'));
+  t.after(() => rm(cacheDir, {recursive:true, force:true}));
+  let requests = 0;
+  const completed: number[] = [];
+  const c = new CopilotCallbackController({cacheDir, isCurrent:() => true,
+    onProgress:value => completed.push(value.completed),
+    provider:{modelKey:'auto', complete:async () => { requests++; return noCandidate; }}});
+  t.after(() => c.dispose());
+  const s = snapshot(38), result = await c.analyzeUnresolved(s, {reason:'enabled', automatic:true});
+  assert.equal(result.completed, 38); assert.equal(result.remaining, 0); assert.equal(requests, 38);
+  assert.ok(completed.every((value, n) => !n || value >= completed[n - 1]), 'progress never resets at a batch boundary');
+  assert.equal((await c.analyzeUnresolved(s, {reason:'enabled', automatic:true})).cached, 38);
+  assert.equal(requests, 38);
+  assert.equal((await c.analyzeUnresolved(s, {reason:'force', automatic:true})).completed, 38);
+  assert.equal(requests, 76, 'forced analysis invalidates the old cache once and visits each site once');
+});
+
+test('stopping automatic analysis preserves completed results and resumes only missing sites', async t => {
+  const cacheDir = await mkdtemp(path.join(tmpdir(), 'dynsight-auto-stop-'));
+  t.after(() => rm(cacheDir, {recursive:true, force:true}));
+  let requests = 0, started!:() => void;
+  const held = new Promise<void>(resolve => { started = resolve; });
+  let hints = 0;
+  const c = new CopilotCallbackController({cacheDir, isCurrent:() => true, onHints:value => { hints = value.length; },
+    provider:{modelKey:'auto', complete:async (_prompt, signal) => {
+      if (++requests !== 8) return noCandidate;
+      started();
+      return new Promise<string>((_resolve, reject) => signal.addEventListener('abort', () => reject(new Error('stopped')), {once:true}));
+    }}});
+  t.after(() => c.dispose());
+  const s = snapshot(12), pending = c.analyzeUnresolved(s, {reason:'enabled', automatic:true});
+  await held; c.stop();
+  const result = await pending;
+  assert.equal(result.stopped, true); assert.equal(result.stale, false);
+  assert.equal(result.completed, 7); assert.equal(result.failures, 0); assert.equal(hints, 7);
+  const restored = await c.restore(s);
+  assert.equal(restored.cached, 7); assert.equal(restored.remaining, 5); assert.equal(requests, 8);
+  const resumed = await c.analyzeUnresolved(s, {reason:'enabled', automatic:true});
+  assert.equal(resumed.completed, 12); assert.equal(resumed.requested, 5);
+});
+
+test('automatic analysis stops new requests after an error instead of retrying indefinitely', async t => {
+  const cacheDir = await mkdtemp(path.join(tmpdir(), 'dynsight-auto-failure-'));
+  t.after(() => rm(cacheDir, {recursive:true, force:true}));
+  let requests = 0;
+  const c = new CopilotCallbackController({cacheDir, isCurrent:() => true,
+    provider:{modelKey:'auto', complete:async () => { if (++requests === 3) throw new Error('quota'); return noCandidate; }}});
+  t.after(() => c.dispose());
+  const result = await c.analyzeUnresolved(snapshot(38), {reason:'enabled', automatic:true});
+  assert.equal(requests, 3); assert.equal(result.completed, 2);
+  assert.equal(result.failures, 1); assert.equal(result.remaining, 36);
+});
+
 test('Copilot progress reports detected total before response and continues five then two', async t => {
   const cacheDir = await mkdtemp(path.join(tmpdir(),'dynsight-progress-'));
   t.after(() => rm(cacheDir,{recursive:true,force:true}));

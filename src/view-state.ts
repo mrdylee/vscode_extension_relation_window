@@ -1,6 +1,15 @@
-import { CallbackDiagnostic, AccessFilter, CallbackTargets, CalleeSort, GraphData, Location, RelationMode, SymbolRecord } from './model';
+import { CallbackDiagnostic, AccessFilter, CallbackTargets, CalleeSort, GraphData, GraphNode, Location, RelationMode, SymbolRecord } from './model';
 import { SyntaxToken } from './syntax';
 import { Diagnostics } from './diagnostics';
+
+export function nodePreviewId(node: GraphNode): string | undefined {
+  if (node.callKind === 'ai-candidate' && node.symbolId) return node.symbolId;
+  return node.callKind || node.direction || node.sites.some(site => site.argument || site.callKind === 'registered') || node.sites[0]?.access
+    ? node.sites[0]?.id : node.symbolId ?? node.sites[0]?.id;
+}
+export function canExpandNode(node: GraphNode): boolean {
+  return !!node.symbolId && !node.cycle && (!node.callKind || ['direct', 'expanded', 'inferred', 'ai-candidate'].includes(node.callKind));
+}
 export interface Preview { location: Location; text: string; tokens: SyntaxToken[][]; firstLine: number; path: string; label: string }
 export interface ViewState {
   graph?: GraphData; context?: Preview; candidates: SymbolRecord[];

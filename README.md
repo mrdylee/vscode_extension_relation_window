@@ -8,12 +8,12 @@ C 소스 폴더만 열어 함수의 호출·참조 관계, 변수의 읽기·쓰
 
 ## 설치와 시작
 
-1. [GitHub Releases](https://github.com/mrdylee/vscode_extension_relation_window/releases/latest)에서 WSL용 VSIX(`dynsight-<version>-wsl.vsix`)를 받고, VS Code 명령 팔레트의 **Extensions: Install from VSIX…**로 설치합니다. 다음 릴리스부터 Windows·macOS 이름의 사본은 제공하지 않습니다. 자동 업데이트용 공통 파일은 같은 패키지입니다.
+1. [GitHub Releases](https://github.com/mrdylee/vscode_extension_relation_window/releases/latest)에서 사용 환경에 맞는 VSIX(`dynsight-<version>-windows.vsix`, `-macos.vsix`, `-wsl.vsix`)를 받고, VS Code 명령 팔레트의 **Extensions: Install from VSIX…**로 설치합니다. 플랫폼별 파일과 자동 업데이트용 공통 파일은 동일한 JavaScript/WASM 패키지입니다.
 2. C 소스가 있는 폴더를 엽니다. 빌드, SDK, clangd, `compile_commands.json`은 필요하지 않습니다.
 3. **Dynsight: Open Relation and Context**를 실행합니다.
 4. 메인 편집기에서 함수나 변수 이름을 클릭합니다. 하단에 Context(왼쪽)와 Relation(오른쪽)이 표시됩니다.
 
-VS Code 데스크톱 1.95 이상이 필요합니다. 기본 분석은 로컬 WASM으로 수행합니다. 선택 기능인 **Copilot 콜백 분석**을 켜면 관련 소스 일부를 기존 Copilot 계정으로 전송하며 계정 사용량 한도가 적용됩니다. 업데이트 확인을 켜면 GitHub에 릴리스 정보를 요청합니다. 릴리스 게시 전 검증은 Ubuntu에서 단위 테스트와 Extension Host 통합 테스트를 실행합니다. WSL 원격 연결 및 원격 자동 설치는 실환경 미검증입니다. 웹 전용 VS Code는 지원하지 않습니다.
+VS Code 데스크톱 1.95 이상이 필요합니다. 기본 분석은 로컬 WASM으로 수행합니다. 선택 기능인 **Copilot 콜백 분석**을 켜면 관련 소스 일부를 기존 Copilot 계정으로 전송하며 계정 사용량 한도가 적용됩니다. 업데이트 확인을 켜면 GitHub에 릴리스 정보를 요청합니다. 릴리스 게시 전 검증은 Windows·macOS·Ubuntu에서 단위 테스트와 Extension Host 통합 테스트를 실행합니다. WSL 원격 연결 및 원격 자동 설치는 실환경 미검증입니다. 웹 전용 VS Code는 지원하지 않습니다.
 
 ## 디스크 캐시와 Copilot 콜백 후보 (v0.1.54)
 
@@ -40,10 +40,19 @@ VS Code 데스크톱 1.95 이상이 필요합니다. 기본 분석은 로컬 WAS
 - `dynsight.copilotCallbacks`는 기본 꺼짐입니다. 끄면 백그라운드 요청과 AI 후보 표시를 중단합니다.
 - 켠 상태에서 파일을 저장하면 필요한 미해결 콜백을 한 번에 최대 5건 분석합니다.
 - 재시작·함수 탐색·일반 Rebuild는 유효한 AI 캐시만 복원하며 새 요청을 하지 않습니다.
-- 남은 항목은 하단 **Analyze next 5** 또는 같은 명령으로 이어서 분석합니다. **Reanalyze Callback Candidates with Copilot**은
-  캐시를 우회하는 별도 명령이며, 역시 한 번에 최대 5건입니다.
+- 하단 **Analyze all remaining** 또는 **Analyze Callbacks with Copilot**을 한 번 실행하면
+  남은 항목을 5건씩 자동으로 이어 처리합니다. 요청마다 Copilot 사용량을 소비합니다.
+- **Stop analysis** 또는 **Dynsight: Stop Copilot Analysis**로 현재 요청과 연속 처리를
+  중지할 수 있습니다. 완료된 결과는 보존하며, 다시 Analyze를 누르면 남은 항목만 처리합니다.
+  중지한 뒤에는 저장만으로 새 요청을 보내지 않습니다. 미저장 편집 중에는 대기하고,
+  진행 중인 작업을 중지하지 않았다면 저장·로컬 분석 완료 후 자동으로 이어갑니다.
+- 요청 오류가 발생하면 연속 처리를 멈춥니다. **Reanalyze Callback Candidates with Copilot**은
+  기존 AI 캐시를 한 번 무효화한 뒤 전체를 5건씩 다시 처리합니다.
 - 결과는 Callers/Callees에 **AI candidate**로 표시합니다. 근거 소스 위치를 볼 수 있으며,
   실행 시 실제 호출을 보장하는 결과가 아닙니다. 코드가 바뀐 뒤 도착한 오래된 답변은 버립니다.
+- Callees의 AI 후보 함수명을 클릭하면 Context에 해당 함수 정의를 표시합니다.
+  더블클릭·Enter로 정의 위치를 열고, 클릭·확장 동작으로 후보 함수 내부의 관계를 탐색합니다.
+  원래 콜백 호출부와 등록 근거는 상세 팝업에서 별도로 열 수 있습니다.
 
 **Diagnostics**에서 Disk cache 상태, 소스 파싱 횟수, Copilot 요청·캐시 적중·대기 건수를
 확인할 수 있습니다. 하단 Copilot 상태는 **처리/감지한 호출부 전체 수, 남은 수, 실패 수**와
@@ -174,7 +183,7 @@ Include/Exclude는 기본 분석에 포함할 파일을 정하고, **Macro Expan
 1. `package.json`, `package-lock.json`의 버전 및 `package` 스크립트의 VSIX 이름을 함께 올리고 CHANGELOG를 작성합니다.
 2. `docs/releases/<버전>.md`에 변경 사항과 설치 안내를 작성합니다.
 3. 변경을 커밋·푸시한 뒤 `v0.1.10` 같은 버전 태그를 푸시합니다. 태그와 패키지 버전이 일치해야 합니다.
-4. GitHub Actions가 Ubuntu 검증을 통과한 후 WSL용 VSIX와 SHA-256 목록을 정식 릴리스로 게시합니다. 접미사 없는 공통 VSIX 이름은 자동 업데이트가 사용하므로 유지합니다.
+4. GitHub Actions가 Windows·macOS·Ubuntu 검증을 통과한 후 Windows·macOS·WSL용 VSIX와 SHA-256 목록을 정식 릴리스로 게시합니다. 접미사 없는 공통 VSIX 이름은 자동 업데이트가 사용하므로 유지합니다.
 5. 이전 버전에서 **Check for Updates**를 실행해 확인합니다. 일반 커밋만으로는 릴리스가 생성되지 않습니다.
 
 ## 탐색
