@@ -1,3 +1,4 @@
+import { AnalysisWorkBudget } from './analysis-budget';
 import { FileAnalysis, FlowExpression, FlowProgram, GlobalInitializer, Location, MacroDefinition, PreprocessorEvent, ReferenceRecord } from './model';
 import { joinTokens, locationIn, tokenizeC } from './c-tokens';
 import { MacroExpander, macroMemoryLimit } from './macro-expansion';
@@ -83,7 +84,7 @@ function activeText(file: FileAnalysis, start: number, end: number) {
 
 // The analyzer callback uses the already initialized C parser, in the Worker.
 export function deriveMacroCalls(raw: FileAnalysis[], analyze: Analyze, parseCalls: (uri: string, text: string, original?: (start: number, end: number) => Location, namespace?: string, context?: (location: Location) => string[]) => { references: ReferenceRecord[]; issues: string[]; programs: FlowProgram[]; initializers: GlobalInitializer[] },
-  parseInitializer: (uri: string, text: string, original: (start: number, end: number) => Location, context?: (location: Location) => string[]) => { value: FlowExpression; issues: string[] }, memoryPressure?: () => boolean, analyzeCallbacks = true, shouldCancel?: () => boolean): FileAnalysis[] {
+  parseInitializer: (uri: string, text: string, original: (start: number, end: number) => Location, context?: (location: Location) => string[]) => { value: FlowExpression; issues: string[] }, memoryPressure?: () => boolean, analyzeCallbacks = true, shouldCancel?: () => boolean, budget?: AnalysisWorkBudget): FileAnalysis[] {
   const files = new Map(raw.map(file => [file.uri, file]));
   let cache = caches.get(analyze); if (!cache) caches.set(analyze, cache = new Map());
   for (const uri of cache.keys()) if (!files.has(uri)) cache.delete(uri);
@@ -92,7 +93,7 @@ export function deriveMacroCalls(raw: FileAnalysis[], analyze: Analyze, parseCal
     if (file.expandMacros === false) { cache!.delete(file.uri); return file; }
     if (!file.functions?.length && !file.initializers?.length) { cache!.delete(file.uri); return file; }
     const previous = cache!.get(file.uri);
-    if (!shouldCancel?.() && previous?.raw === file && previous.analyzeCallbacks === analyzeCallbacks && previous.paths === paths && [...previous.dependencies].every(dep => files.get(dep.uri) === dep) &&
+    if (!shouldCancel?.() && previous?.raw === file && !previous.result.issues.some(issue=>/work limit|cancelled/i.test(issue)) && previous.analyzeCallbacks === analyzeCallbacks && previous.paths === paths && [...previous.dependencies].every(dep => files.get(dep.uri) === dep) &&
       (!previous.result.issues.includes(macroMemoryLimit) || memoryPressure?.())) return previous.result;
     const dependencies = new Set<FileAnalysis>();
     const issues = new Set<string>();
@@ -133,7 +134,7 @@ export function deriveMacroCalls(raw: FileAnalysis[], analyze: Analyze, parseCal
       if (shouldCancel?.()) { issues.add(macroCancelled); return init; }
       if (memoryPressure?.()) { issues.add(macroMemoryLimit); return init; }
       const tokens = tokenizeC(activeText(file, init.location.start, init.location.end), (start, end) => sourceLocation(init.location.start + start, init.location.start + end));
-      const expander = new MacroExpander(lookup, memoryPressure, shouldCancel), variants = expander.expand(tokens);
+      const expander = new MacroExpander(lookup, memoryPressure, shouldCancel, budget, init.id), variants = expander.expand(tokens);
       expander.issues.forEach(issue => issues.add(issue));
       if (issues.has(macroMemoryLimit)) return init;
       if (!variants.some(variant => variant.changed)) return init;
@@ -161,7 +162,7 @@ export function deriveMacroCalls(raw: FileAnalysis[], analyze: Analyze, parseCal
       if (shouldCancel?.()) return partial(macroCancelled);
       if (memoryPressure?.()) return partial(macroMemoryLimit);
       const tokens = tokenizeC(activeText(file, fn.body.start, fn.body.end), (start, end) => sourceLocation(fn.body.start + start, fn.body.start + end));
-      const expander = new MacroExpander(lookup, memoryPressure, shouldCancel), variants = expander.expand(tokens);
+      const expander = new MacroExpander(lookup, memoryPressure, shouldCancel, budget, fn.id), variants = expander.expand(tokens);
       expander.issues.forEach(issue => issues.add(issue));
       if (shouldCancel?.()) return partial(macroCancelled);
       if (issues.has(macroMemoryLimit)) return partial(macroMemoryLimit);

@@ -2,7 +2,7 @@
   "name": "dynsight",
   "displayName": "Dynsight — C Code Explorer",
   "description": "Build-free C references, caller/callee graphs and a linked Context preview.",
-  "version": "0.1.71",
+  "version": "0.1.72",
   "publisher": "dylee",
   "author": "dylee",
   "license": "MIT",
@@ -67,6 +67,10 @@
         "title": "Dynsight: Open Settings"
       },
       {
+        "command": "dynsight.selectDetailedAnalysisFolders",
+        "title": "Dynsight: Select Detailed Analysis Folders"
+      },
+      {
         "command": "dynsight.selectMacroExpansionFolders",
         "title": "Dynsight: Select Macro Expansion Folders"
       },
@@ -105,95 +109,172 @@
       "title": "Dynsight",
       "properties": {
         "dynsight.copilotCallbacks": {
+          "order": 60,
           "type": "boolean",
           "default": false,
           "scope": "window",
-          "markdownDescription": "Optional AI candidates for unresolved callbacks using your existing GitHub Copilot account. Start with [Analyze Callbacks with Copilot](command:dynsight.analyzeCallbacksWithCopilot) to select a model and grant access. Relevant source is sent to Copilot and account usage limits apply. Analyze processes all pending callbacks automatically in batches of 5; each request uses your allowance. Stop Copilot Analysis cancels the current request and keeps completed results. Saved file changes can request up to 5 uncached analyses when no full run is active. Startup and navigation only reuse the local cache. AI candidates are suggestions, not proven calls. Rebuild Index preserves valid AI cache."
+          "markdownDescription": "Optional AI candidates for unresolved callbacks using your existing GitHub Copilot account. Start with [Analyze Callbacks with Copilot](command:dynsight.analyzeCallbacksWithCopilot) to select a model and grant access. Relevant source is sent to Copilot and account usage limits apply. Choose a single callback and use Find target with AI or Recheck with AI. Enabling, startup, navigation, saving and Rebuild only reuse valid cache and never send new AI requests. Stop Copilot Analysis cancels the current request and keeps existing results. Set manually records a separate User confirmed target that AI does not overwrite. AI candidates are suggestions, not proven calls. Rebuild Index preserves valid AI cache."
         },
         "dynsight.copilotModel": {
+          "order": 61,
           "type": "string",
           "default": "",
           "scope": "window",
           "markdownDescription": "Copilot model ID for callback candidates. [Select Copilot Model](command:dynsight.selectCopilotModel) lists models available to your Copilot account and saves the selected ID here. Selecting a model does not enable analysis or send source. An empty value asks you to choose when starting Analyze Callbacks with Copilot. Model changes reuse only that model's valid cache; unavailable models are not replaced automatically."
         },
         "dynsight.copilotInclude": {
+          "order": 62,
           "type": "array",
-          "items": { "type": "string", "minLength": 1 },
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
           "default": [],
           "scope": "resource",
-          "description": "Files whose callback call sites may use AI, using workspace-relative globs. Paths are copied from Include on first setup and when Include changes; remove unwanted paths here. Empty disables all AI callback requests. Copilot Exclude takes priority. Local analysis is unchanged and supporting evidence may come from other indexed paths. Scope changes cancel the active AI run and restore eligible cache only; use Analyze for missing results."
+          "description": "Files whose callback call sites may use AI, using workspace-relative globs. Only explicit paths are used; they are not copied from Include. Call locations must also be in Detailed Analysis Folders. Empty disables all AI callback requests. Copilot Exclude takes priority. Local analysis is unchanged and supporting evidence may come from other indexed paths. Scope changes cancel the active AI run and restore eligible cache only; use Analyze for missing results."
         },
         "dynsight.copilotExclude": {
+          "order": 63,
           "type": "array",
-          "items": { "type": "string", "minLength": 1 },
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
           "default": [],
           "scope": "resource",
           "description": "Workspace-relative glob patterns whose callback call sites skip AI, for example Vendor/** or Generated/**. Exclude takes priority over Copilot Include. Excluded sites use no AI requests and are omitted from AI results and pending counts; existing cached results are kept for later reuse. Local callback analysis and use as supporting source evidence remain available."
         },
         "dynsight.analyzeCallbacks": {
+          "deprecationMessage": "Use Detailed Analysis Folders to scope macro expansion and callback propagation together. Explicit legacy settings remain active until that setting is saved.",
+          "order": 101,
           "type": "boolean",
           "default": true,
           "scope": "window",
           "description": "Infer function-pointer and structure callback targets in Callers, Callees and Callers & Callees, and trace callbacks when clicking their call sites. Turning off skips full callback propagation. Literal function assignments appear as Registration even without calls. Simple function-pointer and local structure-member assignments remain traceable, and available Copilot candidates remain selectable; unresolved sites use ordinary symbol navigation. Direct calls, macro expansion and literal function arguments remain available; alias-derived arguments require this option. Changes recalculate relationships without reparsing source files, after any running analysis finishes."
         },
         "dynsight.includeFunctionArguments": {
+          "order": 51,
           "type": "boolean",
           "default": false,
           "scope": "window",
           "description": "Include functions passed as arguments in Callers, Callees and Callers & Callees. Dotted connectors mean argument passing, not proof of invocation. Changes reuse the existing index."
         },
         "dynsight.callGraphDirection": {
+          "order": 11,
           "type": "string",
-          "enum": ["callers-left", "callees-left"],
-          "enumItemLabels": ["Callers left / Callees right", "Callees left / Callers right"],
+          "enum": [
+            "callers-left",
+            "callees-left"
+          ],
+          "enumItemLabels": [
+            "Callers left / Callees right",
+            "Callees left / Callers right"
+          ],
           "default": "callers-left",
           "scope": "window",
           "description": "Left/right branch placement in Callers & Callees mode. Changes presentation immediately without reindexing or resetting expanded branches."
         },
         "dynsight.calleeSort": {
+          "order": 50,
           "type": "string",
-          "enum": ["name", "source"],
-          "enumDescriptions": ["Sort Callees by symbol name.", "Sort Callees by their first call location in source, not runtime execution order."],
+          "enum": [
+            "name",
+            "source"
+          ],
+          "enumDescriptions": [
+            "Sort Callees by symbol name.",
+            "Sort Callees by their first call location in source, not runtime execution order."
+          ],
           "default": "name",
           "scope": "window",
           "description": "Callees sorting. Open with the Relation Settings button. Callers and References keep name order."
         },
         "dynsight.contextLayout": {
+          "order": 10,
           "type": "string",
-          "enum": ["combined", "combined-full-width", "combined-keep-left-sidebar", "combined-center", "combined-keep-right-sidebar", "separate"],
-          "enumItemLabels": ["Combined", "Combined · Full width", "Combined · Left sidebar full height", "Combined · Center", "Combined · Right sidebar full height", "Separate"],
-          "enumDescriptions": ["Show Context and Relation together in the normal panel. Leaving an explicit alignment restores Center.", "Use the full bottom width beneath both sidebars.", "Keep the left sidebar full height; Combined uses the center and right bottom area.", "Keep both sidebars full height; Combined uses the bottom area beneath the editor.", "Keep the right sidebar full height; Combined uses the left and center bottom area.", "Show Context as an independent Explorer view; drag its header to move it. Leaving an explicit alignment restores Center."],
+          "enum": [
+            "combined",
+            "combined-full-width",
+            "combined-keep-left-sidebar",
+            "combined-center",
+            "combined-keep-right-sidebar",
+            "separate"
+          ],
+          "enumItemLabels": [
+            "Combined",
+            "Combined · Full width",
+            "Combined · Left sidebar full height",
+            "Combined · Center",
+            "Combined · Right sidebar full height",
+            "Separate"
+          ],
+          "enumDescriptions": [
+            "Show Context and Relation together in the normal panel. Leaving an explicit alignment restores Center.",
+            "Use the full bottom width beneath both sidebars.",
+            "Keep the left sidebar full height; Combined uses the center and right bottom area.",
+            "Keep both sidebars full height; Combined uses the bottom area beneath the editor.",
+            "Keep the right sidebar full height; Combined uses the left and center bottom area.",
+            "Show Context as an independent Explorer view; drag its header to move it. Leaving an explicit alignment restores Center."
+          ],
           "default": "combined",
           "scope": "window",
           "description": "Place Combined across the full bottom, preserve either sidebar's full height, or use only the center below the editor. Separate opens an independent Context view. Explicit alignment also changes Terminal and other bottom-panel views. All layouts share the same analysis and selection."
         },
         "dynsight.include": {
+          "order": 20,
           "type": "array",
-          "items": { "type": "string", "minLength": 1 },
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
           "default": [],
           "scope": "resource",
           "description": "Workspace-relative glob patterns to include in C/H analysis, for example App/** or Drivers/**. Empty includes all C/H files. Exclude always takes priority. Uses forward slashes. Changes reconcile selected files while reusing unchanged source analysis."
         },
         "dynsight.exclude": {
+          "order": 21,
           "type": "array",
-          "items": { "type": "string", "minLength": 1 },
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
           "default": [],
           "scope": "resource",
           "description": "Workspace-relative glob patterns excluded from indexing and file watching, for example **/Tools/Polyspace/**. Exclude takes priority over Include. Uses forward slashes. Changes reconcile selected files while reusing unchanged source analysis. Independent of files.exclude, search.exclude and C_Cpp.files.exclude."
         },
-        "dynsight.macroExpansionFolders": {
+        "dynsight.detailedAnalysisFolders": {
           "type": "array",
-          "items": { "type": "string", "minLength": 1 },
-          "default": ["**"],
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": [],
+          "scope": "resource",
+          "order": 30,
+          "markdownDescription": "[Select folders…](command:dynsight.selectDetailedAnalysisFolders) for macro expansion and callback propagation. Empty keeps basic navigation and explicit registrations only. Include/Exclude still control indexing; definitions from indexed headers remain available. External function bodies are not traced automatically. Changes refresh affected analysis and relationships. Legacy settings remain active until this setting is explicitly saved."
+        },
+        "dynsight.macroExpansionFolders": {
+          "deprecationMessage": "Use Detailed Analysis Folders to scope macro expansion and callback propagation together. Explicit legacy settings remain active until that setting is saved.",
+          "order": 100,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": [
+            "**"
+          ],
           "scope": "resource",
           "markdownDescription": "[Select folders…](command:dynsight.selectMacroExpansionFolders) with checkboxes, or enter workspace-relative glob patterns such as `App/**`. Default `[\"**\"]` expands all indexed sources; an empty list disables macro expansion. Unchecked sources keep basic analysis and header definitions remain available to checked sources. Include/Exclude still control which files are indexed. Changes refresh affected source analysis and relationships."
         },
         "dynsight.skipInactive": {
+          "order": 40,
           "type": "boolean",
           "default": true,
           "description": "Exclude provably inactive #if 0/1 branches. Unknown conditions remain visible."
         },
         "dynsight.automaticUpdates": {
+          "order": 90,
           "type": "boolean",
           "default": true,
           "scope": "application",
@@ -205,16 +286,17 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test test/core.test.ts test/analysis-notices.test.ts test/macros.test.ts test/pointer-calls.test.ts test/callback-effects.test.ts test/callback-uncertainty.test.ts test/callback-safety.test.ts test/callback-index-regressions.test.ts test/analysis-cache.test.ts test/incremental-analysis.test.ts test/copilot-callbacks.test.ts test/copilot-progress.test.ts test/explicit-callbacks.test.ts test/copilot-relations.test.ts test/copilot-service.test.ts test/panel-layout.test.ts test/function-arguments.test.ts test/members.test.ts test/syntax.test.ts test/updates.test.ts test/issue-report.test.ts test/issue-report-service.test.ts test/diagnostic-history.test.ts test/branding-migration.test.ts",
+    "test:analysis-performance": "tsx test/analysis-performance.ts",
+    "test": "tsx --test test/analysis-policy.test.ts test/analysis-budget.test.ts test/scoped-analysis.test.ts test/callback-overrides.test.ts test/copilot-single-site.test.ts test/core.test.ts test/analysis-notices.test.ts test/macros.test.ts test/pointer-calls.test.ts test/callback-effects.test.ts test/callback-uncertainty.test.ts test/callback-safety.test.ts test/callback-index-regressions.test.ts test/analysis-cache.test.ts test/incremental-analysis.test.ts test/copilot-callbacks.test.ts test/copilot-progress.test.ts test/explicit-callbacks.test.ts test/copilot-relations.test.ts test/copilot-service.test.ts test/panel-layout.test.ts test/function-arguments.test.ts test/members.test.ts test/syntax.test.ts test/updates.test.ts test/issue-report.test.ts test/issue-report-service.test.ts test/diagnostic-history.test.ts test/branding-migration.test.ts",
     "test:extension": "npm run build && node scripts/test-extension.mjs",
     "test:worker": "npm run build && node --test test/analysis-worker.test.mjs test/analysis-cache-worker.test.mjs test/workspace.test.mjs",
     "test:memory": "node --expose-gc --import tsx --test test/analysis-memory.test.ts",
     "test:performance": "tsx test/index-performance.ts",
     "test:large": "npm run build && node scripts/test-large-workspace.mjs",
     "test:freertos": "npm run build && node scripts/test-freertos.mjs",
-    "test:ui": "npm run build && tsx test/create-ui-fixture.ts && node test/ui.mjs",
+    "test:ui": "npm run build && tsx test/create-ui-fixture.ts && node test/ui.mjs && node test/scoped-ui.mjs",
     "vscode:prepublish": "npm run build",
-    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license --out artifacts/dynsight-0.1.71.vsix"
+    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license --out artifacts/dynsight-0.1.72.vsix"
   },
   "dependencies": {
     "minimatch": "10.2.6",

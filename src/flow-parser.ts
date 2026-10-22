@@ -6,7 +6,7 @@ type Locate = (node: Node) => Location;
 function ancestor(node: Node, type: string): Node | undefined {
   for (let parent = node.parent; parent; parent = parent.parent) if (parent.type === type) return parent;
 }
-export function flowFacts(root: Node, uri: string, locate: Locate, active?: Set<number>, skipInactive = true, namespace = '', context?: (node: Node) => string[]) {
+export function flowFacts(root: Node, uri: string, locate: Locate, active?: Set<number>, skipInactive = true, namespace = '', context?: (node: Node) => string[], basic = false) {
   const programs: FlowProgram[] = [], initializers: GlobalInitializer[] = [];
   const present = (node: Node) => !active || active.has(node.id);
   function expression(node: Node | null | undefined, locals: FlowLocal[], ranges: Map<string, {start:number;end:number; declaration:number}>, fn: string, depth = 0): Expr {
@@ -42,7 +42,8 @@ export function flowFacts(root: Node, uri: string, locate: Locate, active?: Set<
     if (node.type === 'comma_expression') return {kind:'sequence',values:node.namedChildren.map(expr),location};
     if (node.type === 'call_expression') return {kind:'call',callee:field('function'),args:node.childForFieldName('arguments')!.namedChildren.filter(n=>n.type!=='comment').map(expr),key:`${fn}${namespace}:call:${node.startIndex}`,location};
     if (node.type === 'initializer_list') {
-      const children=node.namedChildren.filter(n=>n.type!=='comment'&&present(n));
+      const hasName = (n: Node): boolean => n.type === 'identifier' || n.namedChildren.some(hasName);
+      const children=node.namedChildren.filter(n=>n.type!=='comment'&&present(n) && (!basic || hasName(n.childForFieldName('value') ?? n)));
       const enclosing=context?.(node)??[];
       const guards=children.map(child=>(context?.(child)??[]).filter(condition=>!enclosing.includes(condition)));
       const labels=[...new Set(guards.flat().map(label=>label.replace(/^else of /,'')))];
@@ -102,6 +103,7 @@ export function flowFacts(root: Node, uri: string, locate: Locate, active?: Set<
       }
       declarations(node);
       const expr=(value:Node|null|undefined)=>expression(value,locals,ranges,id);
+      const hasRegistrationEffect=(value:Node):boolean=>['call_expression','assignment_expression'].includes(value.type)||value.namedChildren.some(hasRegistrationEffect);
       const guarded=(anchor:Node|undefined,result:Statement[]):Statement[]=>{
         if(!namespace||!anchor||!(context?.(anchor)??[]).some(condition=>!functionConditions.includes(condition)))return result;
         return[{kind:'branch',condition:{kind:'unknown',location:locate(anchor)},then:result,otherwise:[]}];
@@ -119,10 +121,11 @@ export function flowFacts(root: Node, uri: string, locate: Locate, active?: Set<
           const left:Expr={kind:'name',name:name.text,localId:own?.id,location:locate(name)};
           return guarded(name,[{kind:'expression' as const,value:{kind:'assign' as const,left,right:expr(value),operator:'=',location:locate(child)}}]);
         });
-        if(current.type==='expression_statement')return current.namedChildren.filter(n=>n.type!=='comment').flatMap(n=>guarded(n,[{kind:'expression',value:expr(n)}]));
+        if(current.type==='expression_statement')return current.namedChildren.filter(n=>n.type!=='comment'&&(!basic||hasRegistrationEffect(n))).flatMap(n=>guarded(n,[{kind:'expression',value:expr(n)}]));
         if(current.type==='if_statement')return[{kind:'branch',condition:expr(current.childForFieldName('condition')),then:statements(current.childForFieldName('consequence')),otherwise:statements(current.childForFieldName('alternative'))}];
         if(current.type==='switch_statement'){
           const cases=current.childForFieldName('body')?.namedChildren.filter(child=>child.type==='case_statement')??[];
+          if(basic)return[{kind:'branch',condition:{kind:'unknown',location:locate(current)},then:cases.flatMap(branch=>branch.namedChildren.filter(child=>child.id!==branch.childForFieldName('value')?.id).flatMap(statements)),otherwise:[]}];
           const alternatives=cases.map((_,start)=>{const path:Statement[]=[];let stopped=false;
             for(const branch of cases.slice(start))for(const child of branch.namedChildren){
               if(stopped)break;if(child.type==='break_statement'){stopped=true;break;}
@@ -144,7 +147,7 @@ export function flowFacts(root: Node, uri: string, locate: Locate, active?: Set<
           if(skipInactive && (literal==='0'||literal==='1'))return literal==='0'?no:yes;
           return[{kind:'branch',condition:{kind:'unknown',location:locate(current)},then:yes,otherwise:no}];
         }
-        if(current.type.endsWith('_expression'))return[{kind:'expression',value:expr(current)}];
+        if(current.type.endsWith('_expression'))return basic&&!hasRegistrationEffect(current)?[]:[{kind:'expression',value:expr(current)}];
         return current.namedChildren.flatMap(statements);
       }
       programs.push({id,locals,params,body:statements(body)});return;

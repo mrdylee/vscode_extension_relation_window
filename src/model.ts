@@ -1,7 +1,8 @@
 export type Kind = 'function' | 'variable' | 'type' | 'macro' | 'unknown';
+export interface FileAnalysisPolicy { expandMacros: boolean; propagateCallbacks: boolean }
 export type RelationMode = 'references' | 'callers' | 'callees' | 'both';
 export type CalleeSort = 'name' | 'source';
-export type CallKind = 'direct' | 'macro' | 'indirect' | 'unresolved' | 'expanded' | 'inferred' | 'ai-candidate' | 'registered';
+export type CallKind = 'direct' | 'macro' | 'indirect' | 'unresolved' | 'expanded' | 'inferred' | 'ai-candidate' | 'user-confirmed' | 'registered';
 export type Access = 'read' | 'write' | 'readwrite' | 'address';
 export type AccessFilter = 'all' | Access;
 export interface CType {
@@ -21,6 +22,7 @@ export interface Location {
   endLine: number; endColumn: number;
 }
 export interface SymbolRecord {
+  signature?: { parameters?: string[]; result?: string; variadic: boolean };
   id: string; name: string; kind: Kind; location: Location; extent: Location;
   definition: boolean; storage: 'static' | 'global' | 'local';
   scope?: { start: number; end: number }; conditions: string[]; pointer: boolean;
@@ -28,6 +30,8 @@ export interface SymbolRecord {
   anonymousMemberOf?: string;
 }
 export interface ReferenceRecord {
+  manual?: { overrideKey: string; originalTargetId: string; originalTargetName?: string };
+  analysis?: { status: 'pending' | 'complete' | 'out-of-scope' | 'missing-definition' | 'work-limit' | 'memory-limit' | 'cancelled' | 'unresolved'; reasons: string[] };
   id: string; name: string; kind: 'call' | 'reference' | 'declaration';
   location: Location; ownerId?: string; functionId?: string; targetId?: string; access?: Access; conditions: string[]; indirect?: boolean;
   member?: Extract<TypedExpression, { kind: 'member' }>;
@@ -79,6 +83,8 @@ export interface CallbackProgress {
   cached?: boolean;
 }
 export interface CallbackAnalysisOptions {
+  workLimits?: import('./analysis-budget').AnalysisWorkLimits;
+  workBudget?: import('./analysis-budget').AnalysisWorkBudget;
   shouldCancel?: () => boolean;
   onProgress?: (progress: CallbackProgress) => void;
   now?: () => number;
@@ -94,6 +100,7 @@ export interface CallbackDiagnostic {
   costs?: { symbol: string; location?: Location; runs: number; cacheHits: number; evaluations: number; elapsedMs: number }[];
 }
 export interface FileAnalysis {
+  analysisPolicy?: FileAnalysisPolicy;
   uri: string; text: string; symbols: SymbolRecord[]; references: ReferenceRecord[];
   includes: string[]; issues: string[]; systemIncludes?: string[];
   preprocessor?: PreprocessorEvent[]; functions?: FunctionBody[];
@@ -103,6 +110,7 @@ export interface FileAnalysis {
   projectScoped?: boolean;
   expandMacros?: boolean;
   programs?: FlowProgram[]; initializers?: GlobalInitializer[];
+  registrationPrograms?: FlowProgram[]; registrationInitializers?: GlobalInitializer[];
   argumentPrograms?: FlowProgram[];
   functionArguments?: ReferenceRecord[];
   callbackRegistrations?: ReferenceRecord[];

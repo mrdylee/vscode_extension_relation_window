@@ -156,7 +156,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
   const now = options.now ?? (() => performance.now());
   const cached = projectCache.get(owner);
   if (cached && cached.analyzeCallbacks !== analyzeCallbacks) clearPointerCache(owner);
-  if (cached && cached.analyzeCallbacks === analyzeCallbacks && !options.shouldCancel?.() && cached.inputs.length === files.length && files.every((file, n) => file === cached.inputs[n]) &&
+  if (cached && !['work','limited','cancelled'].includes(cached.progress?.outcome ?? '') && cached.analyzeCallbacks === analyzeCallbacks && !options.shouldCancel?.() && cached.inputs.length === files.length && files.every((file, n) => file === cached.inputs[n]) &&
     (!cached.memoryLimited || memoryPressure?.())) {
     if (cached.progress) options.onProgress?.({ ...cached.progress, elapsedMs: 0, cached: true });
     return cached.results;
@@ -165,7 +165,8 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
   if (!fileCache) fileCaches.set(owner, fileCache = new WeakMap());
   const index = new RelationIndex(); files.forEach(file => index.update(file));
   const functionArguments = new FunctionArguments(files, index);
-  const programs = analyzeCallbacks ? files.flatMap(file => file.programs ?? []) : [], byFunction = new Map<string, FlowProgram[]>();
+  const outsideScope = new Set(files.filter(file => file.analysisPolicy?.propagateCallbacks === false).map(file => file.uri));
+  const programs = analyzeCallbacks ? files.flatMap(file => file.analysisPolicy?.propagateCallbacks === false ? [] : file.programs ?? []) : [], byFunction = new Map<string, FlowProgram[]>();
   for (const program of programs) { const list = byFunction.get(program.id) ?? []; list.push(program); byFunction.set(program.id, list); }
   const references = analyzeCallbacks ? files.flatMap(file => file.references.filter(ref => ref.kind === 'call' && ref.flowKey)) : [];
   const localNames = new Set(programs.flatMap(program => program.locals.map(local => local.name)));
@@ -848,6 +849,13 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
   }
   function evaluate(expr: Expr, state: State, ctx: Context): Value {
     currentLocation = expr.location; evaluations++;
+    const work = options.workBudget?.consume(activeSymbol?.id ?? 'callback-setup');
+    if(work && work !== 'ok') {
+      const reason = work === 'project-limit' ? 'Callback project work limit reached' : 'Callback function work limit reached';
+      notice(reason, undefined, work === 'function-limit'); state.incomplete = true;
+      if(work === 'project-limit') timedOut = true;
+      return unknown(reason);
+    }
     if (expired()) return unknown(notices.has(callbackMemoryLimit) ? callbackMemoryLimit : 'Callback analysis cancelled');
     if (++steps > 2_000_000) { notice('Callback analysis work limit reached'); return unknown('Callback analysis work limit'); }
     if (expr.kind === 'number') {
@@ -956,7 +964,8 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
       for (const fn of resolved.targets.keys()) {
         depend(fn);
         const target = summaries.get(fn);
-        if (!target) { opaque = true; returns.push(unknown('Return value unavailable: ' + (index.symbol(fn)?.name ?? expressionText(expr.callee)) + ' has no indexed body')); continue; }
+        if (!target) { opaque = true; const symbol=index.symbol(fn); returns.push(unknown('Return value unavailable: ' + (symbol?.name ?? expressionText(expr.callee)) +
+          (symbol?.definition && outsideScope.has(symbol.location.uri) ? ' is outside Detailed Analysis Folders' : ' has no indexed body'))); continue; }
         // Budgeted omissions are represented by their affected regions. An
         // indexed helper's unused arguments are not opaque mutation roots.
         args.forEach((arg, n) => {

@@ -1,3 +1,4 @@
+import { AnalysisWorkBudget } from './analysis-budget';
 import { MacroDefinition } from './model';
 import { CToken, identifier, tokenizeC } from './c-tokens';
 
@@ -20,7 +21,7 @@ export function macroArguments(tokens: CToken[], open: number): Arguments | unde
 export class MacroExpander {
   readonly issues = new Set<string>();
   private operations = 0;
-  constructor(private lookup: (name: string, offset: number) => (MacroDefinition | undefined)[], private memoryPressure?: () => boolean, private shouldCancel?: () => boolean) {}
+  constructor(private lookup: (name: string, offset: number) => (MacroDefinition | undefined)[], private memoryPressure?: () => boolean, private shouldCancel?: () => boolean, private budget?: AnalysisWorkBudget, private scope = 'macros') {}
   expand(input: CToken[], nesting = 0): ExpansionVariant[] {
     if (this.shouldCancel?.()) { this.issues.add('Macro analysis cancelled; call relationships may be incomplete.'); return [{ tokens: input, changed: false, conditions: [] }]; }
     if (this.memoryPressure?.()) {
@@ -36,6 +37,10 @@ export class MacroExpander {
       const variant = pending.pop()!;
       let branched = false;
       while (variant.index < variant.tokens.length) {
+        if (this.budget && this.budget.consume(this.scope) !== 'ok') {
+          this.issues.add('Macro analysis work limit reached; some calls remain unexpanded');
+          variant.tokens = variant.tokens.map(token => ({ ...token, unexpanded: true })); break;
+        }
         if (++this.operations > 80_000 || variant.tokens.length > 40_000) {
           this.issues.add('Macro expansion work/token limit reached; some calls remain unexpanded');
           variant.tokens = variant.tokens.map((token, i) => i >= variant.index ? { ...token, unexpanded: true } : token); break;

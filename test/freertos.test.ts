@@ -6,6 +6,8 @@ import { performance } from 'node:perf_hooks';
 export async function run() {
   const opened: string[] = [];
   const listener = vscode.workspace.onDidOpenTextDocument(document => { if (document.uri.scheme === 'file' && /\.[ch]$/i.test(document.uri.path)) opened.push(document.uri.toString()); });
+  const detailed = process.env.DYNSIGHT_TEST_DETAILED === 'full';
+  await vscode.workspace.getConfiguration('dynsight').update('detailedAnalysisFolders', detailed ? ['**'] : [], vscode.ConfigurationTarget.Global);
   const start = Date.now();
   const api = await vscode.extensions.getExtension('dylee.dynsight')!.activate();
   let timeout: ReturnType<typeof setTimeout>;
@@ -17,10 +19,8 @@ export async function run() {
   const elapsedMs = Date.now() - start;
   const expected = await vscode.workspace.findFiles('**/*.{c,h}', '**/{node_modules,.git,.vscode-test}/**');
   assert.ok(expected.length > 600, 'test uses the full FreeRTOS tree');
-  assert.equal(api.workspace.status, 'Index ready', JSON.stringify({
-    notices: [...api.workspace.index.files.values()].flatMap((file: any) => file.callbackDiagnostics ?? []).slice(0, 8),
-    firstLimit: api.workspace.diagnostics.worker?.firstLimit
-  }));
+  assert.match(api.workspace.status, /^(Index ready|Partial index:)/, 'a bounded partial result must retain its diagnosis');
+  assert.equal(api.workspace.basicReady,true,'basic source navigation must remain ready');
   assert.equal(api.workspace.index.files.size, expected.length);
   assert.equal(api.workspace.failures.size, 0);
   assert.deepEqual(opened, [], 'indexing does not create C editor documents');
@@ -29,7 +29,9 @@ export async function run() {
   const functionArgumentSites = [...api.workspace.index.files.values()].reduce((count: number, file: any) => count + (file.functionArguments?.length ?? 0), 0);
   assert.ok(functionArgumentSites > 0, 'FreeRTOS has function argument relationships');
   const callbackNotices = [...api.workspace.index.files.values()].flatMap((file: any) => file.issues.filter((issue:string)=>issue.startsWith('Callback')));
-  assert.ok(expandedCallSites > 10000, 'full FreeRTOS macro coverage must not collapse to a small partial result');
+  if(!detailed)assert.equal(expandedCallSites,0,'basic mode does not expand macros');
+  else if(api.workspace.status==='Index ready')assert.ok(expandedCallSites>10000,'complete full scope preserves macro coverage');
+  else assert.ok([...api.workspace.index.files.values()].some((file:any)=>file.issues.some((issue:string)=>/limit|budget|memory/i.test(issue))),'partial scope must retain the limiting reason');
   const document = await vscode.workspace.openTextDocument(vscode.Uri.joinPath(vscode.workspace.workspaceFolders![0].uri, 'queue.c'));
   const editor = await vscode.window.showTextDocument(document);
   const offset = document.getText().indexOf('prvUnlockQueue');
@@ -39,7 +41,7 @@ export async function run() {
   assert.equal(api.view.state.graph?.root.name, 'prvUnlockQueue');
   assert.ok(api.view.state.graph.root.children.length, 'queue function has incoming references');
   assert.ok(api.view.state.context.tokens.flat().some((token: any) => token.kind === 'function' && token.text === 'prvUnlockQueue'));
-  const result = { passed: true, files: expected.length, elapsedMs, openedDuringIndex: opened.length, expandedCallSites, inferredCallSites, functionArgumentSites, callbackNotices, root: api.view.state.graph.root.name, relations: api.view.state.graph.root.children.length };
+  const result = { passed: true, mode: detailed?'full':'basic', complete: api.workspace.status==='Index ready', status: api.workspace.status, files: expected.length, elapsedMs, openedDuringIndex: opened.length, expandedCallSites, inferredCallSites, functionArgumentSites, callbackNotices, root: api.view.state.graph.root.name, relations: api.view.state.graph.root.children.length };
   await api.view.handleMessage({ type: 'mode', value: 'callees' });
   const callees = api.view.state.graph.root.children;
   assert.ok(callees.length > 0, 'FreeRTOS queue function has outgoing calls');

@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { WorkspaceIndex } from './workspace';
 import { RelationView } from './view';
 import { registerUpdates } from './update-service';
-import { selectMacroExpansionFolders } from './macro-folders';
+import { selectMacroExpansionFolders, selectDetailedAnalysisFolders } from './macro-folders';
 import { registerIssueReporting } from './issue-report-service';
 import { migrateSettings, prepareUpgrade } from './branding-migration';
 import { registerCopilotCallbacks } from './copilot-service';
@@ -16,8 +16,8 @@ export async function activate(context: vscode.ExtensionContext) {
   }
   registerUpdates(context);
   const workspace = new WorkspaceIndex(context.extensionPath, context.storageUri?.fsPath);
-  registerCopilotCallbacks(context, workspace);
-  const view = new RelationView(workspace, context.extensionUri);
+  const copilot = registerCopilotCallbacks(context, workspace);
+  const view = new RelationView(workspace, context.extensionUri, copilot.actions);
   registerIssueReporting(context, workspace, view);
   let timer: ReturnType<typeof setTimeout> | undefined;
   context.subscriptions.push(workspace, view,
@@ -31,6 +31,7 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('dynsight.reindex', () => workspace.reindex()),
     vscode.commands.registerCommand('dynsight.stopLocalAnalysis', () => workspace.stopAnalysis()),
     vscode.commands.registerCommand('dynsight.resumeLocalAnalysis', () => workspace.resumeAnalysis()),
+    vscode.commands.registerCommand('dynsight.selectDetailedAnalysisFolders', () => selectDetailedAnalysisFolders()),
     vscode.commands.registerCommand('dynsight.selectMacroExpansionFolders', () => selectMacroExpansionFolders().catch(error =>
       vscode.window.showErrorMessage(`Could not save macro expansion folders: ${String(error)}`))),
     vscode.commands.registerCommand('dynsight.openSettings', () => vscode.commands.executeCommand(

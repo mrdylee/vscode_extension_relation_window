@@ -29,7 +29,8 @@ export interface RebuildRecord {
   };
 }
 export interface IndexDiagnostics {
-  callbackAnalysis?: { paused: boolean; running: boolean; progress?: CallbackProgress };
+  basicReady?: boolean; detailedCurrent?: boolean;
+  callbackAnalysis?: { paused: boolean; running: boolean; limited?: boolean; progress?: CallbackProgress };
   sessionStartedAt: number; rebuildCount: number; sourceParses: number; relationPasses: number;
   rebuilds: RebuildRecord[]; lastSourceEvent?: { at: number; kind: SourceEvent };
   cache?: { state: 'disabled' | 'checking' | 'restored' | 'updated' | 'missing' | 'incompatible' | 'invalid' | 'deferred' | 'error';
@@ -51,5 +52,5 @@ export interface Diagnostics {
   worker?: WorkerDiagnostics;
   workerError?: string;
   index?: IndexDiagnostics;
-  copilot?: { state: string; automatic?: boolean; waitReason?: CopilotWaitReason; total?: number; completed?: number; requests: number; cacheHits: number; remaining: number; failures: number; candidates: number; notFound: number; contextLimited: number; excluded?: number };
+  copilot?: { state: string; manualReview?: number; manualInactive?: number; automatic?: boolean; waitReason?: CopilotWaitReason; total?: number; completed?: number; requests: number; cacheHits: number; remaining: number; failures: number; candidates: number; notFound: number; contextLimited: number; excluded?: number };
 }

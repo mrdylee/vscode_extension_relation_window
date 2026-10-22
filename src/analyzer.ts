@@ -1,3 +1,4 @@
+import { AnalysisWorkBudget } from './analysis-budget';
 import { Parser, Language, Node } from 'web-tree-sitter';
 import { CallbackAnalysisOptions, CallbackProgress } from './model';
 import { Access, FileAnalysis, FlowExpression, Location, ReferenceRecord, SymbolRecord } from './model';
@@ -96,11 +97,12 @@ export async function createAnalyzer(runtime: string, grammar: string) {
     if (!recovered) return tree;
     tree.delete(); return recovered;
   }
-  const analyzer = { analyze(uri: string, text: string, skipInactive = true): FileAnalysis {
+  const statusCache = new WeakMap<FileAnalysis, FileAnalysis>();
+  const analyzer = { analyze(uri: string, text: string, skipInactive = true, policy?: import('./model').FileAnalysisPolicy): FileAnalysis {
     const recovery: InitializerRecovery = { directives: [], inactive: [], contexts: [], separators: [] };
     const tree = parseSource(text, recovery, skipInactive);
     if (!tree) throw new Error('C parser returned no tree');
-    const file: FileAnalysis = { uri, text, symbols: [], references: [], includes: [], issues: [] };
+    const file: FileAnalysis = { uri, text, analysisPolicy: policy, expandMacros: policy?.expandMacros, symbols: [], references: [], includes: [], issues: [] };
     if (recovery.directives.length) file.directives = recovery.directives;
     if (recovery.inactive.length) file.inactive = recovery.inactive;
     const nodes: Node[] = [];
@@ -175,6 +177,15 @@ export async function createAnalyzer(runtime: string, grammar: string) {
         location: location(name), extent: location(extent), definition, pointer, storage, scope,
         conditions: conditions.get(extent.id) ?? [] };
       file.symbols.push(symbol);
+      const callable = ancestor(name, 'function_declarator'), callableParameters = callable?.childForFieldName('parameters');
+      if(callableParameters && name.endIndex <= (callable?.childForFieldName('declarator')?.endIndex ?? -1)) {
+        const items=callableParameters.namedChildren.filter(item=>item.type==='parameter_declaration');
+        const typeText=(item:Node) => {const d=item.childrenForFieldName('declarator')[0];const type=d&&declaredType(item,d,uri);return type ? type.name+type.layers.filter(layer=>layer==='pointer').map(()=>'*').join('') : item.childForFieldName('type')?.text ?? '';};
+        const resultDeclarator=extent.childForFieldName('declarator');
+        const resultType=symbol.type??(resultDeclarator?declaredType(extent,resultDeclarator,uri):undefined),returnLayers=resultType?.layers.slice(resultType.layers.indexOf('function')+1);
+        symbol.signature={parameters:callableParameters.text==='()'?undefined:items.length===1&&items[0].text==='void'?[]:items.map(typeText),
+          result:resultType?resultType.name+returnLayers?.filter(layer=>layer==='pointer').map(()=>'*').join(''):extent.childForFieldName('type')?.text,variadic:callableParameters.namedChildren.some(item=>item.type==='variadic_parameter')};
+      }
       return symbol;
     }
     for (const node of nodes) {
@@ -321,7 +332,9 @@ export async function createAnalyzer(runtime: string, grammar: string) {
     file.issues = [...new Set(file.issues)];
     file.statementConditions = nodes.filter(node => (['return_statement', 'expression_statement'].includes(node.type) || node.parent?.type === 'initializer_list') && conditions.get(node.id)?.length)
       .map(node => ({ start: node.startIndex, conditions: conditions.get(node.id)! }));
-    Object.assign(file, flowFacts(tree.rootNode, uri, location, new Set(nodes.map(node => node.id)), skipInactive, '', node => conditions.get(node.id) ?? []));
+    const facts = flowFacts(tree.rootNode, uri, location, new Set(nodes.map(node => node.id)), skipInactive, '', node => conditions.get(node.id) ?? [], policy?.propagateCallbacks === false);
+    if(policy?.propagateCallbacks === false) { file.registrationPrograms = facts.programs; file.registrationInitializers = facts.initializers; }
+    else Object.assign(file, facts);
     tree.delete();
     return file;
   }, calls(uri: string, text: string, original?: (start: number, end: number) => Location, namespace = '', context?: (location: Location) => string[]) {
@@ -371,14 +384,28 @@ export async function createAnalyzer(runtime: string, grammar: string) {
       options.onProgress!({ ...value, elapsedMs: Math.max(0, Math.round(now() - started)),
         outcome: value.stage === 'registrations' && value.outcome === 'completed' ? outcome ?? value.outcome : value.outcome });
     });
-    const control = { ...options, onProgress: observed };
+    const control = { ...options, workBudget: options.workBudget ?? new AnalysisWorkBudget(options.workLimits), onProgress: observed };
     phase?.('macros');
-    const expanded = deriveMacroCalls(files, analyzer.analyze, analyzer.calls, analyzer.initializer, memoryPressure, analyzeCallbacks, options.shouldCancel);
+    const expanded = deriveMacroCalls(files, analyzer.analyze, analyzer.calls, analyzer.initializer, memoryPressure, analyzeCallbacks, options.shouldCancel, control.workBudget);
     phase?.('callbacks');
     const derived = inferPointerCalls(expanded, memoryPressure, analyzer.analyze, analyzeCallbacks, control);
-    if (memoryPressure?.()) return derived;
-    const partial = analyzeCallbacks && !options.shouldCancel?.() ? suggestPartialCallbacks(expanded, derived, memoryPressure, options.shouldCancel) : derived;
-    return suggestExplicitCallbacks(files, partial, control);
+    const memoryLimited = memoryPressure?.() === true;
+    const partial = !memoryLimited && analyzeCallbacks && !options.shouldCancel?.() ? suggestPartialCallbacks(expanded, derived, memoryPressure, options.shouldCancel) : derived;
+    return (memoryLimited ? partial : suggestExplicitCallbacks(files, partial, control)).map(file => {
+      const cached = statusCache.get(file); if(cached && !options.shouldCancel?.())return cached;
+      const references = file.references.map((ref): ReferenceRecord => {
+      if(ref.kind !== 'call' || !ref.access || (!ref.indirect && !ref.inference?.incomplete))return ref;
+      const reasons = ref.inference?.reasons ?? [];
+      const status = options.shouldCancel?.() ? 'cancelled' : memoryLimited || reasons.some(reason=>/memory/i.test(reason)) ? 'memory-limit' :
+        reasons.some(reason=>/work limit|budget/i.test(reason)) ? 'work-limit' : file.analysisPolicy?.propagateCallbacks === false || reasons.some(reason=>reason.includes('outside Detailed Analysis Folders')) ? 'out-of-scope' :
+        reasons.some(reason=>reason.includes('has no indexed body')) ? 'missing-definition' : 'unresolved';
+      return { ...ref, analysis: { status, reasons: reasons.length ? reasons : [status === 'out-of-scope' ? 'Detailed analysis is disabled for this file.' : 'Callback target is not fully resolved.'] } };
+      });
+      if(references.every((ref,n)=>ref === file.references[n]))return file;
+      const result = { ...file, references };
+      if(!options.shouldCancel?.())statusCache.set(file,result);
+      return result;
+    });
   } };
   return analyzer;
 }

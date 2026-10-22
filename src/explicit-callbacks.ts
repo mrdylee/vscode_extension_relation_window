@@ -31,7 +31,7 @@ export function suggestExplicitCallbacks(raw: FileAnalysis[], derived: FileAnaly
   };
   try {
   check();
-  functionsTotal = raw.reduce((count, file) => count + (file.programs?.length ?? 0), 0);
+  functionsTotal = raw.reduce((count, file) => count + ((file.registrationPrograms ?? file.programs)?.length ?? 0), 0);
   progress(true);
   const index = new RelationIndex();
   raw.forEach(file => { check(); index.update({ ...file, references: [], functionArguments: undefined }); });
@@ -137,11 +137,11 @@ export function suggestExplicitCallbacks(raw: FileAnalysis[], derived: FileAnaly
     }
   }
   const persistentOwners = new Map<string, { functionId: string; name: string }>();
-  for (const file of raw) for (const program of file.programs ?? []) for (const local of program.locals) {
+  for (const file of raw) for (const program of file.registrationPrograms ?? file.programs ?? []) for (const local of program.locals) {
     check();
     if (local.persistent) persistentOwners.set(local.id, { functionId: program.id, name: local.name });
   }
-  for (const file of raw) for (const init of file.initializers ?? []) {
+  for (const file of raw) for (const init of file.registrationInitializers ?? file.initializers ?? []) {
     check();
     const symbol = index.symbol(init.id);
     const local = persistentOwners.get(init.id);
@@ -151,7 +151,7 @@ export function suggestExplicitCallbacks(raw: FileAnalysis[], derived: FileAnaly
       initializer(object, init.value, initial);
     }
   }
-  for (const file of raw) for (const program of file.programs ?? []) {
+  for (const file of raw) for (const program of file.registrationPrograms ?? file.programs ?? []) {
     check(); symbol = index.symbol(program.id); scopeStarted = now(); scopeOperations = operations; progress(true);
     collectStatements(program.body, program.id);
     const aliases = new Map<string, Storage>(), bindings = new Map<string, Registration[]>();

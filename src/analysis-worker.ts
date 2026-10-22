@@ -7,16 +7,16 @@ import { AnalysisPhase, WorkerDiagnostics } from './diagnostics';
 import { AnalysisCache, CachedAnalysis } from './analysis-cache';
 import { IncrementalAnalysis } from './incremental-analysis';
 const analyzer = createAnalyzer(path.join(workerData.assets, 'web-tree-sitter.wasm'), path.join(workerData.assets, 'tree-sitter-c.wasm'));
-type Request = { id: number; uri: string; text: string; skip: boolean; expandMacros?: boolean; type?: 'analyze' }
+type Request = { id: number; uri: string; text: string; skip: boolean; expandMacros?: boolean; propagateCallbacks?: boolean; type?: 'analyze' }
   | { type: 'derive'; id: number; analyzeCallbacks?: boolean; cancellation?: SharedArrayBuffer; versions: [string, number, number][] }
-  | { type: 'cache-init'; id: number; directory: string; key: string }
-  | { type: 'cache-restore'; id: number; uri: string; text: string; skip: boolean; expandMacros?: boolean }
+  | { type: 'cache-init'; id: number; directory: string; key: string; legacyRoots?: string[] }
+  | { type: 'cache-restore'; id: number; uri: string; text: string; skip: boolean; expandMacros?: boolean; propagateCallbacks?: boolean }
   | { type: 'cache-validate'; id: number; versions: [string, number, number][]; analyzeCallbacks?: boolean }
   | { type: 'cache-save'; id: number; versions: [string, number, number][] }
   | { type: 'remove'; uri: string } | { type: 'reset' } | { type: 'diagnostics' };
 const raw = new Map<string, { id: number; file: FileAnalysis; skip: boolean; expandMacros: boolean }>();
 const stamps = new WeakMap<FileAnalysis, number>(); let serial = 0;
-const forIndex = (file: FileAnalysis): FileAnalysis => ({ ...file, programs: undefined, initializers: undefined, argumentPrograms: undefined, statementConditions: undefined });
+const forIndex = (file: FileAnalysis): FileAnalysis => ({ ...file, programs: undefined, initializers: undefined, argumentPrograms: undefined, registrationPrograms: undefined, registrationInitializers: undefined, statementConditions: undefined });
 let cache: AnalysisCache | undefined;
 const incremental = new IncrementalAnalysis();
 let savedVersions = new Map<string, { id: number; stamp: number }>();
@@ -83,12 +83,12 @@ parentPort!.on('message', (request: Request) => {
       const parser = await analyzer;
       if (request.type === 'reset') { raw.clear(); restored.clear(); savedVersions.clear(); derivedSnapshot = undefined; incremental.clear(); parser.reset(); diagnostics = freshDiagnostics(); report(true); return; }
       if (request.type === 'cache-init') {
-        cache = await AnalysisCache.open(request.directory, request.key); restored.clear(); savedVersions.clear(); derivedSnapshot = undefined;
+        cache = await AnalysisCache.open(request.directory, request.key); cache.legacyRoots = request.legacyRoots ?? []; restored.clear(); savedVersions.clear(); derivedSnapshot = undefined;
         parentPort!.postMessage({ id: request.id, result: { state: cache.state,
           ...(cache.reason ? { reason: cache.reason } : {}), ...(cache.savedVersion === undefined ? {} : { savedVersion: cache.savedVersion }) } }); return;
       }
       if (request.type === 'cache-restore') {
-        const record = !memoryPressure() ? await cache?.restore(request.uri, request.text, request.skip, request.expandMacros !== false) : undefined;
+        const record = !memoryPressure() ? await cache?.restore(request.uri, request.text, request.skip, request.expandMacros !== false, request.propagateCallbacks !== false) : undefined;
         if (!record) { parentPort!.postMessage({ id: request.id, result: { hit: false, ...(cache?.state === 'invalid' ? { invalid: true } : {}) } }); return; }
         remove(request.uri); count(record.raw, 1);
         raw.set(request.uri, { id: request.id, file: record.raw, skip: record.skip, expandMacros: record.expandMacros });
@@ -154,7 +154,7 @@ parentPort!.on('message', (request: Request) => {
         restored.clear(); derivedSnapshot = undefined;
         phase('sources');
         if (memoryPressure()) throw new Error('Source analysis memory budget reached. Narrow Include/Exclude, then Rebuild index.');
-        const result = { ...parser.analyze(request.uri, request.text, request.skip), expandMacros: request.expandMacros };
+        const result = { ...parser.analyze(request.uri, request.text, request.skip, { expandMacros: request.expandMacros !== false, propagateCallbacks: request.propagateCallbacks !== false }), expandMacros: request.expandMacros };
         remove(request.uri); count(result, 1);
         raw.set(request.uri, { id: request.id, file: result, skip: request.skip, expandMacros: request.expandMacros !== false });
         parentPort!.postMessage({ id: request.id, result: forIndex(result) });

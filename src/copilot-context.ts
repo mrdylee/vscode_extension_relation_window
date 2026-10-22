@@ -7,7 +7,7 @@ export interface CallbackContext {
   selection: 'local-candidates' | 'source-search';
   snippets: {id: string; location: Location; text: string}[];
   targets: {id: string; name: string; evidenceIds: string[]; trace?: {evidenceId: string; reason: string}[]}[];
-  truncated: boolean;
+  truncated: boolean; preferredTargetId?: string;
 }
 export interface CallbackSite { key: string; file: FileAnalysis; call: ReferenceRecord; expression: string }
 export const callbackDigest = (text: string) => createHash('sha256').update(text).digest('hex');
@@ -43,17 +43,17 @@ export class CallbackContextBuilder {
       const entries = this.filesByName.get(name) ?? new Set<FileAnalysis>(); entries.add(file); this.filesByName.set(name,entries);
     }
   }
-  collectSites(file: FileAnalysis) {
+  collectSites(file: FileAnalysis, requestedSites?: ReadonlySet<string>) {
     for (const call of file.references) {
       // Non-evaluated expressions (sizeof, _Generic controls) have no access.
       if (call.kind !== 'call' || !call.access) continue;
-      if (call.inference && !call.inference.incomplete) continue;
+      const key = `${file.uri}:${call.location.start}:${call.location.end}`, requested=requestedSites?.has(key);
+      if (call.inference && !call.inference.incomplete && !requested) continue;
       if (file.inactive?.some(range => call.location.start >= range.start && call.location.start < range.end)) continue;
-      if (!call.indirect && call.callKind !== 'indirect' && !call.inference?.incomplete &&
+      if (!requested && !call.indirect && call.callKind !== 'indirect' && !call.inference?.incomplete &&
         !this.bindings.resolveReference(call).some(symbol=>symbol.kind==='variable' &&
           this.bindings.layout(symbol).some(type=>type.layers[0]==='function' ||
             (type.layers[0]==='pointer' && type.layers[1]==='function')))) continue;
-      const key = `${file.uri}:${call.location.start}:${call.location.end}`;
       if (call.targetId && call.inference?.evidence.length && ['registered', 'inferred'].includes(call.callKind ?? '')) {
         const candidates = this.localCandidates.get(key) ?? [];
         candidates.push(call); this.localCandidates.set(key, candidates);
@@ -125,7 +125,7 @@ export class CallbackContextBuilder {
         if (hits >= 24) break;
         visited.add(name);
         bridgeSearch: for (const file of this.filesByName.get(name) ?? []) for (const ref of file.references) {
-          if (ref.name !== name || ['inferred', 'registered', 'ai-candidate'].includes(ref.callKind ?? '')) continue;
+          if (ref.name !== name || ['inferred', 'registered', 'ai-candidate', 'user-confirmed'].includes(ref.callKind ?? '')) continue;
           if (hits >= 24) break bridgeSearch;
           hits++;
           const snippet = add(ref.location);
@@ -163,12 +163,13 @@ export class CallbackContextBuilder {
     for(let n=low;n<ordered.length && ordered[n].location.start<end;n++) if(ordered[n].location.end<=end)result.push(ordered[n]);
     return result;
   }
-  context(site: CallbackSite): CallbackContext {
+  context(site: CallbackSite, preferredTargetId?: string): CallbackContext {
     const local = this.localContext(site);
-    if (local) return local;
+    if (local && !preferredTargetId) return local;
     const {file,call,expression,key}=site;
     const identifiers=expression.match(/[A-Za-z_]\w*/g)??[];
     const keywords=new Set(identifiers.filter((name,n)=>n===identifiers.length-1||name.length>=4));
+    const preferred=preferredTargetId&&this.symbols.get(preferredTargetId);if(preferred)keywords.add(preferred.name);
     const snippets: CallbackContext['snippets']=[], dependencies=new Set<string>(), visited=new Set<string>(), added=new Set<string>();
     let chars=0,truncated=false;
     const add=(file:FileAnalysis,at:Location,owner?:SymbolRecord)=>{
@@ -217,15 +218,15 @@ export class CallbackContextBuilder {
         }
       }
     }
-    const fingerprint=callbackDigest(JSON.stringify({expression,callsite:call.location,keywords:[...visited].sort(),
+    const fingerprint=callbackDigest(JSON.stringify({preferredTargetId,expression,callsite:call.location,keywords:[...visited].sort(),
       sources:[...dependencies].sort().map(uri=>{
         let digest=this.digests.get(uri);if(!digest){digest=callbackDigest(this.fileByUri.get(uri)!.text);this.digests.set(uri,digest);}return[uri,digest];
       }),snippets:snippets.map(item=>item.id),targets:[...targets.keys()].sort(),truncated}));
-    return{key,callsite:call.location,expression,fingerprint,selection:'source-search',snippets,targets:[...targets.values()].slice(0,32),truncated:truncated||targets.size>32};
+    return{key,callsite:call.location,expression,fingerprint,preferredTargetId,selection:'source-search',snippets,targets:[...targets.values()].slice(0,32),truncated:truncated||targets.size>32};
   }
 }
 
-export async function prepareCallbackContexts(files: readonly FileAnalysis[], current:()=>boolean) {
+export async function prepareCallbackContexts(files: readonly FileAnalysis[], current:()=>boolean, requestedSites?: ReadonlySet<string>) {
   const builder=new CallbackContextBuilder();
   for(let n=0;n<files.length;n++){
     if(!current())break;builder.addFile(files[n]);
@@ -233,7 +234,7 @@ export async function prepareCallbackContexts(files: readonly FileAnalysis[], cu
   }
   // A call's typedef can be declared in a header appearing later in the snapshot.
   for(let n=0;n<files.length;n++){
-    if(!current())break;builder.collectSites(files[n]);
+    if(!current())break;builder.collectSites(files[n],requestedSites);
     if(n%8===7)await pause();
   }
   return builder;

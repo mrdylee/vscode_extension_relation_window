@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.1.72 — 2026-10-23
+
+- Order settings by View, Include, Exclude, Detailed Analysis Folders, Analysis
+  Options, Relation Display and Copilot. Scope macro expansion and full callback
+  propagation together; new workspaces start with basic navigation. Preserve
+  explicit legacy settings and existing workspace roots until a unified scope
+  is saved.
+- Bound cumulative function/project work, retain partial reasons and Retry, and
+  release full propagation data when the detailed scope shrinks. Indexed header
+  definitions remain available without tracing external function bodies.
+- Make Copilot investigation an explicit action for one callback at a time.
+  Startup, saves, rebuilds and model selection make no new AI requests. Recheck
+  bypasses only the selected call's cache.
+- Add Set manually, User confirmed and AI comparison. Keep user choices across
+  restart, rebuild and Copilot disable; require explicit Use this target before
+  replacing them. Preserve dependency checks after changing a manual target and
+  allow rechecking confirmations that local analysis subsequently resolves.
+- Fix the Stop local position and add a selectable full-function-name popup with
+  Copy, keyboard access, snapshot consistency and clipboard failure feedback.
+- Include embedded C attribute and conditional-initializer parser corrections.
+  Analysis cache compatibility is now 5; older snapshots require Rebuild index.
+  Whole-project detailed analysis can still reach work or memory limits.
+
 ## 0.1.71 — 2026-10-22
 
 - Ship manual Stop/Retry and per-function timing below after native release CI.

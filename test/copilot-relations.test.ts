@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { CallbackOverrideStore, makeCallbackOverride } from '../src/callback-overrides';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { createAnalyzer } from '../src/analyzer';
@@ -207,4 +208,22 @@ test('lookup preserves first callable site, static deduplication and incoming hi
   assert.deepEqual(candidates.map(ref => ref.id), [`${first.id}:ai:${target.id}`, `${third.id}:ai:${target.id}`, `${third.id}:ai:${target.id}`]);
   assert.deepEqual(candidates.map(ref => ref.inference!.evidence[0].reason), ['Source registration', 'Source registration', 'Second evidence']);
   assert.equal(file.references.some(ref => ref.callKind === 'ai-candidate'), false);
+});
+
+test('manual override replaces one AI call and survives AI clearing without changing raw facts', async () => {
+  const parser=await createAnalyzer(path.resolve('node_modules/web-tree-sitter/web-tree-sitter.wasm'),path.resolve('node_modules/tree-sitter-c/tree-sitter-c.wasm'));
+  const file=parser.analyze('file:///override.c','typedef void(*CB)(void);void wrong(void){}void correct(void){}CB cb;void run(void){cb();}');
+  const index=new RelationIndex();index.update(file);
+  const wrong=file.symbols.find(s=>s.name==='wrong')!,correct=file.symbols.find(s=>s.name==='correct')!,run=file.symbols.find(s=>s.name==='run')!;
+  const site=file.references.find(ref=>ref.kind==='call')!;
+  const hints=[{key:'manual-ai',callsite:site.location,expression:'cb',status:'candidates' as const,cached:false,candidates:[{targetId:wrong.id,evidence:[wrong.location],reason:'test registration'}]}];
+  applyCallbackHints(index,hints);
+  const store=new CallbackOverrideStore();store.set(makeCallbackOverride(index,site.location,wrong.id,correct.id));
+  applyCallbackHints(index,hints,store.resolve(index));
+  assert.equal(index.relations(run.id,'callees').find(g=>g.name==='correct')?.callKind,'user-confirmed');
+  assert.equal(index.relations(wrong.id,'callers').length,0);
+  assert.equal(index.relations(correct.id,'callers').filter(g=>g.name==='run').length,1);
+  applyCallbackHints(index,[],store.resolve(index));
+  assert.ok(index.relations(run.id,'callees').some(g=>g.name==='correct'));
+  assert.ok(index.files.get(file.uri)!.references.includes(site));
 });

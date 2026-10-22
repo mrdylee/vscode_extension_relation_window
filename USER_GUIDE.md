@@ -58,106 +58,54 @@ all local analysis. Diagnostics shows cache state and parse/relation counters.
 
 ## Optional Copilot callback candidates
 
-Run **Dynsight: Analyze Callbacks with Copilot** and select a model from your
-existing GitHub Copilot account. VS Code handles access consent. No separate API
-key is needed. This enables `dynsight.copilotCallbacks` for the workspace. Disable
-that setting to stop background requests and remove AI candidates from the view.
+Enable **Copilot Callbacks** in Settings, select a **Copilot Model**, and explicitly
+choose **Copilot Include** paths. Invocation files must also be inside **Detailed
+Analysis Folders** and outside the general and Copilot exclusions. Empty Copilot
+Include permits no requests. Paths are not copied from general Include.
 
-In **Settings → Copilot Model**, click **Select Copilot Model** to choose from
-models available to your account. The selection is saved as `dynsight.copilotModel`.
-You can also run **Dynsight: Select Copilot Model** from the Command Palette.
-Selection alone neither enables AI nor sends requests. Analyze uses the configured
-model; an unavailable model requires another selection instead of silently falling
-back. Results are cached separately for each model and version.
+Open a callback's details popup and choose **Find target with AI**. Command Palette
+**Analyze Callbacks with Copilot** also lets you choose one callback. Enabling,
+model selection, startup, navigation, saving and Rebuild reuse valid cache only;
+they never send new AI requests. Saved basic navigation can support a manual
+request after local detailed analysis is stopped or reaches a limit. Save modified
+sources first. **Stop Copilot Analysis** cancels the active request.
 
-Relevant source snippets are sent to Copilot's service; account usage limits and
-organization policies apply. Dynsight does not inherit Copilot chat history or
-Agent search. It selects bounded source evidence from the local index.
+Relevant source snippets are sent to your selected Copilot model. Supporting code
+may come from other indexed paths, even when only the invocation file is inside
+Copilot Include. Account limits and organization policies apply. Source comments
+and strings are analysis data. Dynsight uses bounded snippets, not chat history or
+an Agent's whole-project search. Missing context is reported as **More context
+needed**; **No target found in provided context** does not prove no target exists.
 
-Use **Settings → Copilot Include** to control which callback invocation files may
-use AI. This is an editable array in the ordinary VS Code settings editor; there
-is no separate scope dialog. Initial setup copies general **Include** paths.
-Newly added Include paths are also copied, while removing a copied path from AI
-Include remains effective after restart and when other Include paths are added.
-If general Include and Copilot Include change in the same JSON save, the explicit
-AI array takes priority, including an empty array.
-Removing a general Include path removes its AI copy. An empty AI Include means
-**no AI requests**. A workspace with no general Include paths starts with an empty
-AI list; explicitly add paths (or `**` for all indexed files) when needed.
+Hover or focus an **AI candidate** to open its popup:
+
+- **Set manually** searches indexed functions. Select the correct definition by
+  name and file path, then **Apply**. The graph and definition navigation use that
+  function and show **User confirmed**. This does not edit C source or rename a
+  function. **Cancel** leaves the selection unchanged.
+- **Recheck with AI** sends a fresh request for this call only, bypassing its AI
+  cache. Other callbacks are not reanalyzed.
+- A **User confirmed** popup offers both buttons too. AI agreement shows **AI
+  agrees**. A different suggestion is shown for comparison; **Use this target**
+  is required to replace your choice. Failure or cancellation keeps your choice.
+- **Remove manual override** removes only that user selection, restoring a current
+  AI result if available or the original unresolved call. It makes no AI request.
+
+User choices are saved separately from AI cache in local workspace extension
+storage. Rebuild, restart, model changes and disabling Copilot do not erase them.
+Code changes that invalidate call/target identity require review, rather than
+reattaching by line number or name. **User confirmed** records your decision; it
+is not a statically proven runtime call. These choices do not feed the local
+callback propagation engine. AI and user overlays never enter the Worker cache.
 
 ```json
 {
   "dynsight.include": ["App/**", "Drivers/**"],
+  "dynsight.detailedAnalysisFolders": ["App/**"],
   "dynsight.copilotInclude": ["App/**"],
   "dynsight.copilotExclude": ["App/Generated/**"]
 }
 ```
-
-Patterns are relative to each workspace root; folder settings are supported.
-Exclusions win over AI includes. Only invocation files in this AI scope contribute
-to AI requests, cached candidate display and pending counts. Supporting evidence
-may still come from any locally indexed path. Changing the scope cancels the
-active AI run and restores eligible cached results only. Excluded cache is kept
-for later reuse; use Analyze for missing results. Local callback analysis and its
-limits use the separate general Include/Exclude scope.
-
-When local registration and data-flow analysis has candidates, Dynsight first
-selects up to eight of them and asks Copilot to review their evidence. This path
-supplies at most ten source snippets and 8,000 source characters, including bounded
-getter/caller context when available. When no local candidate is available, it
-uses the broader source search. Local shortlists are incomplete and count as
-**Context limited**; a negative reply only describes the offered candidates.
-Prompt-format changes invalidate old AI results. Startup still makes no new
-requests; use **Analyze Callbacks with Copilot** to refresh missing results.
-
-- Unchanged startup, navigation and normal **Rebuild index** only reuse AI cache.
-- Saved changes can analyze unresolved callbacks, up to five new requests per
-  batch. No requests are made during unsaved editing. Diagnostics shows requests,
-  cache hits, pending callbacks and failures.
-- Click **Analyze all remaining** in the footer, or run **Analyze Callbacks with
-  Copilot**, to process every pending site automatically in batches of five.
-  Each request uses your Copilot allowance. Progress stays cumulative across batches.
-- Click **Stop analysis** or run **Dynsight: Stop Copilot Analysis** to cancel the
-  current request and stop further requests. Stop also applies during initial
-  Include setup or pending model selection. Completed results are kept; Analyze
-  resumes the missing sites. Saving does not restart a stopped job. Active jobs
-  pause during unsaved edits and resume after saving and local indexing settle.
-- A request error stops automatic continuation. Run **Reanalyze Callback Candidates
-  with Copilot** to invalidate the old AI cache once and process all sites again.
-  Normal Rebuild does not force AI requests.
-- Source, relevant search results, settings, model and prompt versions determine
-  cache validity. Changed inputs cancel outstanding work; stale answers are discarded.
-- **AI candidate** labels appear in Callers, Callees and both mode. Their details
-  link to source evidence. They are suggestions, never proof of invocation. An
-  empty answer means no candidate was found in the supplied bounded context.
-- In Callees and both mode, AI candidates replace the indirect/unresolved entry
-  at that exact invocation. Other invocations and local inferred/direct targets
-  stay visible. No candidate leaves the original entry visible; disabling or
-  clearing AI restores it. The original reference remains available for tracing.
-- Click an AI candidate function in Callees to preview its definition in Context
-  and expand its callees. Double-click or press Enter to open the definition in
-  the editor. The details popup keeps separate links to the original callback
-  callsite and evidence; navigating a candidate does not prove the call occurs.
-
-The Copilot footer shows processed/detected call sites, remaining sites, failures,
-candidate count, **No candidate in supplied context**, and **Context limited**.
-**Index ready** describes local indexing only. **All detected sites processed**
-means the detected unresolved call sites have been processed; it does not mean
-every source path or callback target was found. An empty bounded-context answer
-can count as processed while still leaving a callback unresolved.
-
-Local index records contain source and analysis data. AI cache records contain
-validated result identifiers and hashes, not source prompts. Both live in workspace
-extension storage, not the Git repository. Removing this storage removes the cache.
-Caching avoids repeated work; it does not make incomplete static or AI analysis complete.
-Successful saves retain the preceding local index generation. Interrupted or
-concurrent writes can leave orphan generation directories; they are not deleted
-automatically because another VS Code window might still be writing them.
-
-`dynsight.analyzeCallbacks` controls the existing static callback engine independently.
-Copilot supplements unresolved results. Disabling static analysis skips expensive
-pointer propagation, but source facts needed by function-argument navigation and
-later reanalysis remain available; this is not a zero-memory callback mode.
 
 ## Choose which files to analyze
 
@@ -199,38 +147,41 @@ Other examples: `App/**/*.{c,h}` matches C/H files under App; `**/vendor/**` mat
 - Definitions and references outside the scope are absent from Relation. Include shared headers and libraries if you need their relationships.
 - To restore full scope, empty Include and remove unwanted Exclude entries.
 
-## Choose where to expand macros (v0.1.36)
+## Detailed Analysis Folders
 
-Include/Exclude choose the files to index. **Macro Expansion Folders** chooses
-which indexed source bodies and initializers receive macro expansion.
+Settings are ordered as **View → Include → Exclude → Detailed Analysis Folders →
+Analysis Options → Relation Display → Copilot**, followed by maintenance settings.
+Include/Exclude select the basic index. **Detailed Analysis Folders** selects the
+subset receiving macro expansion and interprocedural callback propagation.
 
-1. Click **Settings → Macro Expansion Folders → Select folders…**, or run
-   **Dynsight: Select Macro Expansion Folders** from the Command Palette.
-2. Check the entries that need expansion, then click **OK**. The list uses your
-   Include patterns, or top-level folders when Include is empty. Saved custom
-   patterns remain available. In multi-folder workspaces, choose a workspace
-   folder first; the setting is saved for that folder.
-3. Wait for the analysis update to reach **Index ready**. Check all for all
-   sources; uncheck all to disable expansion. Cancel leaves settings unchanged.
+Use **Select folders…** or **Dynsight: Select Detailed Analysis Folders**. An empty
+list keeps basic symbols, direct calls, explicit callback registrations and
+supported straight-line local pointer candidates. `['**']` selects every indexed
+source. Cancel leaves the setting unchanged. Multi-root selection writes the
+chosen root's setting. Folder patterns use forward slashes on every platform.
 
-```json
-{
-  "dynsight.include": ["App/**", "SDK/**"],
-  "dynsight.macroExpansionFolders": ["App/**"]
-}
-```
+Unchecked indexed headers still supply definitions. Unchecked function bodies
+are not automatically pulled into detailed propagation; relationships requiring
+such bodies may stay unresolved. Select those folders when needed. This limits
+extra analysis; the basic index itself still needs memory.
 
-This indexes App and SDK but expands only App sources. Unchecked SDK headers
-still provide macro definitions to checked App sources. Unchecked bodies keep
-basic symbols, direct calls, literal function arguments and supported pointer
-analysis. Calls or callback targets that depend on macro expansion may be absent.
-Headers must still be inside Include/Exclude scope; Exclude always wins.
+Existing explicit **Macro Expansion Folders** and **Analyze Callbacks** settings
+remain a compatibility path until Detailed Analysis Folders is explicitly saved.
+Their old defaults are not silently applied to a new workspace. Saving even an
+empty unified list replaces the old two controls for that root. Old macro picker
+commands now open the unified selection. Changing a scope refreshes affected flow
+facts; increasing the scope may require parsing the affected files again.
 
-The default `["**"]` expands all indexed sources. An explicit `[]` disables
-expansion. Edit the Settings array directly for narrower glob patterns such as
-`App/control/**`. Patterns follow the same path and case rules as Include/Exclude.
-This reduces macro work; basic indexing and pointer analysis still consume memory.
-It does not guarantee that every project fits the Worker memory budget.
+Local work has per-function cumulative and project bounds as well as memory and
+manual Stop checks. Partial results retain their reasons. **Basic navigation
+ready** and **Detailed analysis** are separate states; neither an AI candidate nor
+a user choice proves all runtime paths were found.
+
+**Stop local** stays in a fixed action area as function names change. Hover or
+focus the shortened function name to view and select its full text. **Copy** copies
+the full name captured when the popup opened; it does not change if analysis moves
+to another function. Close and reopen to see the current name. Escape closes the
+popup, and keyboard Tab reaches Copy.
 
 ## Navigate Relation and Context
 
@@ -326,38 +277,17 @@ notices apply. References and variable R/W filters retain their original meaning
 
 JSON setting: `"dynsight.includeFunctionArguments": true`.
 
-### Callback analysis (separate option)
+### Callback analysis and legacy settings
 
-**Settings → Analyze Callbacks** (`dynsight.analyzeCallbacks`, default **on**)
-controls full function-pointer and structure callback propagation in Callers,
-Callees and Callers & Callees. With it off, a conservative **Registered candidate**
-pass still uses global designated initializers such as `.cb = target`, direct writes
-within the same function, and exact-object local pointer aliases such as
-`p = &table; p->cb()`. Alias chains are limited to 16 steps. This fallback does not
-infer through branches, loops, getter returns or interprocedural forwarding.
-Registered candidates are evidence of registration, not proof of runtime invocation;
-unresolved call sites remain visible. Clicking a call site can still open registered
-or Copilot candidates when static propagation is off.
+Use **Detailed Analysis Folders** for new workspaces. Macro expansion and full
+callback propagation share this scope; **Include Function Arguments** remains a
+separate display preference. Explicit registrations and safe simple local
+candidates remain available outside detailed analysis.
 
-This is separate from **Include Function Arguments**. Turning callback analysis
-off skips propagation, while direct calls, macro expansion and literal function
-names/addresses passed as arguments remain available. Alias, member and returned
-function argument targets require callback analysis.
-
-Changing the option recalculates relationships from existing source facts without
-reparsing files. Any running analysis completes before the change is applied.
-This is not immediate cancellation or recovery of failed/missing files: check the
-scope and use **Rebuild index** when recovery is needed. Basic parsing and macro
-analysis still consume memory and retain their existing limits. Report issue
-records the option so partial results can be interpreted correctly.
-
-
-If macro include traversal reaches its limit, directly written function names
-and addresses can still appear as partial argument candidates. Their popup shows
-the incomplete-analysis reason; this does not confirm macro expansion or actual
-execution. Alias and function-pointer inference stays disabled for those files.
-
-Functions, variables, types and macros have distinct icons. Context and detail popups use syntax colors; these are not full compiler-based semantic highlighting.
+The deprecated `dynsight.analyzeCallbacks` switch applies only in the legacy
+compatibility path. Changing analysis modes can recreate affected flow facts.
+Uncertain conditions, unknown writes and omitted effects remain uncertain; turning
+analysis off does not turn a registration into proof of invocation.
 
 ## Symbol icons and badges
 
@@ -535,7 +465,7 @@ command palette as **Dynsight: Stop Local Analysis / Resume Local Analysis**.
 Stopped analysis remains paused across source edits until Retry or Rebuild.
 Old fixed-deadline caches retain parsed sources but recompute relationships once.
 These controls do not enable Copilot. Memory, work and convergence limits
-remain, including the 256-slot function mutation limit.
+remain, including cumulative function/project work bounds and the 256-slot function mutation limit. A function budget is not reset on each propagation visit.
 
 Mutation slots count distinct storage locations retained in a function summary,
 including effects imported from helpers. Repeated writes to the same exact slot

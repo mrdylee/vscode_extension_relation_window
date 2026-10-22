@@ -4,6 +4,7 @@ import { WorkspaceIndex } from './workspace';
 import { FileAnalysis, GraphData, GraphNode, Location, SymbolRecord } from './model';
 import { ViewState, nodePreviewId, canExpandNode } from './view-state';
 import { analysisNotices } from './analysis-notices';
+import type { CallbackActions } from './copilot-service';
 import { highlightC, SyntaxToken } from './syntax';
 
 const panelAlignments: Partial<Record<ViewState['contextLayout'], string>> = {
@@ -37,7 +38,7 @@ export class RelationView implements vscode.Disposable {
   private syntaxCache?: { text: string; tokens: SyntaxToken[][] };
   private panelLayout = Promise.resolve();
   private graphSnapshot?: { key: string; files: FileAnalysis[]; graph?: GraphData };
-  constructor(private workspace: WorkspaceIndex, private extensionUri: vscode.Uri) {
+  constructor(private workspace: WorkspaceIndex, private extensionUri: vscode.Uri, private callbackActions?: CallbackActions) {
     this.diagnosticsListener = workspace.diagnosticsChanged.event(() => {
       this.state.diagnostics = workspace.diagnostics;
       void this.webview?.webview.postMessage({ type: 'diagnostics', diagnostics: this.state.diagnostics });
@@ -226,6 +227,29 @@ export class RelationView implements vscode.Disposable {
   async handleMessage(message: unknown) {
     if (!message || typeof message !== 'object') return;
     const m = message as Record<string, unknown>;
+    if(m.type === 'copyFunctionName') {
+      if(typeof m.requestId !== 'string' || typeof m.name !== 'string' || !/^[A-Za-z_]\w{0,4095}$/.test(m.name))return;
+      let ok=false;try{await vscode.env.clipboard.writeText(m.name);ok=true;}catch{/* UI keeps selectable text on clipboard failure. */}
+      await this.webview?.webview.postMessage({type:'copyFunctionNameResult',requestId:m.requestId,ok});return;
+    }
+    if(typeof m.type==='string' && ['callbackSearch','callbackSetTarget','callbackAnalyze','callbackUseSuggestion','callbackRemoveOverride','callbackCancel'].includes(m.type)) {
+      if(typeof m.requestId!=='string'||m.requestId.length>128||typeof m.actionId!=='string'||m.actionId.length>4096)return;
+      try {
+        if(!this.callbackActions)throw new Error('Callback actions are unavailable.');
+        const site=[...this.nodes.values()].flatMap(node=>node.sites).find(site=>site.id===m.actionId&&site.kind==='call'&&site.access);
+        if(!site)throw new Error('The callback changed. Open its popup again.');
+        const handle={siteKey:`${site.location.uri}:${site.location.start}:${site.location.end}`,targetId:site.targetId,overrideKey:site.manual?.overrideKey};
+        let data:Record<string,unknown>={};
+        if(m.type==='callbackSearch') {if(typeof m.query!=='string'||m.query.length>512)return;data={choices:await this.callbackActions.search(handle,m.query)};}
+        if(m.type==='callbackSetTarget') {if(typeof m.targetId!=='string')return;await this.callbackActions.setTarget(handle,m.targetId);data={saved:true};this.refresh();}
+        if(m.type==='callbackRemoveOverride') {await this.callbackActions.removeOverride(handle);data={saved:true};this.refresh();}
+        if(m.type==='callbackAnalyze') data={...await this.callbackActions.analyze(handle,m.recheck===true)};
+        if(m.type==='callbackUseSuggestion') {if(typeof m.suggestionId!=='string'||typeof m.targetId!=='string')return;await this.callbackActions.useSuggestion(handle,m.suggestionId,m.targetId);data={saved:true};this.refresh();}
+        if(m.type==='callbackCancel')this.callbackActions.cancel(handle);
+        await this.webview?.webview.postMessage({type:'callbackActionResult',requestId:m.requestId,actionId:m.actionId,ok:true,...data});
+      }catch(error){await this.webview?.webview.postMessage({type:'callbackActionResult',requestId:m.requestId,actionId:m.actionId,ok:false,error:String(error instanceof Error?error.message:error)});}
+      return;
+    }
     if (typeof m.type === 'string' && ['selectNode', 'pinNode', 'navigateContext', 'choose', 'mode', 'depth', 'lock', 'skip', 'refresh', 'expand', 'collapse', 'expandSpecial', 'open'].includes(m.type)) this.activity.fire(m.type);
     switch (m.type) {
       case 'diagnostics': this.workspace.refreshDiagnostics(); break;

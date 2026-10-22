@@ -1,0 +1,24 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { createAnalyzer } from '../src/analyzer';
+import { callbackContexts } from '../src/copilot-context';
+import { CopilotCallbackController } from '../src/copilot-callbacks';
+test('single-site analysis and recheck never send other pending calls', async t => {
+  const parser=await createAnalyzer('node_modules/web-tree-sitter/web-tree-sitter.wasm','node_modules/tree-sitter-c/tree-sitter-c.wasm');
+  const file=parser.analyze('file:///sites.c','typedef void(*CB)(void);void target(void){}CB fp=target;void run(void){fp();fp();}');
+  const snapshot={generation:1,settingsKey:'test',files:[file]};
+  const sites=callbackContexts([file]);assert.equal(sites.length,2);
+  const dir=await mkdtemp(path.join(tmpdir(),'dynsight-single-'));t.after(()=>rm(dir,{recursive:true,force:true}));
+  let requests=0;
+  const controller=new CopilotCallbackController({cacheDir:dir,isCurrent:()=>true,provider:{modelKey:'test',complete:async()=>{requests++;return JSON.stringify({status:'insufficient-context',candidates:[],missing:['Registration path']});}}});
+  assert.equal((await controller.analyzeSite(snapshot,sites[0].key,{recheck:false})).requested,1);
+  assert.equal((await controller.analyzeSite(snapshot,sites[0].key,{recheck:false})).cached,1);
+  assert.equal(requests,1);
+  assert.equal((await controller.analyzeSite(snapshot,sites[0].key,{recheck:true})).requested,1);
+  assert.equal(requests,2);
+  assert.equal((await controller.analyzeSite(snapshot,'missing',{recheck:true})).requested,0);
+  assert.equal((await controller.restore(snapshot)).cached,1);
+});

@@ -44,7 +44,7 @@ export class FunctionArguments {
       }
       for (const key of Object.keys(node)) if (key !== 'location' && key !== 'type' && key !== 'path') visit(node[key]);
     };
-    for (const file of files) for (const program of [...(file.programs ?? []), ...(file.argumentPrograms ?? [])]) visit(program.body);
+    for (const file of files) for (const program of [...(file.programs ?? file.registrationPrograms ?? []), ...(file.argumentPrograms ?? [])]) visit(program.body);
   }
   add(call: Call, n: number, targets: Map<string, Evidence[]>, inferred: boolean, incomplete: boolean, reasons: string[] = []) {
     const source = this.calls.get(call.key);

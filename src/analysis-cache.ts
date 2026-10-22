@@ -7,10 +7,10 @@ export interface CachedAnalysis { raw: FileAnalysis; derived: FileAnalysis; skip
 interface Entry { uri: string; name: string; digest: string; source: string; skip: boolean; expandMacros: boolean }
 // Bump only when parsing, macro expansion, callback derivation or stored analysis
 // semantics change. UI, packaging and other compatible releases keep this value.
-export const ANALYSIS_CACHE_VERSION = 4;
+export const ANALYSIS_CACHE_VERSION = 5;
 export type CacheIncompatibility = 'analysis-version' | 'workspace-settings' | 'legacy-format';
-interface Manifest { schema: 2; analysisVersion: number; key: string; generation: string; previous?: string; entries: Entry[]; callbackPolicy?: string; retryable?: boolean }
-const workerFields = new Set(['text', 'programs', 'initializers', 'argumentPrograms', 'statementConditions']);
+interface Manifest { legacyRoots?: string[]; schema: 2; analysisVersion: number; key: string; generation: string; previous?: string; entries: Entry[]; callbackPolicy?: string; retryable?: boolean }
+const workerFields = new Set(['text', 'programs', 'initializers', 'argumentPrograms', 'registrationPrograms', 'registrationInitializers', 'statementConditions']);
 const maxFiles = 10_000, maxRecordBytes = 64 * 1024 * 1024, maxGenerationBytes = 1024 * 1024 * 1024;
 const maxManifestBytes = 4 * 1024 * 1024;
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
@@ -27,6 +27,7 @@ function validFile(value: FileAnalysis, uri: string) {
     Array.isArray(value.references) && Array.isArray(value.includes) && Array.isArray(value.issues);
 }
 export class AnalysisCache {
+  legacyRoots: string[] = [];
   state: 'missing' | 'ready' | 'incompatible' | 'invalid' = 'missing';
   reason?: CacheIncompatibility;
   savedVersion?: number;
@@ -55,7 +56,7 @@ export class AnalysisCache {
     } catch (error) { cache.state = (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'invalid'; }
     return cache;
   }
-  async restore(uri: string, text: string, skip: boolean, expandMacros: boolean): Promise<CachedAnalysis | undefined> {
+  async restore(uri: string, text: string, skip: boolean, expandMacros: boolean, propagateCallbacks = true): Promise<CachedAnalysis | undefined> {
     const entry = this.entries.get(uri);
     if (this.state !== 'ready' || !this.manifest || !entry || entry.source !== hash(text) || entry.skip !== skip || entry.expandMacros !== expandMacros) return;
     try {
@@ -63,10 +64,10 @@ export class AnalysisCache {
       if (hash(data) !== entry.digest) throw new Error('Analysis cache checksum mismatch');
       const record = JSON.parse(data) as CachedAnalysis & { removed?: (keyof FileAnalysis)[] };
       record.derived = { ...record.raw, ...record.derived, text: record.raw?.text,
-        programs: undefined, initializers: undefined, argumentPrograms: undefined, statementConditions: undefined };
+        programs: undefined, initializers: undefined, argumentPrograms: undefined, registrationPrograms: undefined, registrationInitializers: undefined, statementConditions: undefined };
       for (const key of record.removed ?? []) delete record.derived[key];
       if (!validFile(record.raw, uri) || !validFile(record.derived, uri) || record.raw.text !== text ||
-        record.skip !== skip || record.expandMacros !== expandMacros) throw new Error('Invalid analysis cache record');
+        record.skip !== skip || record.expandMacros !== expandMacros || (record.raw.analysisPolicy?.propagateCallbacks ?? true) !== propagateCallbacks) throw new Error('Invalid analysis cache record');
       return record;
     } catch { this.state = 'invalid'; return; }
   }
@@ -113,7 +114,7 @@ export class AnalysisCache {
         await writeFile(path.join(directory, name), data);
         entries.push({ uri: record.raw.uri, name, digest: hash(data), source: hash(record.raw.text), skip: record.skip, expandMacros: record.expandMacros });
       }
-      const manifest: Manifest = { schema: 2, analysisVersion: this.analysisVersion, key: this.key, generation, previous, entries, callbackPolicy: 'manual-stop', retryable };
+      const manifest: Manifest = { legacyRoots: this.legacyRoots, schema: 2, analysisVersion: this.analysisVersion, key: this.key, generation, previous, entries, callbackPolicy: 'manual-stop', retryable };
       const serialized = JSON.stringify(manifest);
       if (Buffer.byteLength(serialized) > maxManifestBytes) throw new Error('Analysis cache manifest size limit');
       await writeFile(temporary, serialized);

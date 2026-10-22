@@ -5,6 +5,8 @@ import type { Diagnostics } from '../src/diagnostics';
 import { copilotWaitMessage } from '../src/diagnostics';
 import { highlightC } from '../src/syntax';
 import { createDiagnostics } from './diagnostics';
+import { createLocalProgress } from './local-progress';
+import { createCallbackActions } from './callback-actions';
 declare const __EXTENSION_VERSION__: string;
 declare function acquireVsCodeApi(): { postMessage(message: unknown): void };
 const api = acquireVsCodeApi();
@@ -34,42 +36,16 @@ graph.addEventListener('dblclick', event => {
 const graphHeader = el('div', 'pane-heading');
 const candidates = el('div', 'candidates');
 const footer = el('footer');
-const localProgress = el('span', 'local-progress');
-const localText = el('span');
-const localStop = button('Stop local', () => send('localStop'), 'Stop local analysis and keep incomplete results');
-const localRetry = button('Retry local', () => send('localResume'), 'Retry local analysis using parsed sources');
-localProgress.append(localText, localStop, localRetry);
-let localDiagnostics: Diagnostics | undefined, localSampleAt = 0, localSample = '';
-function renderLocal(diagnostics?: Diagnostics, tick = false) {
-  const analysis = diagnostics?.index?.callbackAnalysis, progress = analysis?.progress;
-  if (!tick) {
-    localDiagnostics = diagnostics;
-    const sample = JSON.stringify([analysis?.running, analysis?.paused, progress]);
-    if (sample !== localSample) { localSample = sample; localSampleAt = Date.now(); }
-  }
-  const sinceSample = analysis?.running ? Math.max(0, Date.now() - localSampleAt) : 0;
-  const scopeMs = (progress?.scopeElapsedMs ?? 0) + sinceSample;
-  localStop.hidden = !analysis?.running; localRetry.hidden = true;
-  localText.classList.remove('warning');
-  localProgress.hidden = true;
-  if (analysis?.running) {
-    const label = progress?.symbol ? `Local · ${(scopeMs / 1000).toFixed(1)}s${scopeMs >= 5000 ? ' · Taking longer' : ''} · ${progress.symbol}` : 'Local analysis…';
-    localText.textContent = analysis.paused ? 'Stopping local analysis…' : label;
-    localText.classList.toggle('warning', scopeMs >= 5000 && !!progress?.symbol);
-    localText.title = `${progress?.symbol ?? 'Local analysis'} · ${progress?.stage === 'registrations' ? 'Registration candidates' : `Round ${progress?.round ?? 0}/${progress?.maxRounds ?? 12}`} · ${progress?.functionsDone ?? 0}/${progress?.functionsTotal ?? 0} functions · ${progress?.scopeEvaluations ?? 0} ${progress?.stage === 'registrations' ? 'checks' : 'evaluations'} in current function. Timer resets for each function; no automatic time cutoff.`;
-    localStop.disabled = analysis.paused; localProgress.hidden = false;
-  } else if (analysis?.paused || progress?.outcome === 'cancelled' || progress?.outcome === 'time') {
-    localText.textContent = analysis?.paused || progress?.outcome === 'cancelled' ? 'Local analysis paused' : 'Local analysis needs retry';
-    localText.classList.add('warning'); localText.title = '';
-    localRetry.hidden = false; localProgress.hidden = false;
-  }
-}
-if (!contextOnly) setInterval(() => { if (localDiagnostics?.index?.callbackAnalysis?.running) renderLocal(localDiagnostics, true); }, 500);
+const local = createLocalProgress(send);
+const localProgress = local.element;
+const renderLocal = local.update;
 const copilotProgress = el('div', 'copilot-progress'); copilotProgress.hidden = true;
 function renderCopilot(ai: Diagnostics['copilot']) {
   copilotProgress.hidden = !ai;
   copilotProgress.replaceChildren();
   if (!ai) return;
+  if(ai.manualReview)copilotProgress.append(el('span','warning',`User confirmations: ${ai.manualReview} need review`));
+  if(ai.manualInactive)copilotProgress.append(el('span','muted',`User confirmations: ${ai.manualInactive} inactive`));
   const stop = () => copilotProgress.append(button('Stop analysis', () => send('copilotStop'), 'Stop Copilot analysis and keep completed results'));
   if (ai.state === 'waiting-for-saved-index') {
     copilotProgress.append(el('span', '', `Copilot paused: ${copilotWaitMessage(ai.waitReason)}`));
@@ -86,7 +62,7 @@ function renderCopilot(ai: Diagnostics['copilot']) {
   if (total) copilotProgress.append(el('span', 'muted', `Candidates: ${ai.candidates} · No candidate in supplied context: ${ai.notFound} · Context limited: ${ai.contextLimited}`));
   copilotProgress.title = 'Coverage of detected callback sites in the current saved index. Failed sites remain pending. Processing every site does not prove every runtime target was found.';
   if (ai.state === 'analyzing' || ai.automatic) stop();
-  else if (ai.remaining > 0 && !busy) copilotProgress.append(button('Analyze all remaining', () => send('copilotAnalyze'), 'Analyze remaining callbacks automatically in batches of 5; requests use your Copilot allowance'));
+  else if (ai.remaining > 0 && !busy) copilotProgress.append(button('Choose callback…', () => send('copilotAnalyze'), 'Choose one callback to investigate with AI. No automatic requests.'));
 }
 const divider = el('div', 'divider'); divider.tabIndex = 0;
 divider.setAttribute('role', 'separator'); divider.setAttribute('aria-label', 'Context width'); divider.setAttribute('aria-orientation', 'vertical');
@@ -141,7 +117,9 @@ let closeTimer: ReturnType<typeof setTimeout> | undefined;
 let hoverTimer: ReturnType<typeof setTimeout> | undefined;
 let restoringFocus = false;
 function hideDetails(restoreFocus = false) {
+  if(!restoreFocus&&popup.querySelector('.callback-actions[data-active="true"]'))return;
   clearTimeout(hoverTimer); clearTimeout(closeTimer); popup.hidden = true; popupKey = undefined;
+  for(const element of Array.from(popup.querySelectorAll<HTMLElement>('.callback-actions')))element.dataset.active='false';
   popupAnchor?.setAttribute('aria-expanded', 'false');
   if (restoreFocus && popupAnchor?.isConnected) { restoringFocus = true; popupAnchor.focus(); restoringFocus = false; }
 }
@@ -246,7 +224,7 @@ function showDetails(node: GraphNode, anchor: HTMLButtonElement) {
   if (restoringFocus) return;
   clearTimeout(closeTimer);
   if (popupKey === node.key && !popup.hidden) return;
-  hideDetails(); popupAnchor = anchor; popupKey = node.key;
+  hideDetails(); if(!popup.hidden)return; popupAnchor = anchor; popupKey = node.key;
   anchor.setAttribute('aria-expanded', 'true');
   popup.replaceChildren(el('strong', `detail-name syntax-${node.kind}`, node.symbolId ? node.name : node.sites[0]?.name ?? node.name));
   const meta = el('div', 'detail-meta');
@@ -265,12 +243,14 @@ function showDetails(node: GraphNode, anchor: HTMLButtonElement) {
   if (node.sites.length) popup.append(el('strong', 'detail-label', `${node.sites.length} ${node.sites[0].access ? 'variable use' : 'call/reference'} locations`));
   if (node.sites.some(site => site.access === 'address')) popup.append(el('div', 'condition', 'This location uses the address. Writes inside the receiving function are not tracked.'));
   for (const site of node.sites) {
+    if(site.kind==='call'&&(site.callKind==='ai-candidate'||site.callKind==='user-confirmed'||site.indirect||site.inference?.incomplete))popup.append(createCallbackActions(site,send,()=>hideDetails()));
+    if(site.callKind==='user-confirmed'){popup.append(el('strong','detail-label','User confirmed · Target selected by the user; not proof of invocation.'));if(site.manual?.originalTargetName)popup.append(el('div','detail-meta',`Original AI candidate: ${site.manual.originalTargetName}`));}
     if (site.argument) {
       popup.append(el('strong', 'detail-label argument-label', `Function argument #${site.argument.position} · via ${site.argument.callee}`));
       popup.append(el('div', 'condition', 'Passing a function does not prove that the receiving code invokes it.'));
     }
     if (site.inference) {
-      popup.append(el('strong', 'detail-label', `${site.callKind === 'ai-candidate' ? 'Copilot candidate' : site.callKind === 'registered' ? site.kind === 'reference' ? 'Registration' : 'Registered candidate' : site.argument ? 'Argument value' : 'Inferred call'} · ${site.inference.expression}`));
+      popup.append(el('strong', 'detail-label', `${site.callKind === 'user-confirmed' ? 'User confirmed' : site.callKind === 'ai-candidate' ? 'Copilot candidate' : site.callKind === 'registered' ? site.kind === 'reference' ? 'Registration' : 'Registered candidate' : site.argument ? 'Argument value' : 'Inferred call'} · ${site.inference.expression}`));
       popup.append(condition(site.inference.expression));
       if (site.inference.incomplete) popup.append(el('div', 'condition detail-warning', 'Other targets may exist. ' + site.inference.reasons.join(' · ')));
       for (const [i, frame] of site.inference.evidence.entries()) {
@@ -323,6 +303,7 @@ function drawNode(node: GraphNode): HTMLElement {
   if (node.symbolId) title.dataset.symbolId = node.symbolId;
   if (openId) title.dataset.preview = openId;
   title.append(icon(node), el('span', 'symbol-name', node.symbolId ? node.name : node.sites[0]?.name ?? node.name));
+  if (node.sites.some(site => site.callKind === 'user-confirmed')) title.append(el('span', 'badge user-confirmed', 'User confirmed'));
   if (node.sites.some(site => site.callKind === 'ai-candidate')) title.append(el('span', 'badge', 'AI candidate'));
   if (node.sites.some(site => site.callKind === 'registered' && site.kind === 'reference')) title.append(el('span', 'badge', 'Registration'));
   if (node.sites.some(site => site.callKind === 'registered' && site.kind === 'call')) title.append(el('span', 'badge', 'Registered candidate'));

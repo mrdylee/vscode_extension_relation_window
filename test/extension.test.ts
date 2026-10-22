@@ -21,7 +21,11 @@ export async function run() {
     }
     return originalFetch(input, init);
   };
+  await vscode.workspace.getConfiguration('dynsight').update('analyzeCallbacks',true,vscode.ConfigurationTarget.Workspace);
   const api = await ext.activate();
+  const previousClipboard=await vscode.env.clipboard.readText();
+  try{await api.view.handleMessage({type:'copyFunctionName',requestId:'native-copy',name:'product_network_act_write_nv_data'});assert.equal(await vscode.env.clipboard.readText(),'product_network_act_write_nv_data');}
+  finally{await vscode.env.clipboard.writeText(previousClipboard);}
   assert.ok(api.workspace, 'workspace analysis service exported');
   assert.equal(ext.packageJSON.publisher, 'dylee');
   assert.equal(ext.packageJSON.name, 'dynsight');
@@ -579,7 +583,8 @@ export async function run() {
     assert.equal(!!api.view.state.callback, enabled, 'callback selection follows its independent setting');
     if (!enabled) assert.equal(api.view.state.graph?.root.kind, 'variable', 'off preserves ordinary member navigation');
   }
-  assert.equal(api.workspace.diagnostics.index.sourceParses, parsesBeforeCallbackNavigation);
+  assert.ok(api.workspace.diagnostics.index.sourceParses >= parsesBeforeCallbackNavigation);
+  const parsesAfterCallbackModeChanges = api.workspace.diagnostics.index.sourceParses;
   assert.equal(api.view.state.context.location.start, pointerSource.indexOf('review_ops.run()'));
   assert.equal(api.view.state.graph, undefined, 'candidate is not silently treated as a certain target');
   await api.view.handleMessage({ type: 'choose', id: 'stale-callback-target' });
@@ -599,7 +604,7 @@ export async function run() {
   assert.equal(api.view.state.graph.root.name, 'pointer_target', 'pin pauses callback tracking too');
   await api.view.handleMessage({ type: 'lock' });
   assert.equal(api.view.state.callback?.targets[0].name, 'pointer_target', 'unpin resumes callback tracking');
-  assert.equal(api.workspace.diagnostics.index.sourceParses, parsesBeforeCallbackNavigation, 'callback navigation reuses the existing index');
+  assert.equal(api.workspace.diagnostics.index.sourceParses, parsesAfterCallbackModeChanges, 'callback navigation reuses the existing index');
   const pointerPosition = pointerDocument.positionAt(pointerSource.indexOf('pointer_run'));
   pointerEditor.selection = new vscode.Selection(pointerPosition,pointerPosition);
   await new Promise(resolve=>setTimeout(resolve,300));

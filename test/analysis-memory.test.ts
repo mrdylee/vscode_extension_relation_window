@@ -66,3 +66,17 @@ test('an empty project releases the previous callback project cache', async () =
   assert.equal(oldSource.deref(), undefined);
   assert.equal(oldResult.deref(), undefined);
 });
+
+test('shrinking detailed scope releases full programs and old derived results', async () => {
+  const analyzer=await create();
+  const source='typedef void(*CB)(void);void target(void){}void run(void){CB cb=target;cb();}';
+  let full:ReturnType<typeof analyzer.analyze>|undefined=analyzer.analyze('file:///scope.c',source,true,{expandMacros:true,propagateCallbacks:true});
+  const oldProgram=new WeakRef(full.programs!);
+  let derived:ReturnType<typeof analyzer.derive>|undefined=analyzer.derive([full]);
+  const oldResult=new WeakRef(derived[0]);full=undefined;derived=undefined;
+  const basic=analyzer.analyze('file:///scope.c',source,true,{expandMacros:false,propagateCallbacks:false});
+  analyzer.derive([basic]);await collect();
+  assert.equal(basic.programs,undefined);
+  assert.equal(oldProgram.deref(),undefined);
+  assert.equal(oldResult.deref(),undefined);
+});

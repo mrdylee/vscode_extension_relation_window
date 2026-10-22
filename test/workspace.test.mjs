@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { buildSync } from 'esbuild';
 import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -33,8 +33,9 @@ function fixture(t, files = [], options = {}) {
   const created = new Emitter(), changed = new Emitter(), deleted = new Emitter(), closed = new Emitter(), edited = new Emitter();
   const configuration = new Emitter(), folders = new Emitter();
   const adapter = {
-    workspaceFolders: [folder], textDocuments: [],
-    getConfiguration: () => ({ get: (_key, fallback) => fallback }),
+    workspaceFolders: options.folders ?? [folder], textDocuments: [],
+    getConfiguration: () => ({ get: (key, fallback) => key === 'detailedAnalysisFolders' && options.detailedFolders !== undefined ? options.detailedFolders : fallback,
+      inspect: key => options.newWorkspace ? undefined : options.detailedFolders !== undefined ? { workspaceValue: key === 'detailedAnalysisFolders' ? options.detailedFolders : undefined } : { workspaceValue: key === 'analyzeCallbacks' ? true : undefined } }),
     getWorkspaceFolder: () => folder, asRelativePath: value => value.path.slice('/review/'.length),
     findFiles: async () => files,
     createFileSystemWatcher: () => ({ dispose() {}, onDidCreate: created.event, onDidChange: changed.event, onDidDelete: deleted.event }),
@@ -49,6 +50,18 @@ function fixture(t, files = [], options = {}) {
   t.after(async () => { const worker = workspace.worker; workspace.dispose(); await worker.terminate(); });
   return { workspace, adapter, created, changed, deleted, closed, edited, configuration, folders };
 }
+
+test('legacy cache evidence applies only to roots present in that saved workspace', async t => {
+  const storage = await mkdtemp(path.join(os.tmpdir(), 'dynsight-legacy-roots-'));
+  t.after(() => rm(storage, { recursive: true, force: true }));
+  await mkdir(path.join(storage, 'analysis-cache'));
+  await writeFile(path.join(storage, 'analysis-cache', 'manifest.json'), JSON.stringify({ analysisVersion: 4, entries: [{ uri: 'file:///review/old.c' }] }));
+  const folders = ['review', 'new'].map((name,index)=>({uri:Uri.parse(`file:///${name}`),name,index}));
+  const {workspace}=fixture(t,[],{storage,folders,newWorkspace:true});
+  await workspace.ready;
+  assert.equal(workspace.scope(folders[0]).legacy,true);
+  assert.equal(workspace.scope(folders[1]).legacy,false,'new roots must start with basic navigation');
+});
 
 test('disk cache restores unchanged startup without parses or relationship passes; one edit reparses one file', async t => {
   const storage = await mkdtemp(path.join(os.tmpdir(), 'dynsight-workspace-cache-'));
@@ -682,7 +695,7 @@ test('unfinished discovery and superseded rebuilds do not claim analyzed file co
   assert.equal(records.at(-1).files.indexed, 1);
 });
 
-test('callback setting changes reuse source facts and discard in-flight results from the old mode', async t => {
+test('callback setting changes refresh flow facts and discard in-flight results from the old mode', async t => {
   const { workspace, adapter, configuration } = fixture(t);
   await workspace.ready;
   const file = uri('callbacks.c');
@@ -697,7 +710,7 @@ test('callback setting changes reuse source facts and discard in-flight results 
   const event = { affectsConfiguration: key => key === 'dynsight.analyzeCallbacks' };
   configuration.fire(event); await bounded(workspace.whenIdle());
   assert.equal(targetKind(), 'registered', 'simple assignments remain available with full analysis disabled');
-  assert.equal(workspace.diagnostics.index.sourceParses, parses);
+  assert.ok(workspace.diagnostics.index.sourceParses > parses);
   const request = workspace.request, held = deferred(), entered = deferred();
   workspace.request = function (message) {
     const result = request.call(this, message);
@@ -713,7 +726,7 @@ test('callback setting changes reuse source facts and discard in-flight results 
   workspace.request = request;
   enabled = true; configuration.fire(event); await bounded(workspace.whenIdle());
   assert.equal(targetKind(), 'inferred');
-  assert.equal(workspace.diagnostics.index.sourceParses, parses);
+  assert.ok(workspace.diagnostics.index.sourceParses > parses);
 });
 
 test('Worker transfers located callback diagnostics and clears them when callback analysis is disabled', async t => {
@@ -837,4 +850,14 @@ test('failed scope discovery cannot later report excluded old source as a ready 
  sources.set(next.toString(),'void changed_function(void){}');changed.fire(next);await bounded(workspace.whenIdle());
  assert.equal(workspace.index.files.has(first.toString()) && workspace.status==='Index ready',false,
   'excluded source must not silently remain in a current index after failed scope change');
+});
+
+test('new explicit empty detailed scope retains basic navigation without propagation programs', async t => {
+  const file=uri('basic-policy.c');
+  const {workspace}=fixture(t,[file],{detailedFolders:[],sources:new Map([[file.toString(),latest]])});
+  await workspace.ready;await bounded(workspace.whenIdle());
+  assert.equal(workspace.copilotSnapshotReady,true);
+  assert.equal(workspace.diagnostics.worker.counts.programs,0);
+  const target=workspace.index.symbols().find(symbol=>symbol.name==='new_target');
+  assert.ok(workspace.index.relations(target.id,'callers').some(group=>group.name==='task'));
 });

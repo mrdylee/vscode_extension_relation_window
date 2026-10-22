@@ -22,7 +22,7 @@ export function registerIssueReporting(context: vscode.ExtensionContext, workspa
         lastRebuild: rebuild ? { number: rebuild.number, at: rebuild.at, finishedAt: rebuild.finishedAt,
           reason: rebuild.reason, outcome: rebuild.outcome,
           files: reportFileCounts(rebuild.files),
-          settings: rebuild.settings?.filter(key => ['skipInactive', 'include', 'exclude', 'macroExpansionFolders'].includes(key)) } : undefined,
+          settings: rebuild.settings?.filter(key => ['skipInactive', 'include', 'exclude', 'macroExpansionFolders', 'detailedAnalysisFolders'].includes(key)) } : undefined,
         lastSourceEvent: index.lastSourceEvent ? { at: index.lastSourceEvent.at, kind: index.lastSourceEvent.kind } : undefined } : undefined });
   };
   let lastTransition = '';
@@ -49,7 +49,7 @@ export function registerIssueReporting(context: vscode.ExtensionContext, workspa
     const task = (async () => {
       const scopes = (vscode.workspace.workspaceFolders ?? []).map(folder => {
         const config = vscode.workspace.getConfiguration('dynsight', folder.uri);
-        const macros = config.get<string[]>('macroExpansionFolders', ['**']);
+        const macros = config.get<string[]>('detailedAnalysisFolders', config.get<string[]>('macroExpansionFolders', ['**']));
         return { include: config.get<string[]>('include', []).length, exclude: config.get<string[]>('exclude', []).length,
           macroMode: !macros.length ? 'none' as const : macros.includes('**') ? 'all' as const : 'selected' as const, macroPatterns: macros.length };
       });
