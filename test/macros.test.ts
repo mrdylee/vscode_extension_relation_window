@@ -14,6 +14,16 @@ function project(sources: Record<string, string>) {
 }
 const calls = (index: RelationIndex, name = 'run') => index.relations(index.symbols().find(s => s.name === name && s.kind === 'function' && s.definition)!.id, 'callees');
 
+test('expanded local declarations with GNU attributes retain callback initialization and source mapping', () => {
+  const source = '#define LOCAL static struct Ops slot __attribute__((section(".data")))={target}\n' +
+    'struct Ops{void(*cb)(void);};void target(void){}void run(void){LOCAL;slot.cb();}';
+  const index = project({ 'attribute.c': source });
+  assert.ok([...index.files.values()].every(file => file.issues.length === 0));
+  const target = calls(index).find(group => group.name === 'target' && group.callKind === 'inferred');
+  assert.ok(target);
+  assert.ok(target.sites.every(site => site.location.start === source.indexOf('slot.cb()')));
+});
+
 test('disabled callback analysis skips initializer expansion while toggles retain ordinary macro and argument relations', () => {
   const text = '#define CHOSEN target\n#define INVOKE() direct();submit(target)\n' +
     'typedef void(*CB)(void);void target(void){}void direct(void){}void submit(CB cb){}' +

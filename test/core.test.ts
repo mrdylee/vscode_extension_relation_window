@@ -7,6 +7,52 @@ import { RelationIndex } from '../src/relations';
 let analyzer: Awaited<ReturnType<typeof createAnalyzer>>;
 before(async () => { analyzer = await createAnalyzer(path.resolve('node_modules/web-tree-sitter/web-tree-sitter.wasm'), path.resolve('node_modules/tree-sitter-c/tree-sitter-c.wasm')); });
 const parse = (text: string, uri = 'file:///demo/a.c', skip = true) => analyzer.analyze(uri, text, skip);
+
+test('trailing GNU variable attributes preserve declarations and source positions', () => {
+  const source = 'struct Data{unsigned value;};\nstatic struct Data write_buf\n __attribute__((section(".os_data_nc")));\nvoid run(void){write_buf.value=1;}';
+  const file = parse(source);
+  assert.deepEqual(file.issues, []);
+  const variable = file.symbols.find(symbol => symbol.name === 'write_buf')!;
+  assert.equal(variable.location.start, source.indexOf('write_buf'));
+  assert.equal(variable.storage, 'static');
+  assert.ok(file.programs?.some(program => program.id === file.symbols.find(symbol => symbol.name === 'run')?.id));
+  assert.equal(file.text, source);
+});
+
+test('GNU attribute recovery retains initialized callback objects and following functions', () => {
+  const source = 'void target(void){}struct Data{void(*cb)(void);};static struct Data object __attribute__((section(".data"),aligned(8)))={target};void run(void){object.cb();}';
+  const files = analyzer.derive([parse(source)]), value = new RelationIndex();files.forEach(file => value.update(file));
+  assert.ok(files.every(file => file.issues.length === 0));
+  const run = value.symbols().find(symbol => symbol.name === 'run')!;
+  assert.ok(value.relations(run.id, 'callees').some(group => group.name === 'target' && group.callKind === 'inferred'));
+});
+
+for (const source of [
+  'static int object __attribute__((section(".data"));void run(void){}',
+  'static int object __attribute__((unused));void run(void){int broken = ;}'
+]) test('GNU attribute recovery does not hide malformed attributes or unrelated syntax errors: ' + source, () => {
+  assert.ok(parse(source).issues.some(issue => /syntax|missing/.test(issue)));
+});
+
+test('GNU attribute text in macros, comments and strings retains its original content', () => {
+  const source = '#define PLACE __attribute__((section(".data")))\n/* __attribute__((unused)) */\nstatic int object __attribute__((unused));const char*text="__attribute__((unused))";void run(void){}';
+  const file = parse(source);
+  const definition = file.preprocessor?.find(event => event.kind === 'define');
+  assert.equal(definition?.kind === 'define' && definition.macro.body, '__attribute__((section(".data")))');
+  assert.equal(file.text, source);
+});
+
+test('GNU attribute recovery preserves conditional declarations and multiple declarators', () => {
+  const source = '#if BOARD\nstatic int first __attribute__((unused)),second __attribute__((aligned(8)));\n#endif\nvoid run(void){}';
+  const file = parse(source);
+  assert.deepEqual(file.issues, []);
+  for (const name of ['first', 'second']) {
+    const symbol = file.symbols.find(symbol => symbol.name === name)!;
+    assert.ok(symbol);
+    assert.deepEqual(symbol.conditions, ['#if BOARD']);
+    assert.equal(symbol.location.start, source.indexOf(name));
+  }
+});
 function index(files: Record<string, string>) {
   const value = new RelationIndex();
   for (const [file, text] of Object.entries(files)) value.update(parse(text, `file:///demo/${file}`));

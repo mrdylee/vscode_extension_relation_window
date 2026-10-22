@@ -654,6 +654,29 @@ test('standard integer fields, byte writes and memcpy do not make the Worker ind
   assert.ok(target?.sites.every(site=>!site.inference.incomplete));
 });
 
+test('offset packing, corrected callback addresses and GNU declarations survive the Worker boundary', async t => {
+  const {workspace,adapter}=fixture(t);
+  await workspace.ready;
+  const file=uri('offset-codec.c');
+  const writes=Array.from({length:400},(_,n)=>`regs[${n}]=${n};`).join('');
+  const source=`typedef void(*CB)(void);void first(void){}void second(void){}static CB table[3]={first,first,first};
+    struct Config{unsigned value;};static struct Config config __attribute__((section(".os_data_nc")));
+    static unsigned short buffer[2048];static void pack(unsigned short*regs){${writes}}
+    static void set(CB*p){p[1]=second;}
+    void run(unsigned offset){pack(&buffer[offset]);pack(&buffer[0]);set(&table[1]);table[2]();}`;
+  adapter.fs.readFile=async()=>Buffer.from(source);
+  await workspace.enqueue(file);await workspace.derive();
+  const analysis=workspace.index.files.get(file.toString());
+  assert.deepEqual(analysis.issues,[]);
+  assert.equal(analysis.callbackDiagnostics,undefined);
+  assert.equal(workspace.status,'Index ready');
+  assert.equal(analysis.text,source);
+  const run=workspace.index.symbols().find(symbol=>symbol.name==='run'&&symbol.kind==='function');
+  const inferred=workspace.index.relations(run.id,'callees').filter(group=>group.callKind==='inferred');
+  assert.deepEqual(Array.from(inferred,group=>group.name),['second']);
+  assert.ok(inferred.every(group=>group.sites.every(site=>!site.inference.incomplete)));
+});
+
 test('a superseded rebuild waiting on save cannot erase a newer reconciliation', async t => {
   const firstFile=uri('first.c'), nextFile=uri('next.c');
   const {workspace,adapter,configuration}=fixture(t,[firstFile]);

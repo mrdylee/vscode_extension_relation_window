@@ -36,8 +36,32 @@ export async function createAnalyzer(runtime: string, grammar: string) {
   await Parser.init({ locateFile: () => runtime });
   const parser = new Parser();
   parser.setLanguage(await Language.load(grammar));
-  const analyzer = { analyze(uri: string, text: string, skipInactive = true): FileAnalysis {
+  function parseSource(text: string) {
     const tree = parser.parse(text);
+    if (!tree?.rootNode.hasError || !text.includes('__attribute')) return tree;
+    const attributes: { start: number; end: number }[] = [], pending = [tree.rootNode];
+    while (pending.length) {
+      const node = pending.pop()!;
+      // Recover placement unsupported by this grammar, using only attribute
+      // groups it parsed without errors. Malformed groups remain diagnostics.
+      if (node.type === 'attribute_specifier' && !node.hasError && /^__attribute__?\s*\(/.test(node.text))
+        attributes.push({ start: node.startIndex, end: node.endIndex });
+      else if (!['preproc_def', 'preproc_function_def', 'preproc_include', 'preproc_call'].includes(node.type)) pending.push(...node.namedChildren);
+    }
+    if (!attributes.length) return tree;
+    attributes.sort((a, b) => a.start - b.start);
+    let normalized = '', cursor = 0;
+    for (const range of attributes) {
+      normalized += text.slice(cursor, range.start) + text.slice(range.start, range.end).replace(/[^\r\n]/g, ' ');
+      cursor = range.end;
+    }
+    normalized += text.slice(cursor);
+    const recovered = parser.parse(normalized);
+    if (!recovered) return tree;
+    tree.delete(); return recovered;
+  }
+  const analyzer = { analyze(uri: string, text: string, skipInactive = true): FileAnalysis {
+    const tree = parseSource(text);
     if (!tree) throw new Error('C parser returned no tree');
     const file: FileAnalysis = { uri, text, symbols: [], references: [], includes: [], issues: [] };
     const nodes: Node[] = [];
@@ -259,7 +283,7 @@ export async function createAnalyzer(runtime: string, grammar: string) {
     tree.delete();
     return file;
   }, calls(uri: string, text: string, original?: (start: number, end: number) => Location, namespace = '', context?: (location: Location) => string[]) {
-    const tree = parser.parse(text);
+    const tree = parseSource(text);
     if (!tree) throw new Error('C parser returned no expanded tree');
     const references: ReferenceRecord[] = [];
     const generatedLocation = (node: Node): Location => ({ uri, start: node.startIndex, end: node.endIndex,
@@ -288,7 +312,7 @@ export async function createAnalyzer(runtime: string, grammar: string) {
     const facts = flowFacts(tree.rootNode, uri, locate, undefined, true, namespace, node => context?.(locate(node)) ?? []);
     tree.delete(); return { references, issues, ...facts };
   }, initializer(uri: string, text: string, original: (start: number, end: number) => Location) {
-    const prefix = 'int __macro_value = ', tree = parser.parse(prefix + text + ';');
+    const prefix = 'int __macro_value = ', tree = parseSource(prefix + text + ';');
     if (!tree) throw new Error('C parser returned no initializer tree');
     const facts = flowFacts(tree.rootNode, uri, node => original(Math.max(0, node.startIndex - prefix.length), Math.max(0, node.endIndex - prefix.length)));
     const value: FlowExpression = facts.initializers[0]?.value ?? { kind: 'unknown', location: original(0, text.length) };

@@ -20,6 +20,43 @@ function inferred(index: RelationIndex, name: string) {
   return index.relations(symbol(index, name).id, 'callees').filter(group => group.callKind === 'inferred');
 }
 
+for (const count of [248, 257, 400]) for (const offset of ['variable', 'unexpanded macro']) test(`${count} scalar writes through ${offset} offsets do not exhaust callback effects`, () => {
+  const writes = Array.from({ length: count }, (_, n) => `regs[${n}]=${n};`).join('');
+  const source = `#define BASE 0\ntypedef void(*CB)(void);void target(void){}static unsigned short buffer[2048];
+    static void pack(unsigned short*regs){${writes}}
+    void run(unsigned offset){pack(&buffer[${offset === 'variable' ? 'offset' : 'BASE'}]);pack(&buffer[0]);CB cb=target;cb();}`;
+  const files = analyzer.derive([{ ...analyzer.analyze('file:///demo/offset.c', source), expandMacros: false }]);
+  assert.equal(files.some(file => file.issues.some(issue => /Callback (mutation|region) limit/.test(issue))), false);
+  const index = new RelationIndex();files.forEach(file => index.update(file));
+  assert.ok(inferred(index, 'run').find(group => group.name === 'target')?.sites.every(site => !site.inference?.incomplete));
+});
+
+test('address offset dependencies do not hide actual scalar callback selectors', () => {
+  const index = project(`typedef void(*CB)(void);void first(void){}void second(void){}static CB table[2]={first,second};
+    static unsigned selected[4];static void select(unsigned*p){p[1]=1;}
+    void run(void){selected[2]=0;select(&selected[1]);table[selected[2]]();}`);
+  assert.ok(inferred(index, 'run').some(group => group.name === 'second'));
+});
+
+for (const variant of ['pointer guard', 'member address', 'member decay']) test(`address-only dependencies do not retain numeric buffer effects (${variant})`, () => {
+  const writes = Array.from({ length: 400 }, (_, n) => `regs[${n}]=0;`).join('');
+  const source = `typedef void(*CB)(void);void first(void){}void second(void){}static CB table[2]={first,second};
+    struct Config{unsigned short buffer[1024];unsigned selected;CB cb;};static struct Config config={.selected=1,.cb=first};
+    static void pack(unsigned short*regs){${variant === 'pointer guard' ? 'if(regs){' : ''}${writes}${variant === 'pointer guard' ? '}' : ''}}
+    void run(unsigned offset){pack(${variant === 'member decay' ? 'config.buffer' : '&config.buffer[offset]'});table[config.selected]();config.cb();}`;
+  const index = project(source);
+  assert.equal([...index.files.values()].some(file => file.issues.some(issue => /Callback (mutation|region) limit/.test(issue))), false);
+  assert.ok(inferred(index, 'run').some(group => group.name === 'first'));
+  assert.ok(inferred(index, 'run').some(group => group.name === 'second'));
+});
+
+test('scalar selector pointees stored in aggregate initializers retain helper effects', () => {
+  const index = project(`typedef void(*CB)(void);void first(void){}void second(void){}static CB table[2]={first,second};
+    static unsigned selected;struct Holder{unsigned*p;};static struct Holder holder={&selected};
+    static void configure(void){selected=1;}void run(void){selected=0;configure();table[*holder.p]();}`);
+  assert.deepEqual(inferred(index, 'run').map(group => group.name), ['second']);
+});
+
 for (const count of [270, 2700]) test(`${count} unread scalar fields do not exhaust one callback's effect summary`, () => {
   const fields = Array.from({length: count}, (_, n) => `int status${n};`).join('');
   const writes = Array.from({length: count}, (_, n) => `object.status${n}=0;`).join('');

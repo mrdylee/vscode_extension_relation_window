@@ -639,11 +639,11 @@ export async function run() {
   await new Promise(resolve => setTimeout(resolve, 500)); await api.workspace.whenIdle();
   const sparseUri = vscode.Uri.joinPath(root, 'callback-effects.c');
   const sparseSource = 'typedef unsigned int uint32_t;typedef void(*SparseCB)(void);void sparse_target(void){}' +
-    'struct Sparse{' + Array.from({length:270},(_,n)=>`uint32_t status${n};`).join('') + 'SparseCB cb;};static struct Sparse sparse,sparse_copy;' +
-    'static unsigned char sparse_bytes[270];void *memcpy(void*,const void*,unsigned long);' +
-    'static void sparse_configure(void){' + Array.from({length:270},(_,n)=>`sparse.status${n}=0;sparse_bytes[${n}]=0;`).join('') +
+    'struct Sparse{' + Array.from({length:270},(_,n)=>`uint32_t status${n};`).join('') + 'SparseCB cb;};static struct Sparse sparse __attribute__((section(".data"))),sparse_copy;' +
+    'static unsigned char sparse_bytes[1024];void *memcpy(void*,const void*,unsigned long);' +
+    'static void sparse_configure(unsigned char*regs){' + Array.from({length:270},(_,n)=>`sparse.status${n}=0;regs[${n}]=0;`).join('') +
     'sparse.cb=sparse_target;memcpy(&sparse_copy,&sparse,sizeof(sparse));}' +
-    'void sparse_run(void){sparse_configure();sparse.cb();}' +
+    'void sparse_run(unsigned offset){sparse_configure(&sparse_bytes[offset]);sparse.cb();}' +
     'void sparse_opaque(void*);void sparse_array(void){struct Sparse items[2];sparse_opaque(items);items[0].cb=sparse_target;items[0].cb();}';
   await vscode.workspace.fs.writeFile(sparseUri, Buffer.from(sparseSource));
   await new Promise(resolve=>setTimeout(resolve,500)); await api.workspace.whenIdle();
@@ -651,7 +651,7 @@ export async function run() {
   const sparseEditor = await vscode.window.showTextDocument(sparseDocument);
   await api.view.handleMessage({type:'mode',value:'both'});
   for (const name of ['sparse_run', 'sparse_array']) {
-    const position = sparseDocument.positionAt(sparseSource.indexOf(name + '(void)'));
+    const position = sparseDocument.positionAt(sparseSource.indexOf(name + '('));
     sparseEditor.selection = new vscode.Selection(position,position); api.view.track(sparseEditor,true);
     const target = api.view.state.graph.root.children.find((node:any)=>node.name==='sparse_target');
     assert.equal(target.callKind,'inferred');

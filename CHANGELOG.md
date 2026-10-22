@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.69 — 2026-10-22
+
+- Separate address-selection dependencies from pointed-to data so dynamic or
+  unexpanded-macro offsets do not turn ordinary numeric packing into callback
+  mutation/region limits. Relevant callback selectors remain tracked.
+- Compose element addresses consistently through direct writes, return values,
+  wrapper arguments and mutation regions. Preserve real multidimensional arrays
+  and zero indexing of addressed scalar objects. Merge overlapping wildcard
+  aliases conservatively and retain possible targets when reading them.
+- Recover valid GNU attribute groups in declaration positions unsupported by the
+  C grammar while preserving source offsets and conditional/macro information.
+  Malformed attributes and unrelated syntax errors remain visible.
+- Advance analysis compatibility to version 3 for corrected parsed and inferred
+  results. Existing version-2 indexes require one Rebuild after upgrading.
+
 ## 0.1.68 — 2026-10-22
 
 - Collect standard integer typedef declarators, recognize unindexed standard

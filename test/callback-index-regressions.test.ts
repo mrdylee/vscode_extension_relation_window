@@ -19,6 +19,42 @@ function calls(index: RelationIndex) {
 }
 const prelude = 'typedef void(*CB)(void);void foo(void){}void bar(void){}';
 
+for (const variant of ['callee effect', 'returned address', 'wrapper forwarding', 'local alias']) test(`element addresses compose offsets through ${variant}`, () => {
+  const helper = variant === 'returned address' ? 'static CB*next(CB*p){return &p[1];}' :
+    'static void set(CB*p){p[1]=bar;}' + (variant === 'wrapper forwarding' ? 'static void wrapper(CB*p){set(p);}' : '');
+  const invocation = variant === 'returned address' ? '*next(&table[1])=bar;' : variant === 'wrapper forwarding' ? 'wrapper(&table[1]);' :
+    variant === 'local alias' ? 'CB*p=&table[1];p[1]=bar;' : 'set(&table[1]);';
+  const index = project(prelude + 'static CB table[3]={foo,foo,foo};' + helper + `void run(void){${invocation}table[2]();}`);
+  assert.ok(calls(index).some(group => group.callKind === 'inferred' && group.name === 'bar'));
+});
+
+for (const variant of ['decay', 'row address', 'whole array address']) test(`real multidimensional arrays keep their dimensions (${variant})`, () => {
+  const helper = variant === 'whole array address' ? 'static void set(CB(*p)[2][2]){p[0][1][0]=bar;}' : 'static void set(CB(*p)[2]){p[1][0]=bar;}';
+  const invocation = variant === 'whole array address' ? 'set(&table);' : variant === 'row address' ? 'set(&table[0]);' : 'set(table);';
+  const index = project(prelude + 'static CB table[2][2]={{foo,foo},{foo,foo}};' + helper + `void run(void){${invocation}table[1][0]();}`);
+  assert.ok(calls(index).some(group => group.callKind === 'inferred' && group.name === 'bar'));
+});
+
+test('zero indexing a pointer to a scalar callback uses the same storage', () => {
+  const index = project(prelude + 'static void set(CB*p){p[0]=bar;}void run(void){CB cb=foo;set(&cb);cb();}');
+  assert.ok(calls(index).some(group => group.callKind === 'inferred' && group.name === 'bar'));
+});
+
+test('dynamic element addresses retain possible callback writes at known elements', () => {
+  const index = project(prelude + 'static CB table[3]={foo,foo,foo};static void set(CB*p){p[1]=bar;}void run(unsigned i){set(&table[i]);table[2]();}');
+  assert.ok(calls(index).some(group => group.callKind === 'inferred' && group.name === 'bar'));
+  assert.ok(calls(index).some(group => group.callKind === 'inferred' && group.name === 'foo'), 'an unknown offset must not become a definite overwrite');
+});
+
+test('opaque helper regions compose element offsets without invalidating neighboring objects', () => {
+  const index = project(prelude + 'struct Ops{CB cb;};static struct Ops slots[3]={{foo},{foo},{foo}};void opaque(void*);' +
+    'static void clear(struct Ops*p){opaque(&p[1]);}void run(void){clear(&slots[1]);slots[0].cb();slots[2].cb();}');
+  const groups = calls(index);
+  assert.ok(groups.some(group => group.callKind === 'inferred' && group.sites.some(site => site.inference?.expression === 'slots[0].cb' && !site.inference.incomplete)));
+  assert.ok(groups.some(group => group.callKind === 'indirect' && group.sites.some(site => site.inference?.expression === 'slots[2].cb')));
+  assert.equal(groups.some(group => group.callKind === 'inferred' && group.sites.some(site => site.kind === 'call' && site.inference?.expression === 'slots[2].cb' && !site.inference.incomplete)), false);
+});
+
 for (const order of ['reader-first', 'writer-first']) test(`later wildcard assignments invalidate cached array reads (${order})`, () => {
   const reader = 'void run(void){table[0]();}', writer = 'void set(int i){table[i]=bar;}';
   const index = project(prelude + 'CB table[2]={foo,foo};' +

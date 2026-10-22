@@ -472,6 +472,14 @@ the relevant getter, registration and table definitions when collecting a reprod
 - Object/function macros, nested argument expansion, stringizing, token pasting, variadics and literal indexed includes are supported. The popup shows the expansion chain and tinted effective code. Clicking a call still previews its original invocation in Context.
 - Local pointer initialization/assignment, pointer aliases, branches/loops, callback argument forwarding/registration/returns, static state, struct tables and arrays supply possible targets. Constant array indices stay separate; unknown indices collect possible entries.
 - Known object instances stay separate. Unknown pointer fields may merge by declaration and remain uncertain.
+- Element addresses retain their offsets through helper calls, returned pointers
+  and wrappers: `p[1]` after passing `&table[1]` refers to `table[2]`. Real nested
+  arrays retain their dimensions. Unknown offsets merge aliases conservatively;
+  unrelated numeric buffer writes do not become callback effects merely because
+  the address uses an offset. Relevant callback selectors remain tracked.
+- Valid GNU attribute groups in otherwise unsupported declaration positions are
+  recovered while preserving original source locations. Malformed attributes and
+  unrelated syntax errors still produce notices.
 - Standard integer typedefs and array element types keep unrelated numeric/byte
   writes out of callback effect budgets. Callback selectors remain tracked.
 - External `memcpy`, `memmove` and `memset` change destination storage without
