@@ -472,6 +472,15 @@ the relevant getter, registration and table definitions when collecting a reprod
 - Object/function macros, nested argument expansion, stringizing, token pasting, variadics and literal indexed includes are supported. The popup shows the expansion chain and tinted effective code. Clicking a call still previews its original invocation in Context.
 - Local pointer initialization/assignment, pointer aliases, branches/loops, callback argument forwarding/registration/returns, static state, struct tables and arrays supply possible targets. Constant array indices stay separate; unknown indices collect possible entries.
 - Known object instances stay separate. Unknown pointer fields may merge by declaration and remain uncertain.
+- Standard integer typedefs and array element types keep unrelated numeric/byte
+  writes out of callback effect budgets. Callback selectors remain tracked.
+- External `memcpy`, `memmove` and `memset` change destination storage without
+  changing source objects or following pointer fields into their pointees. A
+  zero-length operation preserves storage and the return value aliases the
+  destination. Unknown byte counts may cover the containing destination array;
+  copied or zero-filled callback bytes remain uncertain. Indexed user definitions
+  use their own bodies. `sizeof`/alignment operands remain unevaluated and sizes
+  without ABI information remain unknown, rather than being treated as zero.
 - **Inferred call** is always a static candidate, not proof of runtime execution. Its **Evidence** buttons preview function addresses, assignments and argument-passing locations. Enter/double-click opens an evidence location in the main editor. Selecting the node previews the actual indirect call and can expand the target's own calls.
 - Unknown values, opaque mutations and analysis limits retain an **Indirect call** leaf and **Other targets may exist** details. Arbitrary addresses, byte-level memory operations, every cast/pointer arithmetic case and runtime dynamic linking are not fully resolved.
 

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.68 — 2026-10-22
+
+- Collect standard integer typedef declarators, recognize unindexed standard
+  scalar names and preserve normalized element/dereference types and selector
+  dependencies. Unrelated integer fields and byte arrays no longer consume
+  callback mutation/region budgets; relevant selectors remain tracked.
+- Model external memcpy, memmove and memset as destination-only byte writes,
+  including through helper summaries. Preserve source and pointee callbacks,
+  zero-length operations and destination return aliases. Keep unknown destination
+  callback bytes uncertain and honor indexed user definitions.
+- Keep sizeof/alignof results unknown without evaluating their operands instead
+  of inventing a zero-byte count. Track function cache dependencies by affected
+  object/array shape and matching invalidation regions, not total global growth.
+- Advance analysis compatibility to version 2 so old inferred/parsed results are
+  rebuilt instead of restored under the corrected semantics.
+
 ## 0.1.67 — 2026-10-22
 
 - Honor Stop and disabling Copilot while Include setup or model selection is

@@ -416,9 +416,9 @@ test('global initializer slots do not consume a function mutation summary', () =
 });
 
 test('callback mutation diagnostics identify the actual file and function instead of the first caller file', () => {
-  const writes = Array.from({length:270},(_,n)=>`data[${n}]=${n};`).join('\n');
+  const writes = Array.from({length:270},(_,n)=>`data[${n}]=foo;`).join('\n');
   const index = project({'first.c':'void unrelated(void){external();}',
-    'actual.c':prelude+'int data[300];\nvoid large_update(void){\n'+writes+'\n}\nvoid run(void){CB cb=foo;cb();}'});
+    'actual.c':prelude+'CB data[300];\nvoid large_update(void){\n'+writes+'\n}\nvoid run(void){CB cb=foo;cb();}'});
   const file = index.files.get('file:///demo/actual.c')!;
   assert.equal(index.files.get('file:///demo/first.c')!.issues.some(i=>i.includes('mutation limit')), false);
   const detail = file.callbackDiagnostics?.find(d=>d.kind==='mutation');
@@ -447,9 +447,9 @@ test('project timeout diagnostics are distinct from a function exceeding its own
 });
 
 test('callback diagnostic record count is bounded across many functions', () => {
-  const writes = Array.from({length:260},(_,n)=>`data[${n}]=${n};`).join('');
+  const writes = Array.from({length:260},(_,n)=>`data[${n}]=foo;`).join('');
   const functions = Array.from({length:70},(_,n)=>`void write_${n}(void){${writes}}`).join('\n');
-  const index=project({'many.c':prelude+'int data[300];'+functions+'void run(void){CB cb=foo;cb();}'});
+  const index=project({'many.c':prelude+'CB data[300];'+functions+'void run(void){CB cb=foo;cb();}'});
   assert.ok([...index.files.values()].flatMap(f=>f.callbackDiagnostics ?? []).length<=64);
   assert.ok([...index.files.values()].some(f=>f.issues.some(i=>i.includes('mutation limit'))));
 });
@@ -465,8 +465,8 @@ test('callback memory guard before inference has a project diagnostic without a 
 });
 
 test('mutation diagnostics in macro-containing functions retain original source locations', () => {
-  const writes = Array.from({length:270},(_,n)=>`data[${n}]=VALUE(${n});`).join('\n');
-  const index=project({'macro.c':'#define VALUE(x) (x)\n'+prelude+'int data[300];\nvoid update(void){\n'+writes+
+  const writes = Array.from({length:270},(_,n)=>`data[${n}]=VALUE(foo);`).join('\n');
+  const index=project({'macro.c':'#define VALUE(x) (x)\n'+prelude+'CB data[300];\nvoid update(void){\n'+writes+
     '\n}\nvoid run(void){CB cb=foo;cb();}'});
   const file=index.files.get('file:///demo/macro.c')!, detail=file.callbackDiagnostics?.find(d=>d.kind==='mutation');
   assert.ok(detail);

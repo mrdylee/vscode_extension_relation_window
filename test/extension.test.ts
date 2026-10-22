@@ -638,9 +638,11 @@ export async function run() {
   await vscode.workspace.getConfiguration('dynsight').update('analyzeCallbacks', true, vscode.ConfigurationTarget.Workspace);
   await new Promise(resolve => setTimeout(resolve, 500)); await api.workspace.whenIdle();
   const sparseUri = vscode.Uri.joinPath(root, 'callback-effects.c');
-  const sparseSource = 'typedef void(*SparseCB)(void);void sparse_target(void){}' +
-    'struct Sparse{' + Array.from({length:270},(_,n)=>`unsigned status${n};`).join('') + 'SparseCB cb;};static struct Sparse sparse;' +
-    'static void sparse_configure(void){' + Array.from({length:270},(_,n)=>`sparse.status${n}=0;`).join('') + 'sparse.cb=sparse_target;}' +
+  const sparseSource = 'typedef unsigned int uint32_t;typedef void(*SparseCB)(void);void sparse_target(void){}' +
+    'struct Sparse{' + Array.from({length:270},(_,n)=>`uint32_t status${n};`).join('') + 'SparseCB cb;};static struct Sparse sparse,sparse_copy;' +
+    'static unsigned char sparse_bytes[270];void *memcpy(void*,const void*,unsigned long);' +
+    'static void sparse_configure(void){' + Array.from({length:270},(_,n)=>`sparse.status${n}=0;sparse_bytes[${n}]=0;`).join('') +
+    'sparse.cb=sparse_target;memcpy(&sparse_copy,&sparse,sizeof(sparse));}' +
     'void sparse_run(void){sparse_configure();sparse.cb();}' +
     'void sparse_opaque(void*);void sparse_array(void){struct Sparse items[2];sparse_opaque(items);items[0].cb=sparse_target;items[0].cb();}';
   await vscode.workspace.fs.writeFile(sparseUri, Buffer.from(sparseSource));
@@ -665,9 +667,9 @@ export async function run() {
   await vscode.workspace.fs.delete(sparseUri);
   await new Promise(resolve=>setTimeout(resolve,500)); await api.workspace.whenIdle();
   const limitUri = vscode.Uri.joinPath(root, 'callback-limits.c');
-  await vscode.workspace.fs.writeFile(limitUri, Buffer.from('int data[300];void limit_update(void){\n' +
-    Array.from({length:270},(_,n)=>`data[${n}]=${n};`).join('\n') +
-    '\n}void limit_target(void){}void limit_run(void){void(*cb)(void)=limit_target;cb();}'));
+  await vscode.workspace.fs.writeFile(limitUri, Buffer.from('typedef void(*LimitCB)(void);void limit_target(void){}LimitCB data[300];void limit_update(void){\n' +
+    Array.from({length:270},(_,n)=>`data[${n}]=limit_target;`).join('\n') +
+    '\n}void limit_run(void){LimitCB cb=limit_target;cb();}'));
   await new Promise(resolve=>setTimeout(resolve,500)); await api.workspace.whenIdle();
   const limit = api.view.state.callbackDiagnostics.find((detail:any)=>detail.symbol==='limit_update');
   assert.equal(limit.kind,'mutation');

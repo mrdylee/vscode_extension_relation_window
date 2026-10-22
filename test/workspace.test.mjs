@@ -620,8 +620,8 @@ test('Worker transfers located callback diagnostics and clears them when callbac
   const {workspace,adapter,configuration}=fixture(t);
   await workspace.ready;
   const file=uri('limits.c');
-  adapter.fs.readFile=async()=>Buffer.from('void target(void){}int data[300];void update(void){'+
-    Array.from({length:270},(_,n)=>`data[${n}]=${n};`).join('')+'}void run(void){void(*cb)(void)=target;cb();}');
+  adapter.fs.readFile=async()=>Buffer.from('typedef void(*CB)(void);void target(void){}CB data[300];void update(void){'+
+    Array.from({length:270},(_,n)=>`data[${n}]=target;`).join('')+'}void run(void){CB cb=target;cb();}');
   await workspace.enqueue(file);await workspace.derive();
   const analysis=workspace.index.files.get(file.toString());
   assert.equal(analysis.callbackDiagnostics.find(d=>d.kind==='mutation').symbol,'update');
@@ -632,6 +632,26 @@ test('Worker transfers located callback diagnostics and clears them when callbac
   await bounded(workspace.whenIdle());
   assert.equal(workspace.index.files.get(file.toString()).callbackDiagnostics,undefined);
   assert.equal(workspace.status,'Index ready');
+});
+
+test('standard integer fields, byte writes and memcpy do not make the Worker index partial', async t => {
+  const {workspace,adapter}=fixture(t);
+  await workspace.ready;
+  const file=uri('codec.c');
+  const fields=Array.from({length:270},(_,n)=>`uint32_t status${n};`).join('');
+  const writes=Array.from({length:270},(_,n)=>`data.status${n}=0;dst[${n}]=0;`).join('');
+  adapter.fs.readFile=async()=>Buffer.from(`typedef unsigned int uint32_t;typedef void(*CB)(void);void target(void){}
+    struct Data{${fields}};static struct Data data;struct Ops{CB cb;};static struct Ops source={target},destination;
+    void *memcpy(void*,const void*,unsigned long);static unsigned char bytes[270];
+    void pack(unsigned char*dst){${writes}memcpy(&destination,&source,sizeof(source));}
+    void run(void){pack(bytes);source.cb();}`);
+  await workspace.enqueue(file);await workspace.derive();
+  const analysis=workspace.index.files.get(file.toString());
+  assert.equal(analysis.callbackDiagnostics,undefined);
+  assert.equal(workspace.status,'Index ready');
+  const run=workspace.index.symbols().find(symbol=>symbol.name==='run'&&symbol.kind==='function');
+  const target=workspace.index.relations(run.id,'callees').find(group=>group.name==='target'&&group.callKind==='inferred');
+  assert.ok(target?.sites.every(site=>!site.inference.incomplete));
 });
 
 test('a superseded rebuild waiting on save cannot erase a newer reconciliation', async t => {

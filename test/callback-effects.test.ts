@@ -249,3 +249,132 @@ test('mutation diagnostics identify the first omitted storage and the retained s
   assert.equal(cached.runs, 1, 'cache hits must not be counted as body evaluations');
   assert.ok(cached.cacheHits >= 1);
 });
+
+for (const type of ['uint8_t', 'uint16_t', 'uint32_t', 'uint64_t', 'int32_t', 'uintptr_t', 'size_t'])
+  test(`unindexed standard scalar ${type} fields do not exhaust callback effects`, () => {
+    const fields = Array.from({ length: 257 }, (_, n) => `${type} status${n};`).join('');
+    const writes = Array.from({ length: 257 }, (_, n) => `data.status${n}=0;`).join('');
+    const index = project(`typedef void(*CB)(void);void target(void){}struct Data{${fields}CB cb;};static struct Data data;
+      void configure(void){${writes}data.cb=target;}void run(void){configure();data.cb();}`);
+    assert.equal([...index.files.values()].some(file => file.issues.some(issue => /mutation limit|region limit/.test(issue))), false);
+    assert.deepEqual(inferred(index, 'run').map(group => group.name), ['target']);
+    assert.ok(inferred(index, 'run').every(group => group.sites.every(site => !site.inference?.incomplete)));
+  });
+
+test('primitive typedef declarators are collected and visible aliases keep their scalar type', () => {
+  const fields = Array.from({ length: 257 }, (_, n) => `Counter status${n};`).join('');
+  const writes = Array.from({ length: 257 }, (_, n) => `data.status${n}=0;`).join('');
+  const index = project(`typedef unsigned int uint32_t;typedef uint32_t Counter;
+    typedef void(*CB)(void);void target(void){}struct Data{${fields}CB cb;};static struct Data data;
+    void configure(void){${writes}data.cb=target;}void run(void){configure();data.cb();}`);
+  assert.ok(index.symbols().some(symbol => symbol.kind === 'type' && symbol.name === 'uint32_t'));
+  assert.equal([...index.files.values()].some(file => file.issues.some(issue => /mutation limit|region limit/.test(issue))), false);
+  assert.deepEqual(inferred(index, 'run').map(group => group.name), ['target']);
+  assert.ok(inferred(index, 'run').every(group => group.sites.every(site => !site.inference?.incomplete)));
+});
+
+test('visible callback aliases take priority over standard scalar fallback names', () => {
+  const index = project(`typedef void(*uint32_t)(void);void target(void){}struct Data{uint32_t cb;};static struct Data data;
+    void configure(void){data.cb=target;}void run(void){configure();data.cb();}`);
+  assert.deepEqual(inferred(index, 'run').map(group => group.name), ['target']);
+  assert.ok(inferred(index, 'run').every(group => group.sites.every(site => !site.inference?.incomplete)));
+});
+
+for (const type of ['unsigned char', 'uint8_t']) for (const form of ['parameter', 'array initializer'])
+  test(`${type} byte ${form} preserves its element type without callback mutation slots`, () => {
+    const writes = Array.from({ length: 270 }, (_, n) => `dst[${n}]=0;`).join('');
+    const zeros = Array.from({ length: 270 }, () => '0').join(',');
+    const index = project(`typedef void(*CB)(void);void target(void){}static CB cb=target;static ${type} bytes[270];
+      ${form === 'parameter' ? `void pack(${type}*dst){${writes}}` : `void pack(void){static ${type} dst[270]={${zeros}};}`}
+      void run(void){${form === 'parameter' ? 'pack(bytes);' : 'pack();'}cb();}`);
+    assert.equal([...index.files.values()].some(file => file.issues.some(issue => /mutation limit|region limit/.test(issue))), false);
+    assert.deepEqual(inferred(index, 'run').map(group => group.name), ['target']);
+    assert.ok(inferred(index, 'run').every(group => group.sites.every(site => !site.inference?.incomplete)));
+  });
+
+for (const form of ['array', 'dereference']) test(`uint32_t ${form} callback selectors retain helper writes`, () => {
+  const index = project(`typedef unsigned int uint32_t;typedef void(*CB)(void);void first(void){}void second(void){}
+    static CB table[2]={first,second};static uint32_t selected[1];
+    ${form === 'array' ? 'void configure(void){selected[0]=1;}' : 'void configure(uint32_t*out){*out=1;}'}
+    void run(void){selected[0]=0;${form === 'array' ? 'configure();' : 'configure(&selected[0]);'}table[selected[0]]();}`);
+  assert.deepEqual(inferred(index, 'run').map(group => group.name), ['second']);
+  assert.ok(inferred(index, 'run').every(group => group.sites.every(site => !site.inference?.incomplete)));
+});
+
+for (const operation of ['memcpy', 'memmove', 'memset']) for (const wrapper of [false, true])
+  test(`${operation} changes destination storage without changing source or pointees (wrapper=${wrapper})`, () => {
+    const argumentsText = operation === 'memset' ? 'p,0,sizeof(*p)' : 'p,&source,sizeof(*p)';
+    const index = project(`typedef void(*CB)(void);void first(void){}void second(void){}
+      struct Ops{CB cb;struct Ops*link;};static struct Ops source={first},pointee={second};
+      void *${operation}(void*,${operation === 'memset' ? 'int' : 'const void*'},unsigned long);
+      ${wrapper ? `void clear(struct Ops*p){${operation}(${argumentsText});}` : ''}
+      void run(void){struct Ops destination={second,&pointee};
+        ${wrapper ? 'clear(&destination);' : `${operation}(${argumentsText.replace('p,', '&destination,').replace('sizeof(*p)', 'sizeof(destination)')});`}
+        source.cb();pointee.cb();destination.cb();}`);
+    const groups = index.relations(symbol(index, 'run').id, 'callees');
+    for (const expression of ['source.cb', 'pointee.cb']) {
+      assert.ok(groups.some(group => group.callKind === 'inferred' && group.sites.some(site => site.inference?.expression === expression && !site.inference.incomplete)), expression);
+      assert.equal(groups.some(group => group.callKind === 'indirect' && group.sites.some(site => site.inference?.expression === expression)), false, expression);
+    }
+    assert.ok(groups.some(group => group.callKind === 'indirect' && group.sites.some(site => site.inference?.expression === 'destination.cb')));
+    assert.equal(groups.some(group => group.callKind === 'inferred' && group.sites.some(site => site.kind === 'call' && site.inference?.expression === 'destination.cb' && !site.inference.incomplete)), false);
+  });
+
+for (const operation of ['memcpy', 'memmove', 'memset']) test(`${operation} with zero length preserves callbacks and returns the destination alias`, () => {
+  const index = project(`typedef void(*CB)(void);void first(void){}void second(void){}
+    struct Ops{CB cb;};void *${operation}(void*,${operation === 'memset' ? 'int' : 'const void*'},unsigned long);
+    void run(void){struct Ops source={first},destination={second};
+      struct Ops*alias=${operation}(&destination,${operation === 'memset' ? '0' : '&source'},0);alias->cb();source.cb();}`);
+  assert.deepEqual(inferred(index, 'run').map(group => group.name).sort(), ['first', 'second']);
+  assert.ok(inferred(index, 'run').every(group => group.sites.every(site => !site.inference?.incomplete)));
+});
+
+for (const operation of ['memcpy', 'memmove', 'memset']) test(`270 ${operation} byte writes do not consume callback regions`, () => {
+  const writes = Array.from({ length: 270 }, (_, n) => `${operation}(&dst[${n}],${operation === 'memset' ? '0' : `&src[${n}]`},1);`).join('');
+  const index = project(`typedef void(*CB)(void);void target(void){}static CB cb=target;
+    void *${operation}(void*,${operation === 'memset' ? 'int' : 'const void*'},unsigned long);
+    void pack(unsigned char*src,unsigned char*dst){${writes}}
+    static unsigned char a[270],b[270];void run(void){pack(a,b);cb();}`);
+  assert.equal([...index.files.values()].some(file => file.issues.some(issue => /mutation limit|region limit/.test(issue))), false);
+  assert.deepEqual(inferred(index, 'run').map(group => group.name), ['target']);
+  assert.ok(inferred(index, 'run').every(group => group.sites.every(site => !site.inference?.incomplete)));
+});
+
+test('an indexed memcpy body takes priority over the standard memory model', () => {
+  const index = project(`typedef void(*CB)(void);void first(void){}void second(void){}
+    struct Ops{CB cb;};void *memcpy(void*dst,void*src,unsigned long count){struct Ops*p=src;p->cb=second;return dst;}
+    void run(void){struct Ops source={first},destination={first};memcpy(&destination,&source,1);source.cb();}`);
+  assert.deepEqual(inferred(index, 'run').map(group => group.name), ['second']);
+});
+
+test('memory writes to a callback selector remain uncertain', () => {
+  const index = project(`typedef void(*CB)(void);void first(void){}void second(void){}
+    static CB table[2]={first,second};static unsigned selected;void *memset(void*,int,unsigned long);
+    void clear(void){memset(&selected,0,sizeof(selected));}
+    void run(void){selected=0;clear();table[selected]();}`);
+  assert.deepEqual(inferred(index, 'run').map(group => group.name).sort(), ['first', 'second']);
+});
+
+test('memory writes through an array element cover later destination elements without following pointees', () => {
+  const index = project(`typedef void(*CB)(void);void first(void){}void second(void){}struct Ops{CB cb;struct Ops*link;};
+    static struct Ops pointee={second};void *memset(void*,int,unsigned long);
+    void clear(struct Ops*p){memset(p,0,100);}
+    void run(void){struct Ops slots[2]={{first,&pointee},{first,&pointee}};clear(&slots[0]);slots[1].cb();pointee.cb();}`);
+  const groups = index.relations(symbol(index, 'run').id, 'callees');
+  assert.ok(groups.some(group => group.callKind === 'indirect' && group.sites.some(site => site.inference?.expression === 'slots[1].cb')));
+  assert.ok(inferred(index, 'run').find(group => group.name === 'second')?.sites.every(site => !site.inference?.incomplete));
+});
+
+test('a byte range starting in a scalar field does not mark its entire callback array as ignored', () => {
+  const index = project(`typedef void(*CB)(void);void target(void){}struct Ops{unsigned status;CB cb;};
+    void *memset(void*,int,unsigned long);void run(void){struct Ops slots[2]={{0,target},{0,target}};
+      memset(&slots[0].status,0,100);slots[1].cb();}`);
+  assert.ok(index.relations(symbol(index, 'run').id, 'callees').some(group => group.callKind === 'indirect'));
+});
+
+for (const type of ['void', 'unsigned char']) test(`memory writes through a ${type} pointer helper still invalidate supplied callback storage`, () => {
+  const index = project(`typedef void(*CB)(void);void target(void){}struct Ops{CB cb;};void *memset(void*,int,unsigned long);
+    void clear(${type}*p){memset(p,0,100);}void run(void){struct Ops object={target};clear((${type}*)&object);object.cb();}`);
+  assert.ok(index.relations(symbol(index, 'run').id, 'callees').some(group => group.callKind === 'indirect'));
+  assert.equal(inferred(index, 'run').some(group => group.sites.some(site => site.kind === 'call' && !site.inference?.incomplete)), false);
+});

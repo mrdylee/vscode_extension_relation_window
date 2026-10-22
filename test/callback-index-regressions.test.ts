@@ -55,3 +55,34 @@ test('nested array region matching includes wildcard ancestors without matching 
   assert.equal(calls(index).filter(group => group.callKind === 'indirect').length, 1);
   assert.ok(calls(index).filter(group => group.callKind === 'inferred').every(group => group.sites.every(site => site.inference?.incomplete === false)));
 });
+
+test('unrelated heap growth and invalidation do not re-evaluate cached callback readers', () => {
+  const fields = Array.from({ length: 257 }, (_, n) => `CB cb${n};`).join('');
+  const escapes = Array.from({ length: 257 }, (_, n) => `opaque(&unrelated.cb${n});`).join('');
+  const writes = Array.from({ length: 270 }, (_, n) => `bytes[${n}]=0;`).join('');
+  const index = project(prelude + `static CB selected=foo,table[1]={foo};static unsigned char bytes[270];
+    struct Wide{${fields}};static struct Wide unrelated;void opaque(void*);
+    void read_one(void){selected();}void read_array(int i){table[i]();}
+    void grow_unrelated(void){${writes}${escapes}}
+    void run(void){read_one();read_array(0);grow_unrelated();}`);
+  const costs = [...index.files.values()].flatMap(file => file.callbackDiagnostics ?? []).flatMap(detail => detail.costs ?? []);
+  for (const name of ['read_one', 'read_array']) {
+    const cost = costs.find(cost => cost.symbol === name);
+    assert.ok(cost, name);
+    assert.equal(cost.runs, 1, name + ' should depend only on the storage it reads');
+    assert.ok(cost.cacheHits >= 1, name);
+  }
+});
+
+test('adding a matching global invalidation still refreshes a cached callback read', () => {
+  const index = project(prelude + `struct Ops{CB cb;};static struct Ops source={foo};void opaque(void*);
+    void run(void){source.cb();}void clear(void){opaque(&source);}void start(void){clear();run();}`);
+  assert.ok(calls(index).some(group => group.callKind === 'indirect'));
+  assert.equal(calls(index).some(group => group.callKind === 'inferred' && group.sites.some(site => !site.inference?.incomplete)), false);
+});
+
+test('adding another concrete array element refreshes a cached unknown-index read', () => {
+  const index = project(prelude + `static CB table[2]={foo};void run(int i){table[i]();}
+    void add(void){table[1]=bar;}void start(void){add();run(0);}`);
+  assert.deepEqual(calls(index).filter(group => group.callKind === 'inferred').map(group => group.name).sort(), ['bar', 'foo']);
+});

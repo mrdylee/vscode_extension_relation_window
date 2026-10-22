@@ -1,6 +1,6 @@
 import { CType, Location, SymbolRecord, TypedExpression } from './model';
 
-interface ResolvedType { id: string; layers: CType['layers']; conditions: string[]; scalar?: boolean }
+interface ResolvedType { id: string; name?: string; tag?: CType['tag']; layers: CType['layers']; conditions: string[]; scalar?: boolean }
 type TypeContext = Pick<SymbolRecord, 'location' | 'scope'>;
 interface Lookup {
   symbols(name: string): SymbolRecord[];
@@ -50,14 +50,16 @@ export class MemberResolver {
   private normalize(type: CType | undefined, declaration: TypeContext, unitUri: string, seen = new Set<string>(), depth = 0): ResolvedType[] {
     if (!type || depth >= 32) return [];
     const targets = type.id ? [this.lookup.symbol(type.id)].filter((s): s is SymbolRecord => !!s) : this.namedTypes(type, declaration, unitUri);
-    if (!targets.length) return [{ id: '', layers: type.layers, conditions: [], scalar: /^(?:(?:signed|unsigned|short|long)\s+)*(?:void|char|int|float|double|_Bool|bool|signed|unsigned|short|long)$/.test(type.name) }];
+    if (!targets.length) return [{ id: '', name: type.name, tag: type.tag, layers: type.layers, conditions: [],
+      scalar: type.tag === 'enum' || (!type.tag && (/^(?:(?:signed|unsigned|short|long)\s+)*(?:char|int|float|double|_Bool|bool|signed|unsigned|short|long)$/.test(type.name) ||
+        /^(?:u?int(?:(?:_least|_fast)?(?:8|16|32|64)|ptr|max)_t|size_t|ssize_t|ptrdiff_t|wchar_t|wint_t|char16_t|char32_t)$/.test(type.name))) }];
     const result: ResolvedType[] = [];
     for (const symbol of targets.slice(0, 64)) {
       if (seen.has(symbol.id)) continue;
       if (symbol.aggregate) {
         // A forward declaration has no fields, but still preserves pointer and
         // function-return layers needed to follow an explicitly initialized object.
-        result.push({ id: symbol.id, layers: type.layers, conditions: symbol.conditions });
+        result.push({ id: symbol.id, name: symbol.name, tag: symbol.aggregate, layers: type.layers, conditions: symbol.conditions, scalar: symbol.aggregate === 'enum' });
       } else {
         for (const base of this.normalize(symbol.type, symbol, unitUri, new Set(seen).add(symbol.id), depth + 1)) {
           result.push({ ...base, layers: [...type.layers, ...base.layers], conditions: [...symbol.conditions, ...base.conditions] });

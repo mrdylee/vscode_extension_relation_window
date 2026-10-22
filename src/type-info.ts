@@ -6,14 +6,14 @@ export function declarator(node: Node): { name?: Node; functionLike: boolean; po
   let current: Node | null = node;
   while (current) {
     chain.push(current);
-    if (['identifier', 'type_identifier', 'field_identifier'].includes(current.type)) break;
+    if (['identifier', 'type_identifier', 'field_identifier', 'primitive_type'].includes(current.type)) break;
     current = current.childForFieldName('declarator') ??
       (current.type === 'parenthesized_declarator' ? current.namedChildren[0] : null);
   }
   const name = chain.at(-1);
   const wrappers = chain.slice(0, -1).reverse().filter(n => n.type !== 'parenthesized_declarator');
   return {
-    name: name && ['identifier', 'type_identifier', 'field_identifier'].includes(name.type) ? name : undefined,
+    name: name && ['identifier', 'type_identifier', 'field_identifier', 'primitive_type'].includes(name.type) ? name : undefined,
     functionLike: wrappers[0]?.type === 'function_declarator',
     pointer: wrappers.some(n => n.type === 'pointer_declarator')
   };

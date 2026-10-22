@@ -15,7 +15,9 @@ export function flowFacts(root: Node, uri: string, locate: Locate, active?: Set<
     if (!node || !present(node) || depth >= 48) return unknown();
     const expr = (value: Node | null | undefined) => expression(value, locals, ranges, fn, depth + 1);
     const field = (name: string) => expr(node.childForFieldName(name));
-    if (['sizeof_expression','alignof_expression','attribute_specifier','attribute_declaration'].includes(node.type)) return { kind: 'number', value: '0', location };
+    // Unevaluated operands have no side effects, but their result is not zero.
+    // Without ABI/layout sizes retain an unknown value (not a zero-byte write).
+    if (['sizeof_expression','alignof_expression','attribute_specifier','attribute_declaration'].includes(node.type)) return unknown();
     if (node.type === 'identifier') {
       const candidates = locals.filter(local => { const range = ranges.get(local.id)!; return local.name === node.text && range.start <= node.startIndex && range.end > node.startIndex && (local.parameter !== undefined || range.declaration <= node.startIndex); });
       candidates.sort((a,b) => { const x=ranges.get(a.id)!,y=ranges.get(b.id)!; return (x.end-x.start)-(y.end-y.start) || y.declaration-x.declaration; });

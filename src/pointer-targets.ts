@@ -8,8 +8,9 @@ interface Value {
   readonly unknown: boolean; readonly nil: boolean; readonly evidence: Evidence[]; readonly reasons: string[];
 }
 interface Effect { value: Value; definite: boolean }
-interface OrderedChange { stamp: number; definite: boolean; exported?: boolean }
-interface Summary { params: Value[]; returns: Value; effects: Map<string, Effect>; regions: Map<string, boolean>; omittedRegions?: Set<string>; version: number; incomplete?: boolean }
+interface RegionEffect { definite: boolean; shallow: boolean }
+interface OrderedChange { stamp: number; definite: boolean; exported?: boolean; shallow?: boolean }
+interface Summary { params: Value[]; returns: Value; effects: Map<string, Effect>; regions: Map<string, RegionEffect>; omittedRegions?: Set<string>; version: number; incomplete?: boolean }
 interface State { memory: Map<string, Value>; effects: Map<string, Effect>; alive: boolean; incomplete?: boolean; regions?: Map<string, OrderedChange>; writes?: Map<string, OrderedChange>; omittedRegions?: Map<string, boolean> }
 interface Context { program: FlowProgram; locals: Map<string, FlowLocal>; exits: State[]; returned: Value }
 interface Observation { value: Value; expression: string; kind: 'variable' | 'unknown' }
@@ -219,17 +220,18 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     }
     return timedOut;
   }
-  interface Dependencies { heap: Map<string, Value | undefined>; functions: Map<string, number>; shape?: number; regions?: number; observations: Set<string>; arguments: Set<string> }
+  interface Dependencies { heap: Map<string, Value | undefined>; functions: Map<string, number>; shapes: Map<string, number>; regions: Map<string, number>; observations: Set<string>; arguments: Set<string> }
   const completed = new Map<string, { dependencies: Dependencies; params: Value[]; observations: Map<string, Observation>; arguments: Map<string, ArgumentObservation> }>();
   let dependencies: Dependencies | undefined;
   const depend = (fn: string) => { if (dependencies && !dependencies.functions.has(fn)) dependencies.functions.set(fn, summaries.get(fn)?.version ?? -1); };
   const heapValue = (key: string) => { const value = heap.get(key); if (dependencies && !dependencies.heap.has(key)) dependencies.heap.set(key, value); return value; };
-  const heapShape = () => { if (dependencies && dependencies.shape === undefined) dependencies.shape = heap.size; };
+  const heapShapes = new Map<string, number>();
+  const heapShape = (root: string) => { if (dependencies && !dependencies.shapes.has(root)) dependencies.shapes.set(root, heapShapes.get(root) ?? 0); };
   const heapRegions = new Set<string>(), regionPatterns = new Map<string, RegExp>();
   interface RegionNode { root?: string; children: Map<string, RegionNode> }
   const regionRoots = new WeakMap<object, RegionNode>();
-  let stamp = 0, regionRevision = 0;
-  const opaqueReason = 'Address passed to an opaque call may be modified';
+  let stamp = 0;
+  const opaqueReason = 'Call may modify this storage; callback bytes are not resolved';
   function storageRoot(slot: string) {
     for (let n = slot.indexOf('#') + 1; n < slot.length; n++) if (slot[n] === '.' || slot[n] === '[') return slot.slice(0, n);
     return slot;
@@ -296,8 +298,9 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     if (state.omittedRegions) for (const root of matchingRegions(state.omittedRegions, slot))
       if (containsRegion(root, slot)) uncertain = true;
     const local = state.memory.get(slot); if (local) return uncertain ? union(local, unknown(opaqueReason)) : local;
-    if (dependencies && dependencies.regions === undefined) dependencies.regions = regionRevision;
-    for (const root of matchingRegions(heapRegions, slot)) if (containsRegion(root, slot)) { uncertain = true; break; }
+    const matching = [...matchingRegions(heapRegions, slot)];
+    if (dependencies && !dependencies.regions.has(slot)) dependencies.regions.set(slot, matching.length);
+    if (matching.some(root => containsRegion(root, slot))) uncertain = true;
     const value = heapValue(slot);
     return uncertain ? union(value ?? defaultValue(slot), unknown(opaqueReason)) : value;
   }
@@ -310,17 +313,19 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     state.omittedRegions.set(root, exported || state.omittedRegions.get(root) === true);
     registerRegion(state.omittedRegions, root);
   }
-  function markRegion(root: string, state: State, definite: boolean, exported = true) {
+  function markRegion(root: string, state: State, definite: boolean, exported = true, shallow = false) {
     state.regions ??= new Map(); state.writes ??= new Map();
     if (!state.regions.has(root) && state.regions.size >= 256) {
       state.incomplete = true; omitRegion(root, state, exported);
       notice('Callback region limit: 256 reachable objects; targets may be incomplete', undefined, true,
         () => storageDetail('ordered-region', state.regions!.keys(), root, state.regions!.size)); return;
     }
-    state.regions.set(root, { stamp: ++stamp, definite, exported: exported || state.regions.get(root)?.exported === true });
+    const previous = state.regions.get(root);
+    state.regions.set(root, { stamp: ++stamp, definite, exported: exported || previous?.exported === true,
+      shallow: shallow && previous?.shallow !== false });
     registerRegion(state.regions, root);
   }
-  function invalidate(roots: Iterable<string>, state: State, ctx: Context, definite = true) {
+  function invalidate(roots: Iterable<string>, state: State, ctx: Context, definite = true, shallow = false) {
     const pending = [...roots].map(root => ({ root, exported: true })), seen = new Set<string>(), affected: typeof pending = [];
     // Find pointees before invalidating the slots containing their addresses.
     for (let n = 0; n < pending.length; n++) {
@@ -330,13 +335,15 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
       seen.add(identity);
       if (seen.size > 256) { state.incomplete = true; notice('Callback region limit: 256 reachable objects; targets may be incomplete', undefined, false,
         () => storageDetail('reachable-regions', affected.map(item => item.root), root, affected.length)); break; }
-      affected.push({ root, exported }); heapShape();
-      const resolved = objects({ ...blank(), objects: new Set([root]) });
+      affected.push({ root, exported });
+      const resolved = new Set([...objects({ ...blank(), objects: new Set([root]) })].map(path => shallow ? byteDestination(path) : path));
       const paths = new Set([root, ...resolved]);
       for (const path of paths) {
         // Actual supplies help analyze this function, but must not escape into
         // its symbolic summary and invalidate other callers' objects.
         if (path !== root) pending.push({ root: path, exported: false });
+        if (shallow) continue;
+        heapShape(path);
         for (const key of new Set([...descendants(state.memory, path), ...descendants(heap, path)])) {
           if (expired()) { state.incomplete = true; return; }
           for (const object of read(key, state).objects) if (object !== key && !containsRegion(path, object))
@@ -345,9 +352,9 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
       }
     }
     for (const { root, exported } of affected) {
-      markRegion(root, state, definite, exported);
+      markRegion(root, state, definite, exported, shallow);
       if (exported && !root.startsWith('$arg:') && !localSlot(root, ctx) && !heapRegions.has(root)) {
-        heapRegions.add(root); registerRegion(heapRegions, root); regionRevision++; changed = true;
+        heapRegions.add(root); registerRegion(heapRegions, root); changed = true;
       }
     }
   }
@@ -366,6 +373,14 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     const old = target.get(key); if (old && covers(old, value)) return;
     const next = old ? union(old, value) : value;
     if (!old || signature(old) !== signature(next)) changed = true;
+    if (!old && target === heap) {
+      // Adding a slot changes only its object/array ancestors' shape. Reads of
+      // other objects must not be invalidated by total heap growth.
+      let root = '';
+      for (const part of regionPath(key)) {
+        root += part; heapShapes.set(root, (heapShapes.get(root) ?? 0) + 1);
+      }
+    }
     memorySet(target, key, next);
   }
   let parameterRevision = 0;
@@ -470,7 +485,8 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     if (a.regions?.size || b.regions?.size) {
       for (const key of new Set([...(a.regions?.keys() ?? []), ...(b.regions?.keys() ?? [])]))
         markRegion(key, result, !!a.regions?.get(key)?.definite && !!b.regions?.get(key)?.definite,
-          a.regions?.get(key)?.exported === true || b.regions?.get(key)?.exported === true);
+          a.regions?.get(key)?.exported === true || b.regions?.get(key)?.exported === true,
+          a.regions?.get(key)?.shallow !== false && b.regions?.get(key)?.shallow !== false);
     }
     for (const source of [a, b]) for (const [root, exported] of source.omittedRegions ?? []) omitRegion(root, result, exported);
     for (const key of new Set([...a.memory.keys(), ...b.memory.keys()])) {
@@ -502,13 +518,16 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     const layout = index.layout(base)[0]; if (!layout) return undefined;
     if (expr.kind === 'member') return layout.fields.find(field => field.name === expr.field);
     const drop = expr.kind === 'call' ? (layout.layers[0] === 'pointer' ? 2 : 1) : 1;
-    return { ...base, id: base.id + ':' + expr.location.start, type: { name: '', id: layout.id || undefined, layers: layout.layers.slice(drop) } };
+    // Preserve both the normalized base type and the declaration's scalar key.
+    // Element writes must stay connected to reads of their array/pointer owner.
+    return { ...base, type: { name: layout.name ?? '', tag: layout.tag, id: layout.id || undefined, layers: layout.layers.slice(drop) } };
   }
   // Follow scalar dependencies of selectors/guards/storage, rather than every
   // read (e.g. logging). Member keys preserve compatible declarations across
   // translation units without connecting unrelated aggregate names.
   const scalarReads = new Set<string>(), scalarDependencies = new Map<string, Set<string>>();
   const ignoredStorage = new Set<string>();
+  const storageRecords = new Map<string, SymbolRecord>();
   function scalarKey(record: SymbolRecord) {
     const owner = record.memberOf && index.symbol(record.memberOf);
     if (!owner) return record.id;
@@ -577,15 +596,16 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     if (!record || scalarReads.has(scalarKey(record)) || scalarReads.has('unknown:' + record.name)) return true;
     if (record.memberOf && index.symbol(record.memberOf)?.aggregate === 'union') return true;
     const layouts = index.layout(record);
-    return !layouts.length || !layouts.every(layout => !layout.layers.length && layout.scalar);
+    return !layouts.length || !layouts.every(layout => layout.layers.every(layer => layer === 'array') && layout.scalar);
   }
   function trackedStorage(record: SymbolRecord | undefined, seen = new Set<string>()): boolean {
     if (!record || seen.has(record.id)) return true;
     const layouts = index.layout(record);
-    return !layouts.length || layouts.some(layout => layout.layers.length > 0 || (layout.scalar ? summarize(record)
+    return !layouts.length || layouts.some(layout => layout.layers.some(layer => layer !== 'array') || (layout.scalar ? summarize(record)
       : !layout.fields.length || layout.fields.some(field => trackedStorage(field, new Set(seen).add(record.id)))));
   }
   function rememberStorage(slot: string, record: SymbolRecord | undefined) {
+    if (record) storageRecords.set(slot, record);
     if (trackedStorage(record)) ignoredStorage.delete(slot);
     else ignoredStorage.add(slot);
   }
@@ -601,11 +621,13 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
   function copyStorage(destination: string, sources: ReadonlySet<string>, layout: ReturnType<RelationIndex['layout']>[number], state: State, ctx: Context, depth = 0, record?: SymbolRecord) {
     if (depth >= 16) { write(destination, unknown('Aggregate copy depth limit'), state, ctx); return; }
     if (layout.layers[0] === 'array') {
-      heapShape();
-      write(destination, { ...blank(), objects: new Set([destination]) }, state, ctx);
+      write(destination, { ...blank(), objects: new Set([destination]) }, state, ctx, true, summarize(record));
       const indices = new Set<string>();
-      for (const root of sources) for (const suffix of [...knownIndices(heap, root), ...knownIndices(state.memory, root)]) indices.add(suffix);
-      for (const suffix of indices) copyStorage(destination + suffix, new Set([...sources].map(root => root + suffix)), { ...layout, layers: layout.layers.slice(1) }, state, ctx, depth + 1);
+      for (const root of sources) {
+        heapShape(root);
+        for (const suffix of [...knownIndices(heap, root), ...knownIndices(state.memory, root)]) indices.add(suffix);
+      }
+      for (const suffix of indices) copyStorage(destination + suffix, new Set([...sources].map(root => root + suffix)), { ...layout, layers: layout.layers.slice(1) }, state, ctx, depth + 1, record);
     } else if (!layout.layers.length && layout.fields.length) {
       write(destination, { ...blank(), objects: new Set([destination]) }, state, ctx);
       for (const field of layout.fields) copyStorage(destination + '.' + field.name, new Set([...sources].map(root => root + '.' + field.name)),
@@ -640,7 +662,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
       if (concrete.length && !indices.unknown) for (const n of concrete) result.add(root + '[' + n + ']');
       else if (writing) result.add(root + '[*]');
       else {
-        heapShape();
+        heapShape(root);
         const suffixes = new Set([...knownIndices(heap, root), ...knownIndices(state.memory, root)]);
         for (const suffix of suffixes) result.add(root + suffix);
         if (!suffixes.size) result.add(root + '[*]');
@@ -681,15 +703,16 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
       if (expr.entries[0]) initializer(slot, expr.entries[0].value, [], state, ctx);
       return;
     }
-    write(slot, { ...blank(), objects: new Set([slot]) }, state, ctx);
+    write(slot, { ...blank(), objects: new Set([slot]) }, state, ctx, true, summarize(record));
     let next = 0;
     for (const entry of expr.entries) {
       if (designatedOnly && !entry.path.length) continue;
       const path = entry.path.length ? entry.path : [layout.layers[0] === 'array' ? next : layout.fields[next]?.name ?? String(next)];
-      let target = slot, current = layout, member: SymbolRecord | undefined;
+      let target = slot, current = layout, member = record;
       for (const part of path) {
         if (typeof part === 'number' || part === '*') {
-          target += '[' + part + ']'; current = { ...current, layers: current.layers.slice(1) }; member = undefined;
+          target += '[' + part + ']'; current = { ...current, layers: current.layers.slice(1) };
+          if (member) member = { ...member, type: { name: current.name ?? '', tag: current.tag, id: current.id || undefined, layers: current.layers } };
           if (typeof part === 'number') next = part;
         } else {
           target += '.' + part;
@@ -704,6 +727,47 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
   function scalar(value: Value): Value {
     if (!value.targets.size && !value.objects.size && !value.params.size) return value;
     return { ...blank(), numbers: value.numbers, nil: value.nil, unknown: true, reasons: ['Callback/storage addresses converted to scalar values are not tracked'] };
+  }
+  function memoryBuiltin(expr: Extract<Expr, { kind: 'call' }>) {
+    if (expr.args.length !== 3 || expr.callee.kind !== 'name' || expr.callee.localId ||
+      !['memcpy', 'memmove', 'memset'].includes(expr.callee.name)) return false;
+    // User definitions and same-named function-pointer variables keep their
+    // ordinary call effects. Only the external C library contract is modeled.
+    return globalSymbols(expr.callee).every(symbol => symbol.kind === 'function' && !byFunction.has(symbol.id));
+  }
+  function byteDestination(root: string) {
+    // Byte counts/layout offsets are not known. A range starting at an array
+    // element may cover later elements; invalidate the containing array too.
+    const start = root.indexOf('[', root.indexOf('#') + 1);
+    return start < 0 ? root : root.slice(0, start);
+  }
+  function memoryWrite(expr: Extract<Expr, { kind: 'call' }>, args: Value[], state: State, ctx: Context) {
+    const count = materialize(args[2]);
+    if (!count.unknown && count.numbers.size === 1 && count.numbers.has(0)) return args[0];
+    const argument = expr.args[0];
+    let storage = argument.kind === 'address' ? argument.object : argument, array: Expr | undefined;
+    for (let current = storage; current.kind === 'member' || current.kind === 'index' || current.kind === 'cast'; current = current.object)
+      if (current.kind === 'index') array = current.object;
+    storage = array ?? storage;
+    const record = valueType(storage, ctx);
+    const layouts = record ? index.layout(record) : [];
+    const pointer = (argument.kind !== 'address' || !!array) && layouts[0]?.layers[0] === 'pointer';
+    const destination = record && pointer ? { ...record, type: { name: layouts[0].name ?? '', tag: layouts[0].tag,
+      id: layouts[0].id || undefined, layers: layouts[0].layers.slice(1) } } : record;
+    const roots = [...args[0].objects].map(byteDestination);
+    const suppliedCallbackStorage = [...objects(args[0])].map(byteDestination).some(root => {
+      const supplied = storageRecords.get(root);
+      return !!supplied && trackedStorage(supplied);
+    });
+    for (const root of roots) {
+      if (suppliedCallbackStorage) ignoredStorage.delete(root);
+      else rememberStorage(root, destination);
+    }
+    // These functions write bytes in the destination object, never through a
+    // pointer field inside it. Source objects are read-only. Unknown copied or
+    // zero-filled bytes do not establish any callable function pointer value.
+    invalidate(roots, state, ctx, true, true);
+    return evidence(args[0], { location: expr.location, reason: 'Memory function returns its destination' });
   }
   function evaluate(expr: Expr, state: State, ctx: Context): Value {
     currentLocation = expr.location; evaluations++;
@@ -790,6 +854,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     }
     if (expr.kind === 'call') {
       const callee = evaluate(expr.callee, state, ctx), resolved = materialize(callee), args = expr.args.map(arg => evaluate(arg, state, ctx));
+      if (memoryBuiltin(expr)) return memoryWrite(expr, args, state, ctx);
       for (const [n, value] of args.entries()) {
         if (!value.targets.size && (!value.params.size || value.objects.size)) continue;
         dependencies?.arguments.add(expr.key);
@@ -807,7 +872,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
           kind: ['name', 'member', 'index', 'dereference'].includes(expr.callee.kind) ? 'variable' : 'unknown' });
       }
       const returns: Value[] = [], effects = new Map<string, { value: Value; count: number; definite: boolean }>();
-      const regions = new Map<string, { count: number; definite: boolean }>();
+      const regions = new Map<string, { count: number; definite: boolean; shallow: boolean }>();
       let opaque = resolved.unknown || resolved.nil || !resolved.targets.size;
       for (const fn of resolved.targets.keys()) {
         depend(fn);
@@ -822,21 +887,25 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
           if (!old || signature(old) !== signature(target.params[n])) { changed = true; parameterRevision++; target.version++; }
         });
         returns.push(instantiate(target.returns, fn, args));
-        const targetRegions = new Map<string, boolean>();
+        const targetRegions = new Map<string, RegionEffect>();
         for (const root of target.omittedRegions ?? []) {
           const part = formal(root);
           for (const key of part?.fn === fn ? [...(args[part.index]?.objects ?? [])].map(actual => actual + part.suffix) : [root])
             invalidate([key], state, ctx, false);
         }
-        for (const [root, definite] of target.regions) {
+        for (const [root, change] of target.regions) {
           const part = formal(root);
-          for (const key of part?.fn === fn ? [...(args[part.index]?.objects ?? [])].map(actual => actual + part.suffix) : [root]) {
-            targetRegions.set(key, definite || targetRegions.get(key) === true);
+          const keys = part?.fn === fn ? [...(args[part.index]?.objects ?? [])].map(actual => actual + part.suffix) : [root];
+          for (const key of keys.map(key => change.shallow ? byteDestination(key) : key)) {
+            const previous = targetRegions.get(key);
+            targetRegions.set(key, { definite: change.definite || previous?.definite === true,
+              shallow: change.shallow && previous?.shallow !== false });
           }
         }
-        for (const [key, definite] of targetRegions) {
+        for (const [key, change] of targetRegions) {
           const old = regions.get(key);
-          regions.set(key, { count: (old?.count ?? 0) + 1, definite: (old?.definite ?? true) && definite });
+          regions.set(key, { count: (old?.count ?? 0) + 1, definite: (old?.definite ?? true) && change.definite,
+            shallow: (old?.shallow ?? true) && change.shallow });
         }
         for (const [key, effect] of target.effects) {
           const part = formal(key);
@@ -845,7 +914,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
             if (!effects.has(key) && effects.size >= 256) {
               // Only this omitted storage effect is uncertain, not every argument.
               state.incomplete = true; notice('Callback mutation limit: 256 slots per function; targets may be incomplete', 256, false, () => storageDetail('call-effects', effects.keys(), key, effects.size));
-              regions.set(key, { count: 0, definite: false }); continue;
+              regions.set(key, { count: 0, definite: false, shallow: false }); continue;
             }
             const value = instantiate(effect.value, fn, args), old = effects.get(key);
             effects.set(key, { value: old ? union(old.value, value) : value, count: (old?.count ?? 0) + 1, definite: (old?.definite ?? true) && effect.definite && keys.length === 1 });
@@ -853,9 +922,17 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
         }
       }
       const definiteRegions = new Set([...regions].filter(([, change]) => change.definite && change.count === resolved.targets.size).map(([root]) => root));
-      if (opaque) for (const [n, arg] of args.entries()) for (const root of opaqueRoots(expr.args[n], arg, state, ctx)) definiteRegions.add(root);
-      if (regions.size) invalidate([...regions.keys()].filter(root => !definiteRegions.has(root)), state, ctx, false);
-      if (definiteRegions.size) invalidate(definiteRegions, state, ctx);
+      for (const shallow of [false, true]) {
+        const matching = [...regions.keys()].filter(root => regions.get(root)!.shallow === shallow);
+        invalidate(matching.filter(root => !definiteRegions.has(root)), state, ctx, false, shallow);
+        invalidate(matching.filter(root => definiteRegions.has(root)), state, ctx, true, shallow);
+      }
+      // Opaque calls retain their transitive pointee invalidation.
+      if (opaque) {
+        const roots = new Set<string>();
+        for (const [n, arg] of args.entries()) for (const root of opaqueRoots(expr.args[n], arg, state, ctx)) roots.add(root);
+        invalidate(roots, state, ctx);
+      }
       for (const [key, effect] of effects) write(key, effect.value, state, ctx, effect.definite && !opaque && effect.count === resolved.targets.size);
       return returns.length ? union(...returns) : unknown('Return value unavailable: ' + expressionText(expr.callee));
     }
@@ -928,15 +1005,15 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
       if (previous && previous.params.length === target.params.length && previous.params.every((value, n) => value === target.params[n]) &&
         [...previous.dependencies.heap].every(([key, value]) => heap.get(key) === value) &&
         [...previous.dependencies.functions].every(([fn, version]) => summaries.get(fn)?.version === version) &&
-        (previous.dependencies.regions === undefined || previous.dependencies.regions === regionRevision) &&
-        (previous.dependencies.shape === undefined || previous.dependencies.shape === heap.size)) {
+        [...previous.dependencies.regions].every(([slot, count]) => [...matchingRegions(heapRegions, slot)].length === count) &&
+        [...previous.dependencies.shapes].every(([root, version]) => (heapShapes.get(root) ?? 0) === version)) {
         cost.cacheHits++;
         previous.observations.forEach((value, key) => observations.set(key, value));
         previous.arguments.forEach((value, key) => argumentObservations.set(key, value)); continue;
       }
       cost.runs++;
       const beforeParams = [...target.params];
-      dependencies = { heap: new Map(), functions: new Map(), observations: new Set(), arguments: new Set() };
+      dependencies = { heap: new Map(), functions: new Map(), shapes: new Map(), regions: new Map(), observations: new Set(), arguments: new Set() };
       for (const program of list) {
         if (expired()) break;
         const ctx: Context = { program, locals: new Map(program.locals.map(local => [local.id, local])), exits: [], returned: blank() };
@@ -978,19 +1055,20 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
       for (const [root, change] of all?.regions ?? []) {
         if (!change.exported) continue;
         if (list.some(program => localSlot(root, { program, locals: new Map(program.locals.map(local => [local.id, local])), exits: [], returned: blank() }))) continue;
-        if (target.regions.get(root) !== change.definite) {
+        const previous = target.regions.get(root), shallow = change.shallow === true && previous?.shallow !== false;
+        if (previous?.definite !== change.definite || previous?.shallow !== shallow) {
           if (!target.regions.has(root) && target.regions.size >= 256) {
             omitSummaryRegion(root); notice('Callback region limit: 256 reachable objects; targets may be incomplete', undefined, true,
               () => storageDetail('function-regions', target.regions.keys(), root, target.regions.size)); target.incomplete = true; continue;
           }
-          target.regions.set(root, change.definite); target.version++; changed = true;
+          target.regions.set(root, { definite: change.definite, shallow }); target.version++; changed = true;
         }
       }
       for (const [key, effect] of all?.effects ?? []) {
         if (!target.effects.has(key) && target.effects.size >= 256) {
           if (!target.incomplete) { target.incomplete = true; target.version++; changed = true; }
           if (!target.regions.has(key)) {
-            if (target.regions.size < 256) { target.regions.set(key, false); target.version++; changed = true; }
+            if (target.regions.size < 256) { target.regions.set(key, { definite: false, shallow: false }); target.version++; changed = true; }
             else { omitSummaryRegion(key); notice('Callback region limit: 256 reachable objects; targets may be incomplete', undefined, true,
               () => storageDetail('function-regions', target.regions.keys(), key, target.regions.size)); }
           }
