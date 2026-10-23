@@ -17,6 +17,25 @@ function calls(index: RelationIndex) {
   return index.relations(index.symbols().find(symbol => symbol.name === 'run' && symbol.kind === 'function' && symbol.definition)!.id, 'callees');
 }
 
+function callerRegions(callers:number,depth:number){
+  let source='typedef void(*CB)(void);typedef struct Node{CB cb;struct Node*next;}Node;void target(void){}void opaque(Node*);';
+  for(let n=0;n<callers;n++)for(let d=depth-1;d>=0;d--)source+=`Node node${n}_${d}={target,${d===depth-1?'0':`&node${n}_${d+1}`}};`;
+  source+='static void visit(Node*p){p->cb();opaque(p);}';
+  for(let n=0;n<callers;n++)source+=`void run${n}(void){visit(&node${n}_0);}`;
+  return source;
+}
+test('independent caller supplies do not consume a shared helper reachable-region limit',()=>{
+  const raw=analyzer.analyze('file:///caller-regions.c',callerRegions(32,9),true,{expandMacros:false,propagateCallbacks:true});
+  const [result]=analyzer.derive([raw]);
+  assert.ok(!result.issues.some(issue=>/region limit|mutation limit/.test(issue)),result.issues.join('\n'));
+  assert.ok(result.references.some(ref=>ref.callKind==='inferred'&&ref.name==='target'));
+});
+test('one actual call reaching 257 objects still reports the region limit',()=>{
+  const raw=analyzer.analyze('file:///actual-regions.c',callerRegions(1,257),true,{expandMacros:false,propagateCallbacks:true});
+  const [result]=analyzer.derive([raw]);
+  assert.ok(result.issues.some(issue=>/region limit/.test(issue)));
+});
+
 test('compatible struct declarations in different files retain scalar selector effects', () => {
   const index = new RelationIndex();
   const files = [

@@ -17,14 +17,18 @@ VS Code 데스크톱 1.95 이상이 필요합니다. 기본 분석은 로컬 WAS
 
 ## 상세 분석과 Copilot 콜백 후보
 
-설정은 **보기 → Include → Exclude → Detailed Analysis Folders → 분석 옵션 →
-관계 표시 → Copilot** 순서입니다. UI 문구는 영어로 제공합니다.
+설정은 **보기 → Include → Exclude → Smart Analysis Include / Exclude →
+Smart Analysis Macro / Copilot → 기타 옵션** 순서입니다. UI 문구는 영어로 제공합니다.
 
-새 프로젝트는 기본 탐색부터 시작합니다. **Detailed Analysis Folders**에서 필요한
-폴더만 선택하면 그 안에서 매크로 확장과 콜백 전파를 수행합니다. 빈 목록은 기본 분석,
-`["**"]`는 전체 상세 분석입니다. 색인된 외부 헤더 정의는 참조하지만 외부 함수 본문까지
-자동으로 추적 범위를 넓히지 않습니다. 기존 명시적 매크로/콜백 설정은 통합 범위를
-저장하기 전까지 호환 동작으로 유지합니다.
+경로는 일반 **Include / Exclude**와 **Smart Analysis Include / Exclude** 네 개만
+사용합니다. 일반 범위는 기본 색인을 정하며, Smart Analysis 범위는 그 안에서 추가
+분석할 파일을 정합니다. **Macro**는 로컬 매크로 확장과 콜백 전파를 함께 켜고 끕니다.
+**Copilot**은 미해결 콜백의 AI 후보 분석이며 Macro와 독립적으로 켤 수 있습니다.
+새 프로젝트의 Smart Analysis Include는 비어 있으므로 기본 탐색부터 시작합니다.
+`["**"]`는 모든 색인 파일을 선택하며 Smart Analysis Exclude가 우선합니다.
+기존 경로 설정은 화면에서 숨기고, 새 Include를 명시적으로 저장하기 전까지 기존
+분석 범위와 AI 허용 범위를 유지합니다. 새 Include를 저장하면 두 기능이 이 범위를
+공유합니다. 색인된 외부 헤더 정의는 참조하지만 외부 함수 본문을 자동으로 추적하지 않습니다.
 
 Copilot 사용 여부·모델·허용 경로를 지정하면 저장된 색인이 준비된 뒤 미해결 콜백을
 자동으로 하나씩 분석합니다. 기존 유효 캐시는 재사용하며 5개 뒤에도 이어서 처리합니다.
@@ -42,8 +46,8 @@ User confirmed에서도 AI로 재확인할 수 있습니다. 다른 후보는 �
 분석합니다. **Stop analysis**는 완료 결과를 유지하고 이 세션의 자동 요청을 멈춥니다.
 **Analyze Callbacks with Copilot** 명령, 설정 다시 켜기, 모델/범위 변경으로 재개합니다.
 요청 실패도 자동 반복하지 않고 일시 중단합니다. User confirmed는 자동 분석에서 제외합니다.
-Copilot Include는 자동 복사되지 않으며 빈 목록은 요청을 허용하지 않습니다.
-호출 위치는 상세 분석 범위에도 들어가야 합니다. 근거 소스는 다른 기본 색인 경로에서 수집될 수 있습니다.
+Smart Analysis Include는 일반 Include에서 자동 복사되지 않으며 빈 목록은 요청을 허용하지 않습니다.
+호출 위치는 공유 Smart Analysis 범위에 들어가야 합니다. 근거 소스는 다른 기본 색인 경로에서 수집될 수 있습니다.
 
 **Stop local**은 함수명 길이가 바뀌어도 고정된 위치를 유지합니다. 말줄임 함수명에
 마우스를 올리거나 키보드로 포커스하면 전체 이름이 나오며 **Copy**로 복사할 수 있습니다.
@@ -128,20 +132,24 @@ Settings 화면에서는 `@id:dynsight.include` 또는 `@id:dynsight.exclude`를
 - `files.exclude`, `search.exclude`, `C_Cpp.files.exclude`는 이 확장의 분석 범위에 적용되지 않습니다. `dynsight.include`와 `dynsight.exclude`를 사용하세요.
 - `node_modules`, `.git`, `.vscode-test`는 기본으로 제외합니다. 사용자 제외 후에도 초기 분석 대상이 10,000개를 넘으면 **Partial index**가 표시됩니다. 불필요한 경로를 더 제외하거나 필요한 소스 폴더를 별도로 여세요.
 
-## 상세 분석 폴더 선택
+## Smart Analysis 범위 선택
 
-**Settings → Detailed Analysis Folders → Select folders…**에서 매크로 확장과 콜백 추론을
+**Settings → Smart Analysis: Include → Select folders…**에서 매크로 확장과 콜백 추론을
 수행할 폴더를 함께 선택합니다. Include/Exclude는 기본 색인 범위를 정하며 Exclude가
 우선합니다. 상세 범위를 줄이면 본격적인 전파 자료와 작업량도 줄입니다.
 
 ```json
 {
   "dynsight.include": ["App/**", "SDK/**"],
-  "dynsight.detailedAnalysisFolders": ["App/control/**"]
+  "dynsight.smartAnalysis.include": ["App/control/**"],
+  "dynsight.smartAnalysis.exclude": ["App/control/generated/**"],
+  "dynsight.smartAnalysis.macro": true,
+  "dynsight.smartAnalysis.copilot": false
 }
 ```
 
-기본 탐색이 먼저 준비되고 상세 결과는 추가됩니다. 개별 함수·전체 작업량 또는 메모리
+기본 탐색이 먼저 준비되고 상세 결과는 추가됩니다. 전체 작업량은 배치 단위로 누적하며
+매크로 때문에 콜백이 시작부터 차단되지 않습니다. 개별 함수·구조적 한도 또는 메모리
 한도에 도달하면 확보한 결과와 미해결 이유를 유지합니다. 범위를 바꾸거나 중단했는데
 모든 호출 관계가 완전해졌다고 표시하지 않습니다.
 
@@ -237,7 +245,7 @@ Settings 화면에서는 `@id:dynsight.include` 또는 `@id:dynsight.exclude`를
 
 ## 콜백 분석 범위
 
-새 작업 공간에서는 **Detailed Analysis Folders**를 사용합니다. 기존
+새 작업 공간에서는 **Smart Analysis Include / Exclude**를 사용합니다. 기존
 `dynsight.analyzeCallbacks`와 `dynsight.macroExpansionFolders`는 통합 설정 저장 전의
 호환 옵션입니다. 단순 등록·직접 호출·문자 그대로 전달한 함수 인자는 기본 분석에 남고,
 여러 함수를 거치는 별칭·콜백 전파는 상세 범위에 적용합니다.

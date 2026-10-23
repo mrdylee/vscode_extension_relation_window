@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.1.75 — 2026-10-23
+
+- Consolidate paths into Include, Exclude, Smart Analysis Include and Exclude.
+  Smart Analysis exposes Macro (macro expansion and local callback propagation)
+  and Copilot. Preserve legacy settings and explicit scope restrictions.
+- Allow eligible Copilot callback requests when local Macro analysis is off;
+  distinguish an empty AI scope from an absence of unresolved callback sites.
+- Correlate conditional macro choices, avoid redundant expansion work and recover
+  valid preprocessor-split C statements. Reduce false callback region limits
+  from unrelated caller contexts while retaining the existing safety bounds.
+- Separate macro and callback work accounting and report detailed partial reasons.
+  Large full-project analysis can still be partial or slow; basic navigation
+  and existing observations remain available after Stop or memory limits.
+- Bind basic macro uses to visible definitions without body expansion. Group
+  ambiguous definitions by binding set and expose their locations in the popup.
+  Missing or opaque include information remains visibly uncertain.
+- Raise analysis cache compatibility to 8. Rebuild incompatible saved analysis;
+  user-confirmed callbacks remain stored separately.
+
 ## 0.1.74 — 2026-10-23
 
 - Keep Basic navigation, Local and Copilot progress on one footer row, including

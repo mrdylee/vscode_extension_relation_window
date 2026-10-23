@@ -76,6 +76,15 @@ async function harness(denied=false, timeoutMs?:number, siteCount=denied?2:1, re
 const settle=()=>new Promise(done=>setTimeout(done,50));
 async function until(check:()=>boolean){const deadline=Date.now()+3000;while(!check()&&Date.now()<deadline)await new Promise(done=>setTimeout(done,10));assert.ok(check(),'service did not reach the expected state');}
 const firstSite=(h:Awaited<ReturnType<typeof harness>>)=>({siteKey:callbackContexts([...h.workspace.index.files.values()])[0].key});
+test('Smart Analysis shares include/exclude while Copilot runs independently of Macro',async t=>{
+  const h=await harness();t.after(h.dispose);
+  h.config.set('smartAnalysis.copilot',true);h.config.set('copilotModel','model-a');
+  h.config.set('smartAnalysis.include',['**']);h.config.set('smartAnalysis.exclude',['**']);h.config.set('smartAnalysis.macro',false);
+  h.config.set('copilotInclude',[]);h.config.set('detailedAnalysisFolders',[]);
+  const api=h.start();await api.ready;assert.equal(h.calls.length,0);
+  await h.update('smartAnalysis.exclude',[]);await until(()=>h.calls.length===1&&h.workspace.copilotDiagnostics.state==='ready');
+  await h.update('smartAnalysis.include',[]);await settle();assert.equal(h.workspace.copilotDiagnostics.excluded,1);
+});
 test('enabling Copilot automatically processes all sites and startup, save and rebuild reuse valid cache',async t=>{
   const h=await harness(false,undefined,8);t.after(h.dispose);const api=h.start();await api.ready;
   assert.equal(h.calls.length,0);assert.equal(h.pickCount(),0);
@@ -98,6 +107,26 @@ test('enabled startup uses the configured model and continues beyond five reques
   h.workspace.settled.fire();h.workspace.settled.fire();await settle();assert.equal(h.calls.length,1,'automatic requests and notifications must not overlap');
   held.release();await api.ready;assert.equal(h.calls.length,8);assert.equal(h.pickCount(),0);
   assert.equal(h.workspace.copilotDiagnostics.completed,8);assert.equal(h.workspace.copilotDiagnostics.remaining,0);
+});
+test('AI still analyzes a member callback when legacy local propagation is disabled',async t=>{
+  const h=await harness();t.after(h.dispose);
+  h.config.delete('detailedAnalysisFolders');h.config.set('analyzeCallbacks',false);
+  h.config.set('copilotCallbacks',true);h.config.set('copilotModel','model-a');
+  h.addFile('file:///example.c','struct Ops{void(*cb_preprocess)(void);};extern struct Ops*priv_non_safety_callbacks;void run(void){priv_non_safety_callbacks->cb_preprocess();}');
+  const raw=h.workspace.index.files.get('file:///example.c')!;
+  h.workspace.index.update({...raw,analysisPolicy:{expandMacros:false,propagateCallbacks:false}});
+  await h.start().ready;
+  assert.equal(h.calls.length,1);
+  assert.equal(h.workspace.copilotDiagnostics.total,1);
+  assert.ok(h.prompts[0].includes('priv_non_safety_callbacks->cb_preprocess'));
+});
+test('empty AI include reports excluded callback sites rather than claiming none exist',async t=>{
+  const h=await harness();t.after(h.dispose);
+  h.config.set('copilotCallbacks',true);h.config.set('copilotModel','model-a');h.config.set('copilotInclude',[]);
+  await h.start().ready;
+  assert.equal(h.calls.length,0);
+  assert.equal(h.workspace.copilotDiagnostics.excluded,1);
+  assert.equal(h.pickCount(),0);
 });
 test('automatic analysis handles new saved callbacks and an individual recheck does not inflate progress',async t=>{
   const h=await harness();t.after(h.dispose);h.config.set('copilotCallbacks',true);h.config.set('copilotModel','model-a');

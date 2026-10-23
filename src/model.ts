@@ -38,6 +38,7 @@ export interface ReferenceRecord {
   expansion?: { chain: { name: string; location: Location }[]; text: string };
   callKind?: CallKind;
   macroIds?: string[];
+  macroUncertain?: boolean;
   flowKey?: string;
   inference?: { expression: string; evidence: { location: Location; reason: string }[]; incomplete: boolean; reasons: string[] };
   argument?: { callee: string; position: number; location: Location; inferred?: boolean };
@@ -65,14 +66,15 @@ export type FlowStatement =
 export interface FlowLocal { id: string; name: string; type?: CType; location: Location; scope: { start: number; end: number }; parameter?: number; conditions?: string[]; persistent?: boolean }
 export interface FlowProgram { id: string; locals: FlowLocal[]; params: string[]; body: FlowStatement[] }
 export interface GlobalInitializer { id: string; value: FlowExpression; location: Location }
+export interface MacroBranch { key: string; value: boolean; condition: string }
 export interface MacroDefinition {
   name: string; parameters?: string[]; variadic?: string; body: string;
-  location: Location; conditions: string[];
+  location: Location; conditions: string[]; branches?: MacroBranch[];
 }
 export type PreprocessorEvent =
-  | { kind: 'define'; location: Location; conditions: string[]; macro: MacroDefinition }
-  | { kind: 'undef'; location: Location; conditions: string[]; name: string }
-  | { kind: 'include'; location: Location; conditions: string[]; path: string; system: boolean };
+  | { kind: 'define'; location: Location; conditions: string[]; branches?: MacroBranch[]; macro: MacroDefinition }
+  | { kind: 'undef'; location: Location; conditions: string[]; branches?: MacroBranch[]; name: string }
+  | { kind: 'include'; location: Location; conditions: string[]; branches?: MacroBranch[]; path: string; system: boolean };
 export interface FunctionBody { id: string; location: Location; body: Location }
 export interface CallbackProgress {
   stage: 'setup' | 'initializers' | 'propagation' | 'registrations';
@@ -81,6 +83,7 @@ export interface CallbackProgress {
   symbol?: string; scopeElapsedMs: number; scopeEvaluations: number;
   outcome?: 'completed' | 'time' | 'memory' | 'work' | 'cancelled' | 'limited';
   cached?: boolean;
+  workBatches?: number;
 }
 export interface CallbackAnalysisOptions {
   workLimits?: import('./analysis-budget').AnalysisWorkLimits;
@@ -95,15 +98,17 @@ export interface CallbackDiagnostic {
   message: string; location?: Location; symbol?: string;
   elapsedMs: number; scopeElapsedMs: number;
   evaluations: number; scopeEvaluations: number; slots?: number;
+  work?: { project: import('./analysis-budget').AnalysisWorkUsage; scope: import('./analysis-budget').AnalysisWorkUsage; limits: import('./analysis-budget').AnalysisWorkLimits; batches?: number };
   storage?: { operation: 'write' | 'branch-join' | 'call-effects' | 'function-effects' | 'ordered-region' | 'reachable-regions' | 'function-regions';
     retained: number; omitted: string; sample: string[] };
-  costs?: { symbol: string; location?: Location; runs: number; cacheHits: number; evaluations: number; elapsedMs: number }[];
+  costs?: { symbol: string; location?: Location; runs: number; cacheHits: number; evaluations: number; elapsedMs: number; invalidations?: Partial<Record<'first-run' | 'parameters' | 'heap' | 'callees' | 'regions' | 'shapes', number>> }[];
 }
 export interface FileAnalysis {
   analysisPolicy?: FileAnalysisPolicy;
   uri: string; text: string; symbols: SymbolRecord[]; references: ReferenceRecord[];
   includes: string[]; issues: string[]; systemIncludes?: string[];
   preprocessor?: PreprocessorEvent[]; functions?: FunctionBody[];
+  splitStatements?: {start: number; end: number}[];
   inactive?: { start: number; end: number }[];
   directives?: { start: number; end: number }[];
   guard?: { name: string; condition: string };
@@ -120,6 +125,7 @@ export interface FileAnalysis {
 export interface RelationSite extends ReferenceRecord { ambiguous: boolean; candidates: string[] }
 export interface RelationGroup {
   key: string; symbol?: SymbolRecord; name: string; kind: Kind; sites: RelationSite[]; callKind?: CallKind;
+  definitionCandidates?: SymbolRecord[];
 }
 export interface GraphNode {
   key: string; symbolId?: string; name: string; kind: Kind; location: Location;
@@ -127,6 +133,7 @@ export interface GraphNode {
   callKind?: CallKind;
   direction?: 'callers' | 'callees';
   containerName?: string;
+  definitionCandidates?: Pick<SymbolRecord, 'id' | 'location' | 'conditions'>[];
   conditions: string[]; sites: Omit<RelationSite, 'candidates'>[]; children: GraphNode[];
   cycle: boolean; expanded: boolean; ambiguous: boolean;
 }

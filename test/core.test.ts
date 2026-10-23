@@ -8,6 +8,40 @@ let analyzer: Awaited<ReturnType<typeof createAnalyzer>>;
 before(async () => { analyzer = await createAnalyzer(path.resolve('node_modules/web-tree-sitter/web-tree-sitter.wasm'), path.resolve('node_modules/tree-sitter-c/tree-sitter-c.wasm')); });
 const parse = (text: string, uri = 'file:///demo/a.c', skip = true) => analyzer.analyze(uri, text, skip);
 
+test('a conditional else sharing the following statement keeps valid callback paths and locations',()=>{
+  for(const condition of ['BOARD','0','1']){
+    const source='typedef void(*CB)(void);void first(void){}void second(void){}void third(void){}void run(int guard){CB cb=first;\n#if '+condition+'\nif(guard){cb=second;} else\n#endif\n{cb=third;}cb();}';
+    const raw=parse(source);assert.deepEqual(raw.issues,[],condition);
+    const [file]=analyzer.derive([raw]);
+    const calls=file.references.filter(ref=>ref.callKind==='inferred'&&ref.location.start===source.lastIndexOf('cb();'));
+    assert.deepEqual([...new Set(calls.map(ref=>ref.name))].sort(),condition==='0'?['third']:['second','third']);
+    assert.equal(file.text,source);
+  }
+});
+
+test('alternative if headers sharing a body preserve conditional callback execution',()=>{
+  for(const condition of ['BOARD','0','1']){
+    const source='typedef void(*CB)(void);void first(void){}void second(void){}void run(int a,int b){CB cb=first;\n#if '+condition+'\nif(a)\n#else\nif(b)\n#endif\n{cb=second;}cb();}';
+    const raw=parse(source);assert.deepEqual(raw.issues,[],condition);
+    const [file]=analyzer.derive([raw]);
+    assert.deepEqual([...new Set(file.references.filter(ref=>ref.callKind==='inferred'&&ref.location.start===source.lastIndexOf('cb();')).map(ref=>ref.name))].sort(),['first','second']);
+  }
+});
+
+test('split if headers preserve alternative condition side effects',()=>{
+  const source='typedef void(*CB)(void);void first(void){}void second(void){}static CB cb=first;int change(void){cb=second;return 1;}int check(void){return 0;}void run(void){\n#if BOARD\nif(change())\n#else\nif(check())\n#endif\ncb();}';
+  const [file]=analyzer.derive([parse(source)]);
+  assert.deepEqual([...new Set(file.references.filter(ref=>ref.callKind==='inferred'&&ref.location.start===source.lastIndexOf('cb();')).map(ref=>ref.name))].sort(),['first','second']);
+});
+
+test('split-statement recovery keeps genuine syntax errors and explicit empty if bodies',()=>{
+  const malformed='void run(int a){\n#if BOARD\nif(a){}else\n#endif\n{broken(;} }';
+  assert.ok(parse(malformed).issues.length);
+  const source='typedef void(*CB)(void);void first(void){}void second(void){}void run(int a,int b){CB cb=first;\n#if BOARD\nif(a);\n#else\nif(b);\n#endif\n{cb=second;}cb();}';
+  const [file]=analyzer.derive([parse(source)]);
+  assert.deepEqual([...new Set(file.references.filter(ref=>ref.callKind==='inferred').map(ref=>ref.name))],['second']);
+});
+
 test('trailing GNU variable attributes preserve declarations and source positions', () => {
   const source = 'struct Data{unsigned value;};\nstatic struct Data write_buf\n __attribute__((section(".os_data_nc")));\nvoid run(void){write_buf.value=1;}';
   const file = parse(source);

@@ -7,7 +7,7 @@ export async function run() {
   const opened: string[] = [];
   const listener = vscode.workspace.onDidOpenTextDocument(document => { if (document.uri.scheme === 'file' && /\.[ch]$/i.test(document.uri.path)) opened.push(document.uri.toString()); });
   const detailed = process.env.DYNSIGHT_TEST_DETAILED === 'full';
-  await vscode.workspace.getConfiguration('dynsight').update('detailedAnalysisFolders', detailed ? ['**'] : [], vscode.ConfigurationTarget.Global);
+  await vscode.workspace.getConfiguration('dynsight').update('smartAnalysis.include', detailed ? ['**'] : [], vscode.ConfigurationTarget.Global);
   const start = Date.now();
   const api = await vscode.extensions.getExtension('dylee.dynsight')!.activate();
   let timeout: ReturnType<typeof setTimeout>;

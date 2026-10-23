@@ -145,11 +145,11 @@ parentPort!.on('message', (request: Request) => {
             report();
           }
         };
-        const basic = basicSnapshot?.inputs.length===files.length && files.every((file,n)=>basicSnapshot!.inputs[n]===file) ? basicSnapshot.files : parser.basic(files,control);
+        const basic = basicSnapshot?.inputs.length===files.length && files.every((file,n)=>basicSnapshot!.inputs[n]===file) ? basicSnapshot.files : parser.basic(files,control,memoryPressure);
         if(!control.shouldCancel?.())basicSnapshot={inputs:files,files:basic};
         parentPort!.postMessage({type:'basic-result',requestId:request.id,inputs:request.versions.map(([uri,id])=>[uri,id]),
-          files:basic.filter((file,n)=>file!==files[n]&&request.versions[n][2]<0).map(file=>({uri:file.uri,
-            references:file.references.filter(ref=>ref.callKind==='registered'),functionArguments:file.functionArguments,
+          files:basic.filter((file,n)=>file!==files[n]&&request.versions[n][2]<0).map(file=>({uri:file.uri,projectScoped:file.projectScoped,
+            references:file.references.filter(ref=>ref.callKind==='registered'||ref.macroIds!==undefined),functionArguments:file.functionArguments,
             callbackRegistrations:file.callbackRegistrations,callbackDiagnostics:file.callbackDiagnostics,issues:file.issues}))});
         diagnostics.callbacks=undefined;
         let derived = incremental.derive(files, dirty => parser.derive(dirty, memoryPressure, phase, request.analyzeCallbacks, control), request.analyzeCallbacks);
@@ -159,11 +159,15 @@ parentPort!.on('message', (request: Request) => {
           const key=(ref:ReferenceRecord)=>`${ref.location.uri}:${ref.location.start}:${ref.location.end}:${ref.targetId}`;
           const found=new Set(file.references.filter(ref=>ref.kind==='call').map(key));
           const retained=basic[n].references.filter(ref=>ref.callKind==='registered'&&!found.has(key(ref)));
+          const bindings=new Map(basic[n].references.filter(ref=>ref.macroIds!==undefined).map(ref=>[ref.id,ref]));
+          let bindingsChanged=false;
+          const references=file.references.map(ref=>{const binding=bindings.get(ref.id);if(ref.macroIds!==undefined||!binding)return ref;bindingsChanged=true;return {...ref,macroIds:binding.macroIds,macroUncertain:binding.macroUncertain};});
+          const projectScoped=file.projectScoped??basic[n].projectScoped;
           const registrations=retainFacts(file.callbackRegistrations,basic[n].callbackRegistrations),argumentsFound=retainFacts(file.functionArguments,basic[n].functionArguments);
           const basicNotices=basic[n].callbackDiagnostics?.filter(detail=>detail.kind==='cancelled')??[];
           const details=file.callbackDiagnostics?.slice(0,remaining);remaining-=details?.length??0;
-          return retained.length||registrations!==file.callbackRegistrations||argumentsFound!==file.functionArguments||basicNotices.length||details?.length!==file.callbackDiagnostics?.length ?
-            {...file,references:retained.length?[...file.references,...retained]:file.references,callbackRegistrations:registrations,functionArguments:argumentsFound,
+          return bindingsChanged||projectScoped!==file.projectScoped||retained.length||registrations!==file.callbackRegistrations||argumentsFound!==file.functionArguments||basicNotices.length||details?.length!==file.callbackDiagnostics?.length ?
+            {...file,projectScoped,references:retained.length?[...references,...retained]:references,callbackRegistrations:registrations,functionArguments:argumentsFound,
               callbackDiagnostics:basicNotices.length?[...basicNotices,...(details??[])]:details}:file;
           });
         }

@@ -33,7 +33,7 @@ export function createLocalProgress(send:(type:string,value?:Record<string,unkno
     const ms=(progress?.scopeElapsedMs??0)+(analysis?.running?Math.max(0,Date.now()-sampledAt):0);
     text.textContent=analysis?.running?`Local · ${(ms/1000).toFixed(1)}s${ms>=5000?' · Taking longer':''} · `:analysis?.paused?'Local analysis paused':'Local analysis needs retry';
     name.hidden=!analysis?.running||!progress?.symbol;name.textContent=progress?.symbol??'';name.setAttribute('aria-label',`Function ${progress?.symbol??''}`);
-    summary.title=`${progress?.stage??'Local analysis'} · ${progress?.functionsDone??0}/${progress?.functionsTotal??0} functions · ${progress?.scopeEvaluations??0} evaluations`;
+    summary.title=`${progress?.stage??'Local analysis'} · ${progress?.functionsDone??0}/${progress?.functionsTotal??0} functions · ${progress?.scopeEvaluations??0} evaluations${progress?.workBatches ? ` · Work batch ${progress.workBatches}` : ''}`;
   }
   setInterval(()=>{if(diagnostics?.index?.callbackAnalysis?.running)update(diagnostics,true);},500);
   return {element:root,update};

@@ -8,6 +8,7 @@ import { prepareCallbackContexts, CallbackSite } from './copilot-context';
 import { applyCallbackHints } from './copilot-relations';
 import { CallbackOverrideStore, makeCallbackOverride } from './callback-overrides';
 import { Location, SymbolRecord } from './model';
+import { analysisConfiguration, configured, smartAnalysisScope } from './analysis-policy';
 
 export interface CallbackActionHandle { siteKey: string; targetId?: string; overrideKey?: string }
 export interface CallbackTargetChoice { id: string; name: string; location: Location; compatibility: 'compatible' | 'unknown' | 'incompatible'; reason?: string }
@@ -24,7 +25,8 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
   const hints = new Map<string, CallbackHint>();
   const suggestions = new Map<string, {id: string; result: CallbackHint; manualRevision: number}>();
   const activity = {state: 'off', manualReview: 0, manualInactive: 0, automatic: false, total: 0, completed: 0, requests: 0, cacheHits: 0, remaining: 0, failures: 0, candidates: 0, notFound: 0, contextLimited: 0, excluded: 0};
-  const enabled = () => vscode.workspace.isTrusted && vscode.workspace.getConfiguration('dynsight').get('copilotCallbacks', false);
+  const enabled = () => { const config = analysisConfiguration(vscode.workspace.getConfiguration('dynsight'), vscode.workspace.getConfiguration('cRelation')); return vscode.workspace.isTrusted &&
+    (configured<boolean>(config, 'smartAnalysis.copilot') ?? config.get('copilotCallbacks', false)); };
   const canAnalyze = () => !workspace.hasDirtySources && (workspace.copilotSnapshotReady ?? workspace.stable);
   const configuredModel = () => vscode.workspace.getConfiguration('dynsight').get<string>('copilotModel', '').trim();
   function status(value: string) { activity.state = value; workspace.copilotDiagnostics = {...activity}; workspace.diagnosticsChanged.fire(); }
@@ -33,18 +35,17 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
     activity.cacheHits = value.cached;
   }
   function configFor(uri: string) {
-    const value = vscode.Uri.parse(uri);
-    return {config: vscode.workspace.getConfiguration('dynsight', vscode.workspace.getWorkspaceFolder(value)?.uri), relative: vscode.workspace.asRelativePath(value, false).replace(/\\/g, '/')};
+    const value = vscode.Uri.parse(uri), resource = vscode.workspace.getWorkspaceFolder(value)?.uri;
+    return {config: analysisConfiguration(vscode.workspace.getConfiguration('dynsight', resource), vscode.workspace.getConfiguration('cRelation', resource)), relative: vscode.workspace.asRelativePath(value, false).replace(/\\/g, '/')};
   }
   function match(patterns: readonly string[], relative: string) { return patterns.some(pattern => new Minimatch(pattern, {dot: true, nonegate: true, nocomment: true, noext: true, nocase: process.platform === 'win32'}).match(relative)); }
   function detailed(uri: string) {
-    const {config,relative}=configFor(uri),entry=config.inspect<string[]>('detailedAnalysisFolders');
-    const explicit=entry&&[entry.globalValue,entry.workspaceValue,entry.workspaceFolderValue].some(value=>value!==undefined);
-    return !explicit||match(config.get<string[]>('detailedAnalysisFolders',[]),relative);
+    const {config,relative}=configFor(uri),scope=smartAnalysisScope(config);
+    return (scope.include===undefined||match(scope.include,relative))&&!match(scope.exclude,relative);
   }
   function eligible(uri: string) {
-    const {config, relative} = configFor(uri), file = workspace.index.files.get(uri);
-    return detailed(uri) && file?.analysisPolicy?.propagateCallbacks !== false && match(config.get<string[]>('copilotInclude', []), relative) && !match(config.get<string[]>('copilotExclude', []), relative);
+    const {config, relative} = configFor(uri),scope=smartAnalysisScope(config);
+    return detailed(uri) && (scope.unified || (match(config.get<string[]>('copilotInclude', []), relative) && !match(config.get<string[]>('copilotExclude', []), relative)));
   }
   function project() {
     if (disposed) return;
@@ -127,7 +128,9 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
     const task = (async () => {
       const value = snapshot();
       if (!value.callsiteUris?.size) {
-        Object.assign(activity, {total: 0, completed: 0, cacheHits: 0, remaining: 0, failures: 0, candidates: 0, notFound: 0, contextLimited: 0, excluded: 0, automatic: false});
+        const builder = await prepareCallbackContexts(value.files, () => epoch === revision && !disposed && canAnalyze() && value.generation === workspace.generation);
+        if (epoch !== revision || disposed || !canAnalyze() || value.generation !== workspace.generation) return;
+        Object.assign(activity, {total: 0, completed: 0, cacheHits: 0, remaining: 0, failures: 0, candidates: 0, notFound: 0, contextLimited: 0, excluded: builder.sites.length, automatic: false});
         project(); status('ready'); return;
       }
       activity.automatic = true; status('restoring-cache');
@@ -246,7 +249,7 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
     cancel(_action?: CallbackActionHandle) { stop(); }
   };
   async function command(recheck = false, action?: CallbackActionHandle) {
-    if (!enabled()) { await vscode.window.showInformationMessage('Enable Copilot Callbacks in Dynsight Settings to analyze unresolved callbacks automatically.'); return; }
+    if (!enabled()) { await vscode.window.showInformationMessage('Enable Smart Analysis: Copilot in Dynsight Settings to analyze unresolved callbacks automatically.'); return; }
     if (!action) { automaticPaused = false; await running?.catch(() => {}); await analyzeAutomatically(); return; }
     await actions.analyze(action, recheck);
   }
@@ -266,7 +269,7 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
     workspace.settled.event(schedule),
     vscode.workspace.onDidChangeConfiguration(event => {
       if (selecting) return;
-      if (['copilotCallbacks', 'copilotModel', 'copilotInclude', 'copilotExclude', 'detailedAnalysisFolders', 'include', 'exclude'].some(key => event.affectsConfiguration(`dynsight.${key}`))) {
+      if (['copilotCallbacks', 'copilotModel', 'copilotInclude', 'copilotExclude', 'detailedAnalysisFolders', 'smartAnalysis.include', 'smartAnalysis.exclude', 'smartAnalysis.copilot', 'include', 'exclude'].some(key => event.affectsConfiguration(`dynsight.${key}`) || event.affectsConfiguration(`cRelation.${key}`))) {
         automaticPaused = false;
         stop(enabled() ? 'waiting-for-saved-index' : 'off'); controller?.dispose(); controller = undefined; model = undefined; hints.clear(); project(); schedule();
       }

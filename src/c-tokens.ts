@@ -24,7 +24,15 @@ export function tokenizeC(source: string, location: (start: number, end: number)
   }
   return tokens;
 }
-export function joinTokens(tokens: CToken[]) { return tokens.map(token => token.text).join(' '); }
+export function joinTokens(tokens: CToken[]) {
+  let directiveLine: number | undefined;
+  return tokens.map((token, n) => {
+    const line = token.location.line, directive = token.text === '#' && (!n || line !== tokens[n - 1].location.line);
+    const separator = directive || (directiveLine !== undefined && line !== directiveLine) ? '\n' : ' ';
+    if (directive) directiveLine = line; else if (line !== directiveLine) directiveLine = undefined;
+    return (n ? separator : '') + token.text;
+  }).join('');
+}
 export function locationIn(text: string, uri: string, base = 0) {
   const starts = [0]; for (let i = 0; i < text.length; i++) if (text[i] === '\n') starts.push(i + 1);
   const point = (offset: number) => {

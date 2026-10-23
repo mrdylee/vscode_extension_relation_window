@@ -66,6 +66,15 @@ test('an empty project releases the previous callback project cache', async () =
   assert.equal(oldSource.deref(), undefined);
   assert.equal(oldResult.deref(), undefined);
 });
+test('basic macro binding releases replaced source even when the new lookup is stopped',async()=>{
+  const analyzer=await create(),off={expandMacros:false,propagateCallbacks:false};
+  const header=analyzer.analyze('file:///binding.h','#define CHECK(x) ((x)>0)',true,off);
+  let old:ReturnType<typeof analyzer.analyze>|undefined=analyzer.analyze('file:///binding.c','#include "binding.h"\nvoid run(void){'+'CHECK(1);'.repeat(2000)+'}',true,off);
+  const weak=new WeakRef(old);analyzer.basic([header,old]);old=undefined;
+  const current=analyzer.analyze('file:///binding.c','void replacement(void);',true,off);
+  analyzer.basic([header,current],{shouldCancel:()=>true});await collect();
+  assert.equal(weak.deref(),undefined,'a cancelled new lookup must not retain the previous binding input');
+});
 
 test('shrinking detailed scope releases full programs and old derived results', async () => {
   const analyzer=await create();

@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { Worker } from 'node:worker_threads';
 import { readFileSync } from 'node:fs';
-import { resolveAnalysisPolicy } from './analysis-policy';
+import { analysisConfiguration, resolveAnalysisPolicy, smartAnalysisScope } from './analysis-policy';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { ANALYSIS_CACHE_VERSION, CacheIncompatibility } from './analysis-cache';
@@ -89,9 +89,9 @@ export class WorkspaceIndex implements vscode.Disposable {
   private basicRevision=-1;
   get basicReady() { return (this.basicRevision===this.revision||this.derivedRevision===this.revision)&&!this.disposed && !this.cacheBlocked && !this.workerError && !this.indexing && !this.jobs.size && !this.timers.size && !this.hasDirtySources && ![...this.failures.keys()].some(key => key !== 'derived'); }
   get copilotSnapshotReady() { return this.basicReady; }
-  private scopes = new Map<string, { include: string[]; exclude: string[]; included: Minimatch[]; excluded: Minimatch[]; macros: Minimatch[]; detailed?: string[]; legacy: boolean }>();
+  private scopes = new Map<string, { include: string[]; exclude: string[]; included: Minimatch[]; excluded: Minimatch[]; macros: Minimatch[]; detailed?: string[]; smartExcluded: string[]; macro: boolean; callbacks: boolean; legacy: boolean }>();
   get skipInactive() { return vscode.workspace.getConfiguration('dynsight').get<boolean>('skipInactive', true); }
-  get analyzeCallbacks() { return (vscode.workspace.workspaceFolders ?? []).some(folder => { const scope = this.scope(folder); return scope.detailed !== undefined ? scope.detailed.length > 0 : scope.legacy && vscode.workspace.getConfiguration('dynsight', folder.uri).get<boolean>('analyzeCallbacks', true); }); }
+  get analyzeCallbacks() { return (vscode.workspace.workspaceFolders ?? []).some(folder => { const scope = this.scope(folder); return scope.macro && (scope.detailed !== undefined ? scope.detailed.length > 0 : scope.legacy && scope.callbacks); }); }
   private startWorker() {
     const assets = path.join(this.extensionPath, 'dist');
     const worker = new Worker(path.join(assets, 'analysis-worker.cjs'), { workerData: { assets } });
@@ -105,8 +105,9 @@ export class WorkspaceIndex implements vscode.Disposable {
           inputs.every(([uri,version]:[string,number])=>this.rawVersions.get(uri)===version)){
           for(const file of files){
             const current=this.index.files.get(file.uri);if(!current)continue;
-            const known=new Set(current.references.map(ref=>ref.id)),added=file.references.filter((ref:FileAnalysis['references'][number])=>!known.has(ref.id));
-            this.index.update({...current,...file,references:added.length?[...current.references,...added]:current.references});
+            const updates=new Map<string,FileAnalysis['references'][number]>(file.references.map((ref:FileAnalysis['references'][number])=>[ref.id,ref]));
+            const references=current.references.map(ref=>{const update=updates.get(ref.id);updates.delete(ref.id);return update??ref;});
+            this.index.update({...current,...file,references:[...references,...updates.values()]});
           }
           this.basicRevision=this.revision;
           this.callbackProgress=undefined;
@@ -154,9 +155,10 @@ export class WorkspaceIndex implements vscode.Disposable {
       vscode.workspace.onDidChangeTextDocument(event => { if (event.contentChanges.length) this.schedule(event.document.uri, 'editor-change'); }),
       vscode.workspace.onDidCloseTextDocument(document => this.schedule(document.uri, 'editor-close')),
       vscode.workspace.onDidChangeConfiguration(event => {
-        const settings = ['skipInactive', 'include', 'exclude', 'macroExpansionFolders', 'detailedAnalysisFolders'].filter(key => event.affectsConfiguration(`dynsight.${key}`));
+        const affects = (key: string) => event.affectsConfiguration(`dynsight.${key}`) || event.affectsConfiguration(`cRelation.${key}`);
+        const settings = ['skipInactive', 'include', 'exclude', 'macroExpansionFolders', 'detailedAnalysisFolders', 'smartAnalysis.include', 'smartAnalysis.exclude', 'smartAnalysis.macro'].filter(affects);
         if (settings.length) { this.sourceChanged.fire('configuration'); void this.reconcile(); }
-        else if (event.affectsConfiguration('dynsight.analyzeCallbacks')) {
+        else if (affects('analyzeCallbacks')) {
           this.cancelActiveAnalysis(); this.analysisPaused = false; this.scopes.clear();
           this.sourceChanged.fire('configuration'); this.revision++;
           void (async () => { if (this.storagePath) await this.initCache(); await Promise.all([...this.index.files.keys()].map(uri=>this.enqueue(vscode.Uri.parse(uri)))); await this.derive(); })();
@@ -168,13 +170,13 @@ export class WorkspaceIndex implements vscode.Disposable {
   }
   get analysisKey() {
     return createHash('sha256').update(JSON.stringify({ analysisVersion: ANALYSIS_CACHE_VERSION, schema: 2, remote: vscode.env.remoteName ?? '', skip: this.skipInactive, callbacks: this.analyzeCallbacks,
-      folders: (vscode.workspace.workspaceFolders ?? []).map(folder => { const scope = this.scope(folder); return [folder.uri.toString(), scope.include, scope.exclude, scope.macros.map(m => m.pattern), scope.detailed, scope.legacy]; }) })).digest('hex');
+      folders: (vscode.workspace.workspaceFolders ?? []).map(folder => { const scope = this.scope(folder); return [folder.uri.toString(), scope.include, scope.exclude, scope.macros.map(m => m.pattern), scope.detailed, scope.legacy, scope.smartExcluded, scope.macro, scope.callbacks]; }) })).digest('hex');
   }
   private options(uri: vscode.Uri) {
     const folder = vscode.workspace.getWorkspaceFolder(uri)!;
     const scope = this.scope(folder);
     const policy = resolveAnalysisPolicy(vscode.workspace.asRelativePath(uri, false), scope.detailed, scope.legacy ?
-      { macroFolders: scope.macros.map(matcher => matcher.pattern), analyzeCallbacks: vscode.workspace.getConfiguration('dynsight', folder.uri).get<boolean>('analyzeCallbacks', true) } : undefined, process.platform === 'win32');
+      { macroFolders: scope.macros.map(matcher => matcher.pattern), analyzeCallbacks: scope.callbacks } : undefined, process.platform === 'win32', scope.smartExcluded, scope.macro);
     return { skip: this.skipInactive, ...policy };
   }
   private async discover() {
@@ -291,13 +293,13 @@ export class WorkspaceIndex implements vscode.Disposable {
     const key = folder.uri.toString();
     let value = this.scopes.get(key);
     if (!value) {
-      const config = vscode.workspace.getConfiguration('dynsight', folder.uri);
+      const config = analysisConfiguration(vscode.workspace.getConfiguration('dynsight', folder.uri), vscode.workspace.getConfiguration('cRelation', folder.uri));
       const include = config.get<string[]>('include', []), exclude = [...builtInExcludes, ...config.get<string[]>('exclude', [])];
       const match = (pattern: string) => new Minimatch(pattern, { dot: true, nonegate: true, nocomment: true, noext: true, nocase: process.platform === 'win32' });
       const explicit = (key: string) => { const entry = config.inspect?.(key); return !!entry && [entry.globalValue, entry.workspaceValue, entry.workspaceFolderValue].some(value => value !== undefined); };
-      const detailed = explicit('detailedAnalysisFolders') ? config.get<string[]>('detailedAnalysisFolders', []) : undefined;
+      const smart = smartAnalysisScope(config), detailed = smart.include;
       const legacy = this.legacyRoots.has(key) || explicit('macroExpansionFolders') || explicit('analyzeCallbacks');
-      value = { detailed, legacy, include, exclude, included: include.map(match), excluded: exclude.map(match), macros: config.get<string[]>('macroExpansionFolders', ['**']).map(match) };
+      value = { detailed, smartExcluded: smart.exclude, macro: config.get<boolean>('smartAnalysis.macro', true), callbacks: config.get<boolean>('analyzeCallbacks', true), legacy, include, exclude, included: include.map(match), excluded: exclude.map(match), macros: config.get<string[]>('macroExpansionFolders', ['**']).map(match) };
       this.scopes.set(key, value);
     }
     return value;

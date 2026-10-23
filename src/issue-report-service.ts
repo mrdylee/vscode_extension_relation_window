@@ -5,6 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { DiagnosticHistory, collectHostLogs } from './diagnostic-history';
 import { createIssueReport, reportFileCounts, statusKind, ISSUE_URL } from './issue-report';
+import { analysisConfiguration, smartAnalysisScope } from './analysis-policy';
 
 export function registerIssueReporting(context: vscode.ExtensionContext, workspace: WorkspaceIndex, view: RelationView) {
   const history = new DiagnosticHistory(context.storageUri?.scheme === 'file' ? path.join(context.storageUri.fsPath, 'diagnostics') : undefined);
@@ -22,7 +23,7 @@ export function registerIssueReporting(context: vscode.ExtensionContext, workspa
         lastRebuild: rebuild ? { number: rebuild.number, at: rebuild.at, finishedAt: rebuild.finishedAt,
           reason: rebuild.reason, outcome: rebuild.outcome,
           files: reportFileCounts(rebuild.files),
-          settings: rebuild.settings?.filter(key => ['skipInactive', 'include', 'exclude', 'macroExpansionFolders', 'detailedAnalysisFolders'].includes(key)) } : undefined,
+          settings: rebuild.settings?.filter(key => ['skipInactive', 'include', 'exclude', 'macroExpansionFolders', 'detailedAnalysisFolders', 'smartAnalysis.include', 'smartAnalysis.exclude', 'smartAnalysis.macro'].includes(key)) } : undefined,
         lastSourceEvent: index.lastSourceEvent ? { at: index.lastSourceEvent.at, kind: index.lastSourceEvent.kind } : undefined } : undefined });
   };
   let lastTransition = '';
@@ -48,8 +49,8 @@ export function registerIssueReporting(context: vscode.ExtensionContext, workspa
     }
     const task = (async () => {
       const scopes = (vscode.workspace.workspaceFolders ?? []).map(folder => {
-        const config = vscode.workspace.getConfiguration('dynsight', folder.uri);
-        const macros = config.get<string[]>('detailedAnalysisFolders', config.get<string[]>('macroExpansionFolders', ['**']));
+        const config = analysisConfiguration(vscode.workspace.getConfiguration('dynsight', folder.uri), vscode.workspace.getConfiguration('cRelation', folder.uri));
+        const macros = config.get<boolean>('smartAnalysis.macro', true) ? smartAnalysisScope(config).include ?? config.get<string[]>('macroExpansionFolders', []) : [];
         return { include: config.get<string[]>('include', []).length, exclude: config.get<string[]>('exclude', []).length,
           macroMode: !macros.length ? 'none' as const : macros.includes('**') ? 'all' as const : 'selected' as const, macroPatterns: macros.length };
       });

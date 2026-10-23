@@ -79,6 +79,23 @@ test('adding and removing an explicit legacy callback setting refreshes root pol
   adapter.getConfiguration=original;configuration.fire({affectsConfiguration:name=>name==='dynsight.analyzeCallbacks'});await bounded(workspace.whenIdle());
   assert.equal(workspace.analyzeCallbacks,false);assert.equal(workspace.diagnostics.worker.counts.programs,0);
 });
+test('Smart Analysis scope and Macro switch refresh local stages without dropping basic files',async t=>{
+  const app=uri('App/main.c'),generated=uri('App/generated/main.c');
+  const source='typedef void(*CB)(void);void target(void){}void run(void){CB cb=target;cb();}';
+  const {workspace,adapter,configuration}=fixture(t,[app,generated],{newWorkspace:true,sources:new Map([[app.toString(),source],[generated.toString(),source]])});
+  await workspace.ready;await bounded(workspace.whenIdle());
+  const values=new Map([['smartAnalysis.include',['App/**']],['smartAnalysis.exclude',['App/generated/**']],['smartAnalysis.macro',true]]);
+  adapter.getConfiguration=()=>({get:(key,fallback)=>values.get(key)??fallback,inspect:key=>({workspaceValue:values.get(key)})});
+  configuration.fire({affectsConfiguration:name=>name==='dynsight.smartAnalysis.include'});await bounded(workspace.whenIdle());
+  assert.equal(workspace.index.files.size,2);assert.equal(workspace.analyzeCallbacks,true);
+  assert.equal(workspace.index.files.get(app.toString()).analysisPolicy.propagateCallbacks,true);
+  assert.equal(workspace.index.files.get(generated.toString()).analysisPolicy.propagateCallbacks,false);
+  const key=workspace.analysisKey;
+  values.set('smartAnalysis.macro',false);configuration.fire({affectsConfiguration:name=>name==='dynsight.smartAnalysis.macro'});await bounded(workspace.whenIdle());
+  assert.equal(workspace.analyzeCallbacks,false);assert.notEqual(workspace.analysisKey,key);
+  assert.equal(workspace.index.files.get(app.toString()).analysisPolicy.expandMacros,false);
+  assert.equal(workspace.index.files.size,2);
+});
 
 test('disk cache restores unchanged startup without parses or relationship passes; one edit reparses one file', async t => {
   const storage = await mkdtemp(path.join(os.tmpdir(), 'dynsight-workspace-cache-'));
@@ -919,4 +936,20 @@ test('basic relation messages cannot replace a newer source or policy generation
   workspace.worker.emit('error',new Error('reviewed Worker failure'));const fatal=workspace.status;
   workspace.worker.emit('message',message);assert.equal(workspace.index.files.get(file.toString()),current);assert.equal(workspace.status,fatal);
   workspace.activeAnalysis=undefined;
+});
+test('basic macro bindings replace raw reference metadata before detail and remain after Stop',async t=>{
+  const header=uri('a.h'),other=uri('b.h'),main=uri('macro-first.c');
+  const sources=new Map([[header.toString(),'#define CHECK_FAULT1(x) ((x)>0)'],[other.toString(),'#define CHECK_FAULT1(x) ((x)<0)'],
+    [main.toString(),'#include "a.h"\nint run(int x){'+'CHECK_FAULT1(x);'.repeat(2000)+'return x;}']]);
+  const {workspace}=fixture(t,[header,other,main],{detailedFolders:['**'],sources});let before;
+  const subscription=workspace.diagnosticsChanged.event(()=>{
+    if(before||workspace.diagnostics.worker?.phase!=='macros')return;
+    before=workspace.index.files.get(main.toString()).references.filter(ref=>ref.name==='CHECK_FAULT1');workspace.stopAnalysis();
+  });t.after(()=>subscription.dispose());
+  await workspace.ready;await bounded(workspace.whenIdle());
+  assert.ok(before?.length);assert.ok(before.every(ref=>ref.macroIds?.length===1&&ref.macroIds[0].startsWith(header.toString()+'#')));
+  assert.equal(new Set(before.map(ref=>ref.id)).size,before.length,'metadata updates replace existing uses instead of duplicating them');
+  const after=workspace.index.files.get(main.toString()).references.filter(ref=>ref.name==='CHECK_FAULT1');
+  assert.ok(after.length);assert.ok(after.every(ref=>ref.macroIds?.length===1&&ref.macroIds[0].startsWith(header.toString()+'#')));
+  assert.equal(workspace.basicReady,true);
 });

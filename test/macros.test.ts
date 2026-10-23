@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { createAnalyzer } from '../src/analyzer';
 import { RelationIndex } from '../src/relations';
+import { MacroExpander } from '../src/macro-expansion';
+import { tokenizeC, locationIn } from '../src/c-tokens';
+import { outsideBranches } from '../src/preprocessor-branches';
 
 let analyzer: Awaited<ReturnType<typeof createAnalyzer>>;
 before(async () => { analyzer = await createAnalyzer(path.resolve('node_modules/web-tree-sitter/web-tree-sitter.wasm'), path.resolve('node_modules/tree-sitter-c/tree-sitter-c.wasm')); });
@@ -13,6 +16,157 @@ function project(sources: Record<string, string>) {
   return index;
 }
 const calls = (index: RelationIndex, name = 'run') => index.relations(index.symbols().find(s => s.name === name && s.kind === 'function' && s.definition)!.id, 'callees');
+
+test('conditional redefinitions retain exactly the old definition outside the update',()=>{
+  const states=Array.from({length:27},(_,n)=>['A','B','C'].flatMap((key,i)=>{
+    const value=Math.floor(n/3**i)%3;return value?[{key,value:value===2,condition:key}]:[];
+  }));
+  for(const current of states)for(const update of states){
+    const outside=outsideBranches(current,update);
+    for(let assignment=0;assignment<8;assignment++){
+      const matches=(branches:typeof current)=>branches.every(branch=>branch.value===!!(assignment&(1<<['A','B','C'].indexOf(branch.key))));
+      assert.equal(outside.some(matches),matches(current)&&!matches(update));
+    }
+  }
+});
+
+test('repeated conditional macro choices do not generate contradictory alternatives', () => {
+  const source='#if BOARD\n#define PICK() first()\n#else\n#define PICK() second()\n#endif\nvoid first(void){}void second(void){}void run(void){'+'PICK();'.repeat(6)+'}';
+  const index=project({'repeated.c':source});
+  assert.ok([...index.files.values()].every(file=>!file.issues.some(issue=>/alternative limit/.test(issue))));
+  assert.deepEqual(calls(index).map(group=>group.name).sort(),['first','second']);
+  assert.ok(calls(index).every(group=>!group.sites.some(site=>site.conditions.includes('#if BOARD')&&site.conditions.includes('else of #if BOARD'))));
+  const definitions=analyzer.analyze('file:///choices.c',source).preprocessor!.flatMap(event=>event.kind==='define'?[event.macro]:[]);
+  const expander=new MacroExpander(name=>definitions.filter(macro=>macro.name===name).map(macro=>({macro,branches:macro.branches??[]})));
+  const input='PICK();'.repeat(6);
+  assert.equal(expander.expand(tokenizeC(input,locationIn(input,'file:///choices.c'))).length,2);
+});
+
+test('43 uses of one conditional numeric constant need only two reparses, including the undefined path',async()=>{
+  const parser=await createAnalyzer(path.resolve('node_modules/web-tree-sitter/web-tree-sitter.wasm'),path.resolve('node_modules/tree-sitter-c/tree-sitter-c.wasm'));
+  const source='#if FEATURE\n#define MACRO_0052 1\n#endif\nvoid sink(int);void run(void){'+'sink(MACRO_0052);'.repeat(43)+'}';
+  const raw=parser.analyze('file:///repeated-constant.c',source),calls=parser.calls;let reparses=0;
+  parser.calls=(...args)=>{reparses++;return calls(...args);};
+  const [result]=parser.derive([raw]);
+  assert.equal(raw.programs?.length,1);
+  assert.equal(reparses,2);
+  assert.equal(result.programs?.length,2);
+  assert.ok(!result.issues.some(issue=>/alternative limit/.test(issue)));
+  for(const program of result.programs!){
+    const kinds=new Set(program.body.flatMap(statement=>statement.kind==='expression'&&statement.value.kind==='call'?statement.value.args.map(arg=>arg.kind):[]));
+    assert.equal(kinds.size,1,'each program must keep a consistent defined or undefined choice at all 43 sites');
+  }
+  parser.derive([raw]);assert.equal(reparses,2,'warm analysis does not reparse unchanged alternatives');
+});
+
+test('repeated numeric macro indices preserve their correlated callback targets',()=>{
+  const source='#if BOARD\n#define PICK 0\n#else\n#define PICK 1\n#endif\ntypedef void(*CB)(void);void first(void){}void wrongA(void){}void wrongB(void){}void last(void){}void run(void){CB table[2][2]={{first,wrongA},{wrongB,last}};table[PICK][PICK]();}';
+  const index=project({'numeric-indices.c':source});
+  assert.deepEqual(calls(index).filter(group=>group.callKind==='inferred').map(group=>group.name).sort(),['first','last']);
+});
+test('conditional programs share unchanged immutable statements without merging variant choices or local identities',()=>{
+  const source='#if BOARD\n#define PICK 0\n#else\n#define PICK 1\n#endif\nint result;void sink(int);void target(void){}void run(void){result=7;int local=PICK;sink(local);}';
+  const raw=analyzer.analyze('file:///shared-ir.c',source),[result]=analyzer.derive([raw]);
+  const id=raw.symbols.find(symbol=>symbol.name==='run')!.id;
+  const programs=result.programs!.filter(program=>program.id===id);
+  assert.equal(programs.length,2);
+  assert.equal(programs[0].body[0],programs[1].body[0],'unchanged statements reuse the same immutable structure');
+  assert.notEqual(programs[0].body[1],programs[1].body[1],'alternative assignments remain separate');
+  assert.notEqual(programs[0].locals[0].id,programs[1].locals[0].id,'variant local storage remains isolated');
+});
+
+test('equivalent expansion states merge only when token provenance also agrees',()=>{
+  const raw=analyzer.analyze('file:///origin.c','#define PICK() target()\n'),macro=raw.preprocessor!.flatMap(event=>event.kind==='define'?[event.macro]:[])[0];
+  const input='PICK();',tokens=tokenizeC(input,locationIn(input,'file:///use.c'));
+  const expand=(other:typeof macro)=>new MacroExpander(name=>name==='PICK'?[{macro,branches:[]},{macro:other,branches:[]}]:[]).expand(tokens);
+  assert.equal(expand(macro).length,1);
+  assert.equal(expand({...macro,location:{...macro.location,uri:'file:///other-origin.c'}}).length,2);
+});
+
+test('ambiguous include candidates preserve every header definition', () => {
+  const index=project({'main.c':'#include "choice.h"\nvoid first(void){}void second(void){}void run(void){PICK();}', 'a/choice.h':'#define PICK() first()', 'b/choice.h':'#define PICK() second()'});
+  assert.deepEqual(calls(index).map(group=>group.name).sort(),['first','second']);
+});
+test('multiple macros from seven header candidates retain mutually exclusive choices',()=>{
+  const targets=Array.from({length:7},(_,a)=>Array.from({length:7},(_,b)=>`void f${a}_${b}(void){}`).join('')).join('');
+  const sources:Record<string,string>={'main.c':'#define JOIN_(a,b) a##b\n#define JOIN(a,b) JOIN_(a,b)\n#include "choice.h"\n'+targets+'void run(void){JOIN(A,B)();}'};
+  for(let n=0;n<7;n++)sources[`header${n}/choice.h`]=`#define A f${n}_\n#define B ${n}`;
+  const index=project(sources);
+  assert.deepEqual(calls(index).map(group=>group.name).sort(),Array.from({length:7},(_,n)=>`f${n}_${n}`));
+  assert.ok([...index.files.values()].every(file=>!file.issues.some(issue=>/alternative limit/.test(issue))));
+});
+test('macro expansion retains split conditional statements and callback paths',()=>{
+  for(const prefix of ['#if BOARD\nif(guard){SET(second);} else\n#endif\n{SET(third);}', '#if BOARD\nif(guard)\n#else\nif(other)\n#endif\n{SET(second);}']){
+    const source='#define SET(value) cb=value\ntypedef void(*CB)(void);void first(void){}void second(void){}void third(void){}void run(int guard,int other){CB cb=first;\n'+prefix+'\ncb();}';
+    const index=project({'split-macro.c':source});
+    assert.ok([...index.files.values()].every(file=>!file.issues.some(issue=>/syntax|missing/.test(issue))));
+    const targets=calls(index).filter(group=>group.callKind==='inferred').map(group=>group.name).sort();
+    assert.deepEqual(targets,prefix.includes('else\n#endif')?['second','third']:['first','second']);
+  }
+});
+
+test('different macros and argument prescan share one conditional choice', () => {
+  const source='#define WRAP(x,y) x;y\n#if BOARD\n#define A() first()\n#define B() first()\n#else\n#define A() second()\n#define B() second()\n#endif\nvoid first(void){}void second(void){}void run(void){'+'WRAP(A(),B());'.repeat(6)+'}';
+  const index=project({'arguments.c':source});
+  assert.ok([...index.files.values()].every(file=>!file.issues.some(issue=>/alternative limit/.test(issue))));
+  assert.deepEqual(calls(index).map(group=>group.name).sort(),['first','second']);
+});
+
+test('unchanged condition environments correlate separate directive groups',()=>{
+  const definitions=Array.from({length:6},(_,n)=>`#if BOARD\n#define M${n}() first()\n#else\n#define M${n}() second()\n#endif\n`).join('');
+  const source=definitions+'void first(void){}void second(void){}void run(void){'+Array.from({length:6},(_,n)=>`M${n}();`).join('')+'}';
+  const raw=analyzer.analyze('file:///separate-groups.c',source),cold=analyzer.derive([raw]),warm=analyzer.derive([raw]);
+  assert.ok(!cold[0].issues.some(issue=>/alternative limit/.test(issue)));
+  assert.equal(warm[0],cold[0],'warm analysis reuses the same bounded expansion');
+});
+
+test('genuinely independent conditions still report the 32-alternative bound',()=>{
+  const definitions=Array.from({length:6},(_,n)=>`#if BOARD${n}\n#define M${n}() first()\n#else\n#define M${n}() second()\n#endif\n`).join('');
+  const source=definitions+'void first(void){}void second(void){}void run(void){'+Array.from({length:6},(_,n)=>`M${n}();`).join('')+'}';
+  const [result]=analyzer.derive([analyzer.analyze('file:///independent-groups.c',source)]);
+  assert.ok(result.issues.some(issue=>/alternative limit/.test(issue)));
+});
+
+test('unused conditional definitions do not consume expansion alternatives',()=>{
+  const definitions=Array.from({length:40},(_,n)=>`#if FLAG${n}\n#define UNUSED ${n}\n#endif\n`).join('');
+  const index=project({'unused.c':definitions+'void target(void){}void run(void){target();}'});
+  assert.ok([...index.files.values()].every(file=>!file.issues.some(issue=>/alternative limit/.test(issue))));
+  assert.deepEqual(calls(index).map(group=>group.name),['target']);
+});
+
+test('unindexed includes keep later condition environments independent',()=>{
+  const source='#define JOIN_(a,b) a##b\n#define JOIN(a,b) JOIN_(a,b)\n#if BOARD\n#define A first\n#else\n#define A second\n#endif\n#include "unavailable.h"\n#if BOARD\n#define B One\n#else\n#define B Two\n#endif\nvoid firstOne(void){}void firstTwo(void){}void secondOne(void){}void secondTwo(void){}void run(void){JOIN(A,B)();}';
+  const index=project({'unknown-include.c':source});
+  assert.deepEqual(calls(index).map(group=>group.name).sort(),['firstOne','firstTwo','secondOne','secondTwo']);
+});
+
+test('changed or opaque condition dependencies are not treated as an unchanged build choice',()=>{
+  for(const [prefix,between,condition] of [
+    ['#define BOARD 1\n','#undef BOARD\n#define BOARD 0\n','BOARD'],
+    ['#define BOARD FLAG\n','#define FLAG 0\n','BOARD'],
+    ['','','__COUNTER__'],
+    ['','#pragma pop_macro("BOARD")\n','BOARD']
+  ]){
+    const source=prefix+'#define JOIN_(a,b) a##b\n#define JOIN(a,b) JOIN_(a,b)\n'+`#if ${condition}\n#define A first\n#else\n#define A second\n#endif\n`+between+`#if ${condition}\n#define B One\n#else\n#define B Two\n#endif\n`+'void firstOne(void){}void firstTwo(void){}void secondOne(void){}void secondTwo(void){}void run(void){JOIN(A,B)();}';
+    const index=project({'changed-condition.c':source});
+    assert.deepEqual(calls(index).map(group=>group.name).sort(),['firstOne','firstTwo','secondOne','secondTwo']);
+  }
+});
+
+test('conditional undef and later redefinitions preserve the complementary definition', () => {
+  const source='#define PICK() first()\n#if BOARD\n#undef PICK\n#define PICK() second()\n#endif\nvoid first(void){}void second(void){}void third(void){}void run(void){PICK();\n#undef PICK\n#define PICK() third()\nPICK();}';
+  const index=project({'redefined.c':source});
+  assert.deepEqual(calls(index).map(group=>group.name).sort(),['first','second','third']);
+  const third=calls(index).find(group=>group.name==='third')!;
+  assert.ok(third.sites.every(site=>site.location.start===source.lastIndexOf('PICK();')));
+});
+
+test('complementary condition paths do not duplicate a macro definition reference',()=>{
+  const index=project({'definition-reference.c':'#define PICK() first()\n#if A\n#if B\n#define PICK() second()\n#endif\n#endif\nvoid first(void){}void second(void){}void run(void){PICK();}'});
+  const reference=[...index.files.values()].flatMap(file=>file.references).find(ref=>ref.name==='PICK'&&ref.macroIds?.length)!;
+  assert.equal(reference.macroIds!.length,2);
+  assert.equal(new Set(reference.macroIds).size,2);
+});
 
 test('Stop interrupts macro expansion without retaining a cancelled macro cache', () => {
   const text = '#define CALL target()\nvoid target(void){}void run(void){' + 'CALL;'.repeat(800) + '}';

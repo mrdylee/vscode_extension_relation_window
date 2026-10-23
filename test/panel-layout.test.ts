@@ -41,6 +41,21 @@ test('function-name copying accepts Unicode snapshots and reports over-limit fai
     assert.equal(h.copied.length,1);assert.equal(replies.at(-1)?.requestId,'too-long');assert.equal(replies.at(-1)?.ok,false);
   }finally{h.view.dispose();}
 });
+test('macro candidate definitions use the current validated location registry',async()=>{
+  const h=harness(),main='file:///main.c',a='file:///a.h',b='file:///b.h';
+  const location=(uri:string)=>({uri,start:0,end:5,line:0,column:0,endLine:0,endColumn:5});
+  const macro=(id:string,uri:string)=>({id,name:'CHECK',kind:'macro' as const,definition:true,pointer:false,storage:'global' as const,conditions:[],location:location(uri),extent:location(uri)});
+  const first=macro('macro-a',a),second=macro('macro-b',b),run={...macro('run',main),kind:'function' as const,name:'run'};
+  for(const symbol of [first,second])h.index.update({uri:symbol.location.uri,text:'#define CHECK(x) x',symbols:[symbol],references:[],includes:[],issues:[]});
+  h.index.update({uri:main,text:'void run(void){CHECK(1);}',symbols:[run],references:[{id:'macro-use',name:'CHECK',kind:'call',access:'read',functionId:run.id,ownerId:run.id,location:location(main),conditions:[],macroIds:[first.id,second.id]}],includes:[],issues:[]});
+  h.view.root={id:run.id,name:run.name,uri:main};h.view.state.mode='callees';
+  try{
+    h.view.refresh();assert.equal(h.view.state.graph.root.children.length,1);
+    assert.equal(h.view.locations.get(first.id).location.uri,a);assert.equal(h.view.locations.get(second.id).location.uri,b);
+    h.index.remove(b);h.view.refresh();assert.equal(h.view.locations.has(second.id),false);
+    await h.view.handleMessage({type:'open',id:second.id});
+  }finally{h.view.dispose();}
+});
 
 test('status-only refresh preserves the graph while source and graph settings invalidate it', () => {
   const h = harness(), uri = 'file:///graph-refresh.c';

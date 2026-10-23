@@ -21,7 +21,8 @@ export async function run() {
     }
     return originalFetch(input, init);
   };
-  await vscode.workspace.getConfiguration('dynsight').update('analyzeCallbacks',true,vscode.ConfigurationTarget.Workspace);
+  await vscode.workspace.getConfiguration('dynsight').update('smartAnalysis.macro',true,vscode.ConfigurationTarget.Workspace);
+  await vscode.workspace.getConfiguration('dynsight').update('smartAnalysis.include',['**'],vscode.ConfigurationTarget.Workspace);
   const api = await ext.activate();
   const previousClipboard=await vscode.env.clipboard.readText();
   try{for(const name of ['product_network_act_write_nv_data','task_함수']){await api.view.handleMessage({type:'copyFunctionName',requestId:'native-copy',name});assert.equal(await vscode.env.clipboard.readText(),name);}}
@@ -47,7 +48,7 @@ export async function run() {
   assert.ok((await vscode.commands.getCommands()).includes('dynsight.help'), 'offline help command registered');
   assert.ok((await vscode.commands.getCommands()).includes('dynsight.selectCopilotModel'), 'Copilot model picker command registered');
   assert.equal(vscode.workspace.getConfiguration('dynsight').get('copilotModel'), '', 'model choice is visible in Settings');
-  assert.equal(vscode.workspace.getConfiguration('dynsight').get('copilotCallbacks'), false, 'AI requests are opt-in');
+  assert.equal(vscode.workspace.getConfiguration('dynsight').get('smartAnalysis.copilot'), false, 'AI requests are opt-in');
   assert.equal(api.workspace.index.files.size, 93, 'all files indexed beyond the document cache limit');
   assert.equal(api.workspace.diagnostics.index.cache.saved, 93, 'native workspace writes the saved index');
   assert.equal(api.workspace.diagnostics.index.rebuilds[0].reason, 'startup');
@@ -536,7 +537,7 @@ export async function run() {
   assert.deepEqual(api.view.state.graph.root.children.map((node: any) => node.name), ['changed_target']);
   const macroSettings = vscode.workspace.getConfiguration('dynsight');
   const indexedBeforePolicy = [...api.workspace.index.files.keys()].sort();
-  await macroSettings.update('macroExpansionFolders', ['control.c'], vscode.ConfigurationTarget.Workspace);
+  await macroSettings.update('smartAnalysis.include', ['control.c'], vscode.ConfigurationTarget.Workspace);
   await new Promise(resolve => setTimeout(resolve, 500)); await api.workspace.whenIdle();
   assert.deepEqual([...api.workspace.index.files.keys()].sort(), indexedBeforePolicy, 'macro folder policy does not change base source scope');
   assert.equal(api.workspace.index.files.get(macroUri.toString()).expandMacros, false);
@@ -549,15 +550,15 @@ export async function run() {
   assert.equal(unchecked.expandMacros, false, 'new source uses the current macro policy');
   assert.equal(unchecked.references.some((ref: any) => ref.expansion), false);
   assert.ok(unchecked.references.some((ref: any) => ref.name === 'leaf' && ref.kind === 'call'));
-  await macroSettings.update('macroExpansionFolders', ['macro-review.c'], vscode.ConfigurationTarget.Workspace);
+  await macroSettings.update('smartAnalysis.include', ['macro-review.c'], vscode.ConfigurationTarget.Workspace);
   await new Promise(resolve => setTimeout(resolve, 500)); await api.workspace.whenIdle();
   assert.equal(api.workspace.index.files.get(macroHeader.toString()).expandMacros, false);
   assert.ok(api.workspace.index.files.get(macroUri.toString()).references.some((ref: any) => ref.name === 'changed_target' && ref.expansion), 'selected source expands macros from unchecked headers');
-  await macroSettings.update('macroExpansionFolders', [], vscode.ConfigurationTarget.Workspace);
+  await macroSettings.update('smartAnalysis.include', [], vscode.ConfigurationTarget.Workspace);
   await new Promise(resolve => setTimeout(resolve, 500)); await api.workspace.whenIdle();
   assert.ok([...api.workspace.index.files.values()].every((file: any) => file.expandMacros === false && !file.references.some((ref: any) => ref.expansion)), 'empty macro scope disables expansion across the index');
   assert.ok(api.workspace.index.files.get(document.uri.toString()).references.some((ref: any) => ref.kind === 'call'), 'basic calls remain with expansion off');
-  await macroSettings.update('macroExpansionFolders', ['**'], vscode.ConfigurationTarget.Workspace);
+  await macroSettings.update('smartAnalysis.include', ['**'], vscode.ConfigurationTarget.Workspace);
   await new Promise(resolve => setTimeout(resolve, 500)); await api.workspace.whenIdle();
   assert.ok(api.workspace.index.files.get(macroUri.toString()).references.some((ref: any) => ref.name === 'changed_target' && ref.expansion), 'all-folder policy restores expansion automatically');
   await vscode.workspace.fs.delete(macroHeader);
@@ -576,7 +577,7 @@ export async function run() {
   assert.deepEqual(api.view.state.callback?.targets.map((s: any) => s.name), ['pointer_target'],
     'selecting a callback member exposes its inferred target');
   for (const enabled of [false, true]) {
-    await vscode.workspace.getConfiguration('dynsight').update('analyzeCallbacks', enabled, vscode.ConfigurationTarget.Workspace);
+    await vscode.workspace.getConfiguration('dynsight').update('smartAnalysis.macro', enabled, vscode.ConfigurationTarget.Workspace);
     await new Promise(resolve => setTimeout(resolve, 100)); await api.workspace.whenIdle();
     api.view.track(pointerEditor, true); api.view.refresh();
     assert.equal(api.view.state.analyzeCallbacks, enabled);
@@ -627,7 +628,7 @@ export async function run() {
   const registeredSource = 'void registered_target(void){}struct Registered{void(*cb_preprocess)(void);};' +
     'static const struct Registered bbb={.cb_preprocess=registered_target};' +
     'void registered_run(void){const struct Registered *ccc=&bbb;ccc->cb_preprocess();}';
-  await vscode.workspace.getConfiguration('dynsight').update('analyzeCallbacks', false, vscode.ConfigurationTarget.Workspace);
+  await vscode.workspace.getConfiguration('dynsight').update('smartAnalysis.macro', false, vscode.ConfigurationTarget.Workspace);
   await vscode.workspace.fs.writeFile(registeredUri, Buffer.from(registeredSource));
   await new Promise(resolve => setTimeout(resolve, 500)); await api.workspace.whenIdle();
   const registeredDocument = await vscode.workspace.openTextDocument(registeredUri);
@@ -640,7 +641,7 @@ export async function run() {
   await api.view.handleMessage({ type: 'choose', id: api.view.state.callback.targets[0].id });
   assert.equal(api.view.state.graph.root.name, 'registered_target');
   await vscode.workspace.fs.delete(registeredUri);
-  await vscode.workspace.getConfiguration('dynsight').update('analyzeCallbacks', true, vscode.ConfigurationTarget.Workspace);
+  await vscode.workspace.getConfiguration('dynsight').update('smartAnalysis.macro', true, vscode.ConfigurationTarget.Workspace);
   await new Promise(resolve => setTimeout(resolve, 500)); await api.workspace.whenIdle();
   const sparseUri = vscode.Uri.joinPath(root, 'callback-effects.c');
   const sparseSource = 'typedef unsigned int uint32_t;typedef void(*SparseCB)(void);void sparse_target(void){}' +

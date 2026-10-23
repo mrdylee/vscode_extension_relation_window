@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { transformSync } from 'esbuild';
 import * as reporting from '../src/issue-report';
+import * as analysisPolicy from '../src/analysis-policy';
 
 // Exercise the real adapter; only native VS Code UI/clipboard/browser APIs are substituted.
 const code = transformSync(readFileSync('src/issue-report-service.ts', 'utf8'), { loader: 'ts', format: 'cjs' }).code;
@@ -30,7 +31,7 @@ function fixture() {
   const module = { exports: {} as any };
   const require = createRequire(process.cwd() + '/package.json');
   runInNewContext(code, { module, exports: module.exports, process, Buffer, setInterval: () => ({ unref() {} }), clearInterval() {},
-    require: (name: string) => name === 'vscode' ? vscode : name === './issue-report' ? reporting : name === './diagnostic-history' ? history : require(name) });
+    require: (name: string) => name === 'vscode' ? vscode : name === './issue-report' ? reporting : name === './diagnostic-history' ? history : name === './analysis-policy' ? analysisPolicy : require(name) });
   const emitter = { event: () => ({ dispose() {} }) };
   const sample = { at: Date.now(), heapUsed: 100, heapLimit: 1000, external: 0 };
   module.exports.registerIssueReporting({ subscriptions: [], extension: { packageJSON: { version: '0.1.40' } } }, {

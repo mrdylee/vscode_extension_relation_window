@@ -45,10 +45,11 @@ export class RelationView implements vscode.Disposable {
     });
     this.readPreferences();
     this.preferences = vscode.workspace.onDidChangeConfiguration(event => {
-      if (event.affectsConfiguration('dynsight.calleeSort') || event.affectsConfiguration('dynsight.contextLayout') || event.affectsConfiguration('dynsight.includeFunctionArguments') || event.affectsConfiguration('dynsight.analyzeCallbacks')) {
+      const analysisChanged = ['analyzeCallbacks', 'detailedAnalysisFolders', 'smartAnalysis.macro', 'smartAnalysis.include', 'smartAnalysis.exclude'].some(key => event.affectsConfiguration(`dynsight.${key}`) || event.affectsConfiguration(`cRelation.${key}`));
+      if (event.affectsConfiguration('dynsight.calleeSort') || event.affectsConfiguration('dynsight.contextLayout') || event.affectsConfiguration('dynsight.includeFunctionArguments') || analysisChanged) {
         const previousLayout = this.state.contextLayout;
         this.readPreferences();
-        if (event.affectsConfiguration('dynsight.analyzeCallbacks')) {
+        if (analysisChanged) {
           this.callbackFocus = undefined; this.state.callback = undefined;
           this.track(this.lastEditor, true);
         }
@@ -75,7 +76,7 @@ export class RelationView implements vscode.Disposable {
     this.state.contextLayout = layout === 'separate' || (typeof layout === 'string' && Object.hasOwn(panelAlignments, layout)) ? layout as ViewState['contextLayout'] : 'combined';
     this.state.callGraphDirection = config.get('callGraphDirection') === 'callees-left' ? 'callees-left' : 'callers-left';
     this.state.includeFunctionArguments = config.get('includeFunctionArguments') === true;
-    this.state.analyzeCallbacks = config.get('analyzeCallbacks', true);
+    this.state.analyzeCallbacks = this.workspace.analyzeCallbacks;
   }
   private applyPanelLayout(previousLayout?: ViewState['contextLayout']) {
     const layout = this.state.contextLayout, alignment = panelAlignments[layout];
@@ -184,6 +185,7 @@ export class RelationView implements vscode.Disposable {
     const visit = (node: GraphNode) => {
       this.nodes.set(node.key, node);
       if (node.symbolId) this.locations.set(node.symbolId, { location: node.location, label: node.name });
+      for (const definition of node.definitionCandidates ?? []) this.locations.set(definition.id, { location: definition.location, label: `Macro definition · ${node.name}` });
       for (const site of node.sites) {
         this.locations.set(site.id, { location: site.location, label: `${site.name} · ${site.argument ? `Function argument #${site.argument.position} via ${site.argument.callee}` : site.callKind === 'registered' && site.kind === 'reference' ? 'Registration' : site.kind}` });
         site.inference?.evidence.forEach((frame, i) => this.locations.set(site.id + ':evidence:' + i, { location: frame.location, label: frame.reason }));

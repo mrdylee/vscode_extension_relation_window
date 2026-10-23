@@ -16,7 +16,7 @@ export async function prepareUpgrade() {
   return false;
 }
 
-export async function migrateSettings(properties: Record<string, { scope?: string }>) {
+export async function migrateSettings(properties: Record<string, { scope?: string; included?: boolean }>) {
   const move = async (key: string, target: vscode.ConfigurationTarget, field: 'globalValue' | 'workspaceValue' | 'workspaceFolderValue', uri?: vscode.Uri) => {
     const previous = vscode.workspace.getConfiguration('cRelation', uri);
     const current = vscode.workspace.getConfiguration('dynsight', uri);
@@ -27,6 +27,9 @@ export async function migrateSettings(properties: Record<string, { scope?: strin
     await previous.update(key, undefined, target);
   };
   for (const [fullKey, schema] of Object.entries(properties)) {
+    // Hidden legacy analysis keys are read in place; VS Code rejects writes to
+    // excluded configuration properties. New Smart Analysis keys replace them.
+    if (schema.included === false) continue;
     const key = fullKey.slice('dynsight.'.length);
     await move(key, vscode.ConfigurationTarget.Global, 'globalValue');
     if (schema.scope !== 'application' && (vscode.workspace.workspaceFile || vscode.workspace.workspaceFolders?.length))

@@ -130,5 +130,14 @@ try {
  assert.equal(await page.locator('[data-node-name="second"] .badge').filter({hasText:'AI candidate'}).count(),1);
  assert.equal(await page.locator('[data-node-name="alternative"] .badge').filter({hasText:'AI candidate'}).count(),1);
  assert.equal(heldAnalysis.actionId,'ai-site','only the selected invocation is rechecked');
- assert.deepEqual(errors,[]);console.log('Scoped UI: fixed Stop, snapshot copy, manual target and AI comparison passed');
+ const definitions=['a','b'].map(id=>({id:`macro-${id}`,location:{...at,uri:`file:///project/${id}.h`,line:0},conditions:[]}));
+ const macro={...node,key:'run/macro',symbolId:undefined,name:'CHECK_FAULT1',kind:'macro',callKind:'macro',definitionCandidates:definitions,
+   sites:[{id:'macro-use',name:'CHECK_FAULT1',kind:'call',location:at,macroIds:definitions.map(value=>value.id),macroUncertain:true,conditions:[],ambiguous:true}],children:[],conditions:[]};
+ await dispatch({type:'state',state:{...state,graph:{root:{...state.graph.root,children:[macro]},truncated:false},diagnostics}});
+ await page.locator('[data-node-name="CHECK_FAULT1"] .node-title').press('Space');
+ await page.getByText('2 macro definition candidates',{exact:true}).waitFor();
+ await page.getByRole('button',{name:'/project/b.h:1',exact:true}).click();
+ await page.waitForFunction(()=>window.sent.some(message=>message.type==='open'&&message.id==='macro-b'));
+ assert.equal(await page.locator('[data-node-name="CHECK_FAULT1"]').count(),1);
+ assert.deepEqual(errors,[]);console.log('Scoped UI: fixed Stop, snapshot copy, manual target, AI comparison and macro definitions passed');
 } finally {await browser.close();server.close();}

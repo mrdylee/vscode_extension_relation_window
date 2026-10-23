@@ -177,7 +177,8 @@ export class RelationIndex {
       const target = this.byId.get(ref.targetId);
       return target ? [target] : [];
     }
-    if (ref.macroIds?.length) return ref.macroIds.map(id => this.byId.get(id)).filter((symbol): symbol is SymbolRecord => !!symbol);
+    if (ref.macroIds?.length) return [...ref.macroIds.map(id => this.byId.get(id)).filter((symbol): symbol is SymbolRecord => !!symbol),
+      ...(ref.macroUncertain ? this.resolve({ ...ref, macroIds: [], macroUncertain: false }) : [])];
     const macroIds = ref.macroIds ?? (this.files.get(ref.location.uri)?.projectScoped ? [] : undefined);
     const active = (symbol: SymbolRecord) => symbol.kind !== 'macro' || !macroIds || macroIds.includes(symbol.id);
     const here = this.byName.inFile(ref.name, ref.location.uri).filter(s => !s.memberOf && s.kind !== 'type' && active(s));
@@ -271,7 +272,12 @@ export class RelationIndex {
       const replaced = !ref.argument && ref.kind === 'call' && ai.sites.has(callsiteKey(ref));
       if (replaced && !candidates.length) continue;
       const candidateIds = candidates.map(s => s.id);
-      const ambiguous = ref.callKind === 'inferred' || !!ref.argument?.inferred || !!ref.inference?.incomplete || candidates.length > 1 || candidates.some(s => s.conditions.length > 0) || ref.conditions.length > 0;
+      const ambiguous = ref.callKind === 'inferred' || !!ref.argument?.inferred || !!ref.inference?.incomplete || !!ref.macroUncertain || candidates.length > 1 || candidates.some(s => s.conditions.length > 0) || ref.conditions.length > 0;
+      if (candidates.length > 1 && candidates.every(symbol => symbol.kind === 'macro')) {
+        const key = `macro:${ref.name}:${[...candidateIds].sort().join('|')}`;
+        const group = groups.get(key) ?? { key, name: ref.name, kind: 'macro' as const, callKind: 'macro' as const, sites: [], definitionCandidates: candidates };
+        group.sites.push({ ...ref, access: undefined, candidates: candidateIds, ambiguous }); groups.set(key, group); continue;
+      }
       for (const symbol of candidates.length ? candidates : [undefined]) {
         if (replaced && symbol?.kind === 'variable') continue;
         const callKind = ref.argument ? undefined : ref.indirect || symbol?.kind === 'variable' ? 'indirect'
@@ -317,7 +323,7 @@ export class RelationIndex {
       const conditional = candidates.some(s => s.conditions.length > 0);
       const headerStatic = candidates.some(s => s.storage === 'static' && s.location.uri !== ref.location.uri);
       group.sites.push({ ...ref, access: variable ? ref.access : undefined,
-          ambiguous: ref.callKind === 'inferred' || !!ref.argument?.inferred || !!ref.inference?.incomplete || (!!ref.argument && ref.conditions.length > 0) || candidates.length > 1 || conditional || headerStatic, candidates: candidates.map(s => s.id) });
+          ambiguous: ref.callKind === 'inferred' || !!ref.argument?.inferred || !!ref.inference?.incomplete || !!ref.macroUncertain || (!!ref.argument && ref.conditions.length > 0) || candidates.length > 1 || conditional || headerStatic, candidates: candidates.map(s => s.id) });
       groups.set(key, group);
     }
     return [...groups.values()].sort((a, b) => a.name.localeCompare(b.name));
@@ -336,6 +342,7 @@ export class RelationIndex {
         callKind: group?.callKind,
         direction: both && key !== 'root' ? direction as 'callers' | 'callees' : undefined,
         containerName: symbol?.containerName,
+        definitionCandidates: group?.definitionCandidates?.map(({ id, location, conditions }) => ({ id, location, conditions })),
         // Candidate IDs are resolver metadata; the view only needs ambiguity and actual sites.
         conditions: symbol?.conditions ?? [], sites: group?.sites.map(({ candidates, ...site }) => site) ?? [], children: [], cycle,
         expanded: false, ambiguous: group?.sites.some(s => s.ambiguous) ?? false };

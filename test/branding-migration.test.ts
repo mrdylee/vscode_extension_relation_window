@@ -74,6 +74,12 @@ test('failed settings writes leave legacy values intact', async () => {
   await assert.rejects(f.run.migrateSettings(properties), /read-only/);
   assert.deepEqual(f.get('cRelation', 'include', 1), ['Keep/**']);
 });
+test('hidden legacy analysis values remain readable in place without unsupported configuration writes', async () => {
+  const f=fixture();f.set('cRelation','analyzeCallbacks',2,false);f.failWrite();
+  await f.run.migrateSettings({'dynsight.analyzeCallbacks':{scope:'window',included:false}});
+  assert.equal(f.get('cRelation','analyzeCallbacks',2),false);
+  assert.equal(f.get('dynsight','analyzeCallbacks',2),undefined);
+});
 test('new installs proceed; legacy installs pause until explicitly removed', async () => {
   const f = fixture(); assert.equal(await f.run.prepareUpgrade(), true); assert.equal(f.calls.length, 0);
   f.legacy(true); assert.equal(await f.run.prepareUpgrade(), false); assert.deepEqual(f.calls, ['prompt']);

@@ -82,7 +82,7 @@ test('Worker applies macro folder policy without removing raw calls or unchecked
   } finally { await worker.terminate(); }
 });
 
-test('macro growth yields partial function arguments without exhausting a small Worker heap', async () => {
+test('independent macro growth yields partial function arguments without exhausting a small Worker heap', async () => {
   const worker = new Worker(path.resolve('dist/analysis-worker.cjs'), { workerData: { assets: path.resolve('dist') }, resourceLimits: { maxOldGenerationSizeMb: 128 } });
   const diagnostics = [];
   worker.on('message', message => { if (message.type === 'diagnostics') diagnostics.push(message.diagnostics); });
@@ -98,8 +98,10 @@ test('macro growth yields partial function arguments without exhausting a small 
   };
   let timer;
   try {
-    const sources = [['file:///api.h', '#if BOARD\n#define M(x) foo(x)\n#else\n#define M(x) bar(x)\n#endif\nvoid foo(int);void bar(int);void svc(void (*)(void));\n']];
-    for (let n = 0; n < 20; n++) sources.push([`file:///source${n}.c`, `#include "api.h"\nvoid cb${n}(void){}void run${n}(void){${'M(0);'.repeat(500)}svc(cb${n});}`]);
+    const definitions=Array.from({length:5},(_,n)=>`#if BOARD${n}\n#define M${n}(x) foo(x)\n#else\n#define M${n}(x) bar(x)\n#endif\n`).join('');
+    const sources = [['file:///api.h', definitions+'void foo(int);void bar(int);void svc(void (*)(void));\n']];
+    const calls=Array.from({length:5},(_,n)=>`M${n}(0);`).join('').repeat(100);
+    for (let n = 0; n < 20; n++) sources.push([`file:///source${n}.c`, `#include "api.h"\nvoid cb${n}(void){}void run${n}(void){${calls}svc(cb${n});}`]);
     const versions = [];
     for (const [uri, text] of sources) {
       const job = request({ uri, text, skip: true }); await job.promise;

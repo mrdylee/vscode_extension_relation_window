@@ -103,7 +103,7 @@ export function createIssueReport(input: IssueReportInput): string {
         kind: choice(index.lastSourceEvent.kind, ['editor-change', 'editor-save', 'editor-close', 'file-create', 'file-change', 'file-delete']) } : null,
       rebuilds: index.rebuilds.slice(-5).map(record => ({ number: number(record.number), ageSeconds: age(record.at),
         reason: choice(record.reason, ['startup', 'configuration', 'workspace-folders', 'command', 'toolbar']),
-        settings: (record.settings ?? []).filter(key => ['skipInactive', 'include', 'exclude', 'macroExpansionFolders', 'detailedAnalysisFolders'].includes(key)),
+        settings: (record.settings ?? []).filter(key => ['skipInactive', 'include', 'exclude', 'macroExpansionFolders', 'detailedAnalysisFolders', 'smartAnalysis.include', 'smartAnalysis.exclude', 'smartAnalysis.macro'].includes(key)),
         outcome: choice(record.outcome, ['running', 'completed', 'partial', 'failed', 'superseded']),
         files: reportFileCounts(record.files),
         durationMs: record.finishedAt === undefined ? null : number(record.finishedAt - record.at) }))

@@ -9,7 +9,7 @@ interface Value {
 }
 interface Effect { value: Value; definite: boolean }
 interface RegionEffect { definite: boolean; shallow: boolean }
-interface OrderedChange { stamp: number; definite: boolean; exported?: boolean; shallow?: boolean }
+interface OrderedChange { stamp: number; definite: boolean; exported?: boolean; shallow?: boolean; context?: string }
 interface Summary { params: Value[]; returns: Value; effects: Map<string, Effect>; regions: Map<string, RegionEffect>; omittedRegions?: Set<string>; version: number; incomplete?: boolean }
 interface State { memory: Map<string, Value>; effects: Map<string, Effect>; alive: boolean; incomplete?: boolean; regions?: Map<string, OrderedChange>; writes?: Map<string, OrderedChange>; omittedRegions?: Map<string, boolean> }
 interface Context { program: FlowProgram; locals: Map<string, FlowLocal>; exits: State[]; returned: Value }
@@ -199,7 +199,8 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     const value: CallbackProgress = { stage, elapsedMs: Math.max(0, Math.round(at - started)), round: roundNumber, maxRounds: 12,
       functionsDone, functionsTotal: byFunction.size, evaluations, outcome, symbol: activeSymbol?.name,
       scopeElapsedMs: activeSymbol ? Math.max(0, Math.round(at - functionStart)) : 0,
-      scopeEvaluations: activeSymbol ? evaluations - functionStartEvaluations : 0 };
+      scopeEvaluations: activeSymbol ? evaluations - functionStartEvaluations : 0,
+      workBatches: options.workBudget?.progressive ? options.workBudget.batches : undefined };
     if (force || at - lastProgress >= 500) { lastProgress = at; options.onProgress?.(value); }
     return value;
   }
@@ -221,6 +222,8 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
       location: currentLocation ?? activeSymbol?.location,
       elapsedMs: Math.max(0, Math.round(at - started)), scopeElapsedMs: activeSymbol ? Math.max(0, Math.round(at - functionStart)) : 0,
       evaluations, scopeEvaluations: activeSymbol ? evaluations - functionStartEvaluations : 0, slots, storage: storage?.() });
+    if (options.workBudget) details.get(key)!.work = {project: options.workBudget.usage(), scope: options.workBudget.usage(activeSymbol?.id ?? 'callback-setup'), limits: options.workBudget.maximum,
+      batches: options.workBudget.progressive ? options.workBudget.batches : undefined};
   }
   function storageDetail(operation: NonNullable<CallbackDiagnostic['storage']>['operation'], keys: Iterable<string>, omitted: string, retained: number) {
     const label = (slot: string) => {
@@ -349,48 +352,72 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     state.omittedRegions.set(root, exported || state.omittedRegions.get(root) === true);
     registerRegion(state.omittedRegions, root);
   }
-  function markRegion(root: string, state: State, definite: boolean, exported = true, shallow = false) {
+  const regionCounts = new WeakMap<Map<string, OrderedChange>, Map<string | undefined, number>>();
+  function markRegion(root: string, state: State, definite: boolean, exported = true, shallow = false, context?: string) {
     state.regions ??= new Map(); state.writes ??= new Map();
-    if (!state.regions.has(root) && state.regions.size >= 256) {
-      state.incomplete = true; omitRegion(root, state, exported);
-      notice('Callback region limit: 256 reachable objects; targets may be incomplete', undefined, true,
-        () => storageDetail('ordered-region', state.regions!.keys(), root, state.regions!.size)); return;
-    }
     const previous = state.regions.get(root);
-    state.regions.set(root, { stamp: ++stamp, definite, exported: exported || previous?.exported === true,
-      shallow: shallow && previous?.shallow !== false });
+    exported ||= previous?.exported === true;
+    context = exported ? undefined : previous?.context ?? context;
+    let counts = regionCounts.get(state.regions);
+    if (!counts) {
+      counts = new Map([[undefined, 0]]);
+      for (const change of state.regions.values()) counts.set(change.context, (counts.get(change.context) ?? 0) + 1);
+      regionCounts.set(state.regions, counts);
+    }
+    const adding = !previous || previous.context !== context;
+    const contextLimited = context !== undefined && !counts.has(context) && counts.size >= 65;
+    if (adding && ((counts.get(context) ?? 0) >= 256 || contextLimited)) {
+      state.incomplete = true; omitRegion(root, state, exported);
+      notice(contextLimited ? 'Callback caller-context limit: 64 supplies; targets may be incomplete' : 'Callback region limit: 256 reachable objects; targets may be incomplete', undefined, true,
+        () => storageDetail('ordered-region', [...state.regions!].filter(([, change]) => change.context === context).map(([key]) => key), root, counts!.get(context) ?? 0)); return;
+    }
+    if (adding) {
+      if (previous) {
+        const remaining = counts.get(previous.context)! - 1;
+        if (!remaining && previous.context !== undefined) counts.delete(previous.context);
+        else counts.set(previous.context, remaining);
+      }
+      counts.set(context, (counts.get(context) ?? 0) + 1);
+    }
+    state.regions.set(root, { stamp: ++stamp, definite, exported, context, shallow: shallow && previous?.shallow !== false });
     registerRegion(state.regions, root);
   }
   function invalidate(roots: Iterable<string>, state: State, ctx: Context, definite = true, shallow = false) {
-    const pending = [...roots].map(root => ({ root: physical(root), exported: true })), seen = new Set<string>(), affected: typeof pending = [];
+    const pending = [...roots].map(root => ({ root: physical(root), exported: true, context: undefined as string | undefined })), seen = new Map<string | undefined, Set<string>>([[undefined, new Set()]]), affected: typeof pending = [];
+    const expanded = new Set<string>();
     // Find pointees before invalidating the slots containing their addresses.
     for (let n = 0; n < pending.length; n++) {
       if (expired()) { state.incomplete = true; return; }
-      const { root, exported } = pending[n], identity = root + ':' + exported;
-      if (ignoredStorage.has(root) || seen.has(identity)) continue;
-      seen.add(identity);
-      if (seen.size > 256) { state.incomplete = true; notice('Callback region limit: 256 reachable objects; targets may be incomplete', undefined, false,
-        () => storageDetail('reachable-regions', affected.map(item => item.root), root, affected.length)); break; }
-      affected.push({ root, exported });
+      const { root, exported, context } = pending[n], identity = root + ':' + exported;
+      if (ignoredStorage.has(root) || expanded.has(identity)) continue;
+      let visited = seen.get(context);
+      if (!visited) {
+        if (seen.size >= 65) { state.incomplete = true; notice('Callback caller-context limit: 64 supplies; targets may be incomplete'); break; }
+        visited = new Set(); seen.set(context, visited);
+      }
+      visited.add(identity); expanded.add(identity);
+      if (visited.size > 256) { state.incomplete = true; notice('Callback region limit: 256 reachable objects; targets may be incomplete', undefined, false,
+        () => storageDetail('reachable-regions', affected.filter(item => item.context === context).map(item => item.root), root, visited!.size - 1)); break; }
+      affected.push({ root, exported, context });
       const resolved = new Set([...objects({ ...blank(), objects: new Set([root]) })].map(path => shallow ? byteDestination(path) : physical(path)));
       const paths = new Set([root, ...resolved]);
       for (const path of paths) {
         // Actual supplies help analyze this function, but must not escape into
         // its symbolic summary and invalidate other callers' objects.
-        if (path !== root) pending.push({ root: path, exported: false });
+        if (path !== root) { pending.push({ root: path, exported: false, context: context ?? storageRoot(path) }); continue; }
         if (shallow) continue;
         heapShape(path);
         for (const key of new Set([...descendants(state.memory, path), ...descendants(heap, path)])) {
           if (expired()) { state.incomplete = true; return; }
           for (const reference of read(key, state).objects) {
             const object = physical(reference);
-            if (object !== key && !containsRegion(path, object)) pending.push({ root: object, exported: exported && path === root });
+            if (object !== key && !containsRegion(path, object)) pending.push({ root: object, exported, context });
           }
         }
       }
     }
-    for (const { root, exported } of affected) {
-      markRegion(root, state, definite, exported, shallow);
+    for (const { root, exported, context } of affected) {
+      markRegion(root, state, definite, exported, shallow, context);
       if (exported && !root.startsWith('$arg:') && !localSlot(root, ctx) && !heapRegions.has(root)) {
         heapRegions.add(root); registerRegion(heapRegions, root); changed = true;
       }
@@ -536,7 +563,8 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
       for (const key of new Set([...(a.regions?.keys() ?? []), ...(b.regions?.keys() ?? [])]))
         markRegion(key, result, !!a.regions?.get(key)?.definite && !!b.regions?.get(key)?.definite,
           a.regions?.get(key)?.exported === true || b.regions?.get(key)?.exported === true,
-          a.regions?.get(key)?.shallow !== false && b.regions?.get(key)?.shallow !== false);
+          a.regions?.get(key)?.shallow !== false && b.regions?.get(key)?.shallow !== false,
+          a.regions?.get(key)?.context ?? b.regions?.get(key)?.context);
     }
     for (const source of [a, b]) for (const [root, exported] of source.omittedRegions ?? []) omitRegion(root, result, exported);
     for (const key of new Set([...a.memory.keys(), ...b.memory.keys()])) {
@@ -965,7 +993,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
         depend(fn);
         const target = summaries.get(fn);
         if (!target) { opaque = true; const symbol=index.symbol(fn); returns.push(unknown('Return value unavailable: ' + (symbol?.name ?? expressionText(expr.callee)) +
-          (symbol?.definition && outsideScope.has(symbol.location.uri) ? ' is outside Detailed Analysis Folders' : ' has no indexed body'))); continue; }
+          (symbol?.definition && outsideScope.has(symbol.location.uri) ? ' is outside Smart Analysis Include/Exclude' : ' has no indexed body'))); continue; }
         // Budgeted omissions are represented by their affected regions. An
         // indexed helper's unused arguments are not opaque mutation roots.
         args.forEach((arg, n) => {
@@ -1031,6 +1059,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
   function execute(body: FlowStatement[], state: State, ctx: Context): State {
     for (const statement of body) {
       if (!state.alive || timedOut || steps > 2_000_000) break;
+      if (options.workBudget?.exhausted(ctx.program.id)) { state.incomplete = true; break; }
       if (statement.kind === 'expression') evaluate(statement.value, state, ctx);
       else if (statement.kind === 'return') {
         const evaluated = evaluate(statement.value, state, ctx);
@@ -1101,16 +1130,23 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
       let cost = costs.get(id);
       if (!cost) { cost = { symbol: activeSymbol?.name ?? id, location: activeSymbol?.location, runs: 0, cacheHits: 0, evaluations: 0, elapsedMs: 0 }; costs.set(id, cost); }
       const previous = completed.get(id);
-      if (previous && previous.params.length === target.params.length && previous.params.every((value, n) => value === target.params[n]) &&
-        [...previous.dependencies.heap].every(([key, value]) => heap.get(key) === value) &&
-        [...previous.dependencies.functions].every(([fn, version]) => summaries.get(fn)?.version === version) &&
-        [...previous.dependencies.regions].every(([slot, count]) => [...matchingRegions(heapRegions, slot)].length === count) &&
-        [...previous.dependencies.shapes].every(([root, version]) => (heapShapes.get(root) ?? 0) === version)) {
+      if (previous && options.workBudget?.exhausted(id)) {
+        previous.observations.forEach((value, key) => observations.set(key, {...value, value: union(value.value, unknown('Callback function work limit reached'))}));
+        previous.arguments.forEach((value, key) => argumentObservations.set(key, {...value, values: new Map([...value.values].map(([n, observed]) => [n, union(observed, unknown('Callback function work limit reached'))]))}));
+        functionsDone++; continue;
+      }
+      const invalidation = !previous ? 'first-run' : previous.params.length !== target.params.length || previous.params.some((value, n) => value !== target.params[n]) ? 'parameters'
+        : [...previous.dependencies.heap].some(([key, value]) => heap.get(key) !== value) ? 'heap'
+        : [...previous.dependencies.functions].some(([fn, version]) => summaries.get(fn)?.version !== version) ? 'callees'
+        : [...previous.dependencies.regions].some(([slot, count]) => [...matchingRegions(heapRegions, slot)].length !== count) ? 'regions'
+        : [...previous.dependencies.shapes].some(([root, version]) => (heapShapes.get(root) ?? 0) !== version) ? 'shapes' : undefined;
+      if (previous && !invalidation) {
         cost.cacheHits++;
         previous.observations.forEach((value, key) => observations.set(key, value));
         previous.arguments.forEach((value, key) => argumentObservations.set(key, value)); functionsDone++; continue;
       }
       cost.runs++;
+      if (invalidation) { cost.invalidations ??= {}; cost.invalidations[invalidation] = (cost.invalidations[invalidation] ?? 0) + 1; }
       const beforeParams = [...target.params];
       dependencies = { heap: new Map(), functions: new Map(), shapes: new Map(), regions: new Map(), observations: new Set(), arguments: new Set() };
       for (const program of list) {
@@ -1136,6 +1172,8 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
         const end = execute(program.body, state, ctx); if (end.alive) ctx.exits.push(end);
         exits.push(...ctx.exits); returned = union(returned, ctx.returned);
       }
+      const exhausted = options.workBudget?.exhausted(id);
+      if (exhausted) { returned = union(returned, unknown('Callback function work limit reached')); notice('Callback function work limit reached', undefined, true); }
       const nextReturns = joined(target.returns, returned);
       if (signature(nextReturns) !== signature(target.returns)) { changed = true; target.version++; }
       target.returns = nextReturns;

@@ -31,6 +31,7 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('dynsight.reindex', () => workspace.reindex()),
     vscode.commands.registerCommand('dynsight.stopLocalAnalysis', () => workspace.stopAnalysis()),
     vscode.commands.registerCommand('dynsight.resumeLocalAnalysis', () => workspace.resumeAnalysis()),
+    vscode.commands.registerCommand('dynsight.selectSmartAnalysisFolders', () => selectDetailedAnalysisFolders()),
     vscode.commands.registerCommand('dynsight.selectDetailedAnalysisFolders', () => selectDetailedAnalysisFolders()),
     vscode.commands.registerCommand('dynsight.selectMacroExpansionFolders', () => selectMacroExpansionFolders().catch(error =>
       vscode.window.showErrorMessage(`Could not save macro expansion folders: ${String(error)}`))),
@@ -46,7 +47,8 @@ export async function activate(context: vscode.ExtensionContext) {
     { dispose: () => clearTimeout(timer) });
   void workspace.ready.then(() => view.track(vscode.window.activeTextEditor));
   // Preserve existing custom keybindings without exposing old command labels.
-  for (const { command } of context.extension.packageJSON.contributes.commands as { command: string }[])
+  for (const { command } of [...context.extension.packageJSON.contributes.commands as { command: string }[],
+    { command: 'dynsight.selectDetailedAnalysisFolders' }, { command: 'dynsight.selectMacroExpansionFolders' }])
     context.subscriptions.push(vscode.commands.registerCommand(command.replace(/^dynsight\./, 'cRelation.'),
       (...args: unknown[]) => vscode.commands.executeCommand(command, ...args)));
   return { workspace, view };

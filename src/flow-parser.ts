@@ -1,5 +1,6 @@
 import { Node } from 'web-tree-sitter';
 import { FlowExpression as Expr, FlowLocal, FlowProgram, FlowStatement as Statement, GlobalInitializer, Location } from './model';
+import { splitStatement, SplitStatement } from './split-statements';
 import { declaredType, declarator } from './type-info';
 
 type Locate = (node: Node) => Location;
@@ -104,8 +105,9 @@ export function flowFacts(root: Node, uri: string, locate: Locate, active?: Set<
       declarations(node);
       const expr=(value:Node|null|undefined)=>expression(value,locals,ranges,id);
       const hasRegistrationEffect=(value:Node):boolean=>['call_expression','assignment_expression'].includes(value.type)||value.namedChildren.some(hasRegistrationEffect);
+      let structuralConditions=new Set<string>();
       const guarded=(anchor:Node|undefined,result:Statement[]):Statement[]=>{
-        if(!namespace||!anchor||!(context?.(anchor)??[]).some(condition=>!functionConditions.includes(condition)))return result;
+        if(!namespace||!anchor||!(context?.(anchor)??[]).some(condition=>!functionConditions.includes(condition)&&!structuralConditions.has(condition)))return result;
         return[{kind:'branch',condition:{kind:'unknown',location:locate(anchor)},then:result,otherwise:[]}];
       };
       function statements(current:Node|null|undefined):Statement[] {
@@ -148,7 +150,26 @@ export function flowFacts(root: Node, uri: string, locate: Locate, active?: Set<
           return[{kind:'branch',condition:{kind:'unknown',location:locate(current)},then:yes,otherwise:no}];
         }
         if(current.type.endsWith('_expression'))return basic&&!hasRegistrationEffect(current)?[]:[{kind:'expression',value:expr(current)}];
-        return current.namedChildren.flatMap(statements);
+        const children=current.namedChildren.filter(child=>child.type!=='comment'),result:Statement[]=[];
+        for(let n=0;n<children.length;n++){
+          const split=splitStatement(children[n],children[n+1]);
+          if(split){result.push(...completeSplit(children[n],split));n++;}else result.push(...statements(children[n]));
+        }
+        return result;
+      }
+      function completeSplit(current:Node,split:SplitStatement):Statement[]{
+        const mode=split.headers.get(current.id);
+        if(mode){
+          const previous=structuralConditions;structuralConditions=new Set([...previous,...(context?.(current)??[])]);
+          const result:Statement[]=[{kind:'branch',condition:expr(current.childForFieldName('condition')),then:statements(mode==='body'?split.shared:current.childForFieldName('consequence')),otherwise:mode==='else'?statements(split.shared):[]}];
+          structuralConditions=previous;return result;
+        }
+        const condition=current.childForFieldName('condition')??current.childForFieldName('name'),alternative=current.childForFieldName('alternative');
+        const yes=current.namedChildren.filter(child=>child.id!==condition?.id&&child.id!==alternative?.id&&child.type!=='comment'&&!split.errors.has(child.id)).flatMap(child=>completeSplit(child,split));
+        if(current.type==='preproc_else')return yes;
+        const no=alternative?completeSplit(alternative,split):statements(split.shared),literal=condition?.text.replace(/[()\s]/g,'');
+        if(skipInactive&&(literal==='0'||literal==='1'))return literal==='0'?no:yes;
+        return[{kind:'branch',condition:{kind:'unknown',location:locate(current)},then:yes,otherwise:no}];
       }
       programs.push({id,locals,params,body:statements(body)});return;
     }

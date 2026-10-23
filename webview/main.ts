@@ -60,6 +60,7 @@ function renderCopilot(ai: Diagnostics['copilot']) {
   if (ai.excluded) copilotProgress.append(el('span', 'muted', `Excluded by path: ${ai.excluded}`));
   if (total) copilotProgress.append(el('span', 'muted', `Candidates: ${ai.candidates} · No candidate in supplied context: ${ai.notFound} · Context limited: ${ai.contextLimited}`));
   copilotProgress.title = 'Coverage of detected callback sites in the current saved index. Failed sites remain pending. Processing every site does not prove every runtime target was found.';
+  if (ready && !total && ai.excluded) copilotProgress.title = 'Callback sites exist outside the AI scope. Check Smart Analysis Include and Exclude. No AI requests were sent.';
   if (ai.state === 'analyzing' || ai.automatic) stop();
 }
 const divider = el('div', 'divider'); divider.tabIndex = 0;
@@ -235,6 +236,15 @@ function showDetails(node: GraphNode, anchor: HTMLButtonElement) {
   if (node.sites.some(site => site.callKind === 'registered' && site.kind === 'reference')) popup.append(el('div', 'condition', 'Registration: this function is explicitly assigned here. This is not proof of invocation.'));
   if (node.sites.some(site => site.callKind === 'registered' && site.kind === 'call')) popup.append(el('div', 'condition detail-warning', 'Registered candidate: an explicit registration and local alias suggest this callback target. This is not proof of invocation.'));
   if (node.callKind === 'macro') popup.append(el('div', 'condition detail-warning', 'Macro invocation: expansion is unavailable, incomplete, or leaves this recursive call.'));
+  if (node.sites.some(site => site.macroUncertain)) popup.append(el('div', 'condition detail-warning', 'The macro may be undefined, or its definition lookup is incomplete.'));
+  if (node.definitionCandidates?.length) {
+    popup.append(el('strong', 'detail-label', `${node.definitionCandidates.length} macro definition candidates`));
+    for (const candidate of node.definitionCandidates) {
+      const label = `${decodeURIComponent(candidate.location.uri).replace(/^file:\/\//,'')}:${candidate.location.line + 1}`;
+      const definition = button(label, () => { hideDetails(); send('open', {id:candidate.id}); }, `Open macro definition: ${decodeURIComponent(candidate.location.uri)}`);
+      definition.className = 'site'; popup.append(definition);
+    }
+  }
   if (node.callKind === 'indirect') popup.append(el('div', 'condition detail-warning', 'Indirect call: the runtime function target has not been resolved.'));
   if (node.callKind === 'unresolved') popup.append(el('div', 'condition detail-warning', 'Unresolved call: no matching function or macro was found in the analyzed scope.'));
   if (node.conditions.length) popup.append(condition(node.conditions.join(' · ')));

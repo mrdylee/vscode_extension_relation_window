@@ -30,3 +30,14 @@ test('local notices expose storage samples and distinguish cumulative function c
   assert.match(result[0], /sample.*data.cb0.*data.cb1/);
   assert.match(result[0], /configure.*runs=3.*cache hits=1.*evaluations=800.*total=70ms/);
 });
+
+test('work-limit notices identify both phases, thresholds and an action before retry',()=>{
+  const detail:CallbackDiagnostic={kind:'work',stage:'propagation',message:'Callback function work limit reached',elapsedMs:10,scopeElapsedMs:1,evaluations:20,scopeEvaluations:2,
+    work:{scope:{macros:99,callbacks:2,total:101},project:{macros:300,callbacks:40,total:340},limits:{functionWork:100,projectWork:1000}},
+    costs:[{symbol:'run',runs:2,cacheHits:0,evaluations:2,elapsedMs:1,invalidations:{'first-run':1,callees:1}}]};
+  const [text]=analysisNotices([{uri:'file:///work.c',text:'',symbols:[],references:[],includes:[],issues:[],callbackDiagnostics:[detail]}],uri=>uri);
+  assert.match(text,/macro=99\/300.*propagation=2\/40.*total=101\/340/);
+  assert.match(text,/function limit=100.*project limit=1000/);
+  assert.match(text,/cache misses: first-run=1, callees=1/);
+  assert.match(text,/Narrow Smart Analysis Include\/Exclude.*Retry local/);
+});

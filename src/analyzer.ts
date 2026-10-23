@@ -3,13 +3,14 @@ import { Parser, Language, Node } from 'web-tree-sitter';
 import { CallbackAnalysisOptions, CallbackProgress } from './model';
 import { Access, FileAnalysis, FlowExpression, Location, ReferenceRecord, SymbolRecord } from './model';
 import { aggregateId, declaredType, declarator, initializerMember, typedExpression } from './type-info';
-import { clearMacroCache, deriveMacroCalls } from './project-analysis';
+import { bindMacroReferences, clearMacroCache, deriveMacroCalls } from './project-analysis';
 import { flowFacts } from './flow-parser';
 import { clearPointerCache, inferPointerCalls } from './pointer-targets';
 import { suggestPartialCallbacks } from './partial-callbacks';
 import { suggestExplicitCallbacks } from './explicit-callbacks';
 import { locationIn, tokenizeC } from './c-tokens';
 import { initializerPreprocessor, InitializerRecovery } from './initializer-preprocessor';
+import { splitStatement, hasUnsupportedSyntax } from './split-statements';
 import { RelationIndex } from './relations';
 import { FunctionArguments } from './function-arguments';
 
@@ -109,6 +110,7 @@ export async function createAnalyzer(runtime: string, grammar: string) {
     if (recovery.inactive.length) file.inactive = recovery.inactive;
     const nodes: Node[] = [];
     const conditions = new Map<number, string[]>();
+    const branches = new Map<number, import('./model').MacroBranch[]>();
     const declarationNames = new Set<number>();
     const functionOwners = new Map<number, string>();
     const initializerOwners = new Map<number, string>();
@@ -117,33 +119,43 @@ export async function createAnalyzer(runtime: string, grammar: string) {
       line: node.startPosition.row, column: node.startPosition.column,
       endLine: node.endPosition.row, endColumn: node.endPosition.column });
 
-    function visit(node: Node, context: string[]) {
+    function visit(node: Node, context: string[], choices: import('./model').MacroBranch[] = []) {
       const recovered = recovery.contexts.find(range => node.startIndex >= range.start && node.startIndex < range.end);
       nodes.push(node);
       conditions.set(node.id, recovered ? [...context, ...recovered.conditions] : context);
+      branches.set(node.id, choices);
       if (['preproc_if', 'preproc_elif', 'preproc_ifdef', 'preproc_elifdef'].includes(node.type)) {
         const condition = node.childForFieldName('condition') ?? node.childForFieldName('name');
         const alternative = node.childForFieldName('alternative');
         const value = condition && ['preproc_if', 'preproc_elif'].includes(node.type) ? constant(condition) : undefined;
         const label = node.text.slice(0, node.text.indexOf('\n')).trim();
+        const branch = {key: `${uri}:${node.startIndex}`, value: true, condition: label};
         if (skipInactive && value === false) (file.inactive ??= []).push({ start: condition!.endIndex, end: alternative?.startIndex ?? node.endIndex });
         if (skipInactive && value === true && alternative) (file.inactive ??= []).push({ start: alternative.startIndex, end: alternative.endIndex });
         if (!skipInactive || value !== false) {
           const next = value === true && skipInactive ? context : [...context, label];
           for (const child of node.namedChildren) {
-            if (child.id !== condition?.id && child.id !== alternative?.id) visit(child, next);
+            if (child.id !== condition?.id && child.id !== alternative?.id) visit(child, next, value === true && skipInactive ? choices : [...choices, branch]);
           }
         }
         if (alternative && (!skipInactive || value !== true)) {
-          visit(alternative, value === false && skipInactive ? context : [...context, `else of ${label}`]);
+          visit(alternative, value === false && skipInactive ? context : [...context, `else of ${label}`], value === false && skipInactive ? choices : [...choices, {...branch, value: false, condition: `else of ${label}`}]);
         }
         return;
       }
       // Preprocessor bodies are text, not compiled C; don't invent expanded calls.
       if (['preproc_def', 'preproc_function_def', 'preproc_include'].includes(node.type)) return;
-      for (const child of node.namedChildren) visit(child, context);
+      for (const child of node.namedChildren) visit(child, context, choices);
     }
     visit(tree.rootNode, []);
+    const splitErrors = new Set<number>();
+    for (const node of nodes) if (node.type === 'compound_statement') {
+      const children = node.namedChildren.filter(child => child.type !== 'comment');
+      for (let n = 0; n < children.length; n++) {
+        const split = splitStatement(children[n], children[n + 1]);
+        if (split) { split.errors.forEach(id => splitErrors.add(id)); (file.splitStatements ??= []).push({start: children[n].startIndex, end: children[n].endIndex}); }
+      }
+    }
     const top = tree.rootNode.namedChildren.filter(node => node.type !== 'comment');
     const guard = top.length === 1 && top[0].type === 'preproc_ifdef' && top[0].text.startsWith('#ifndef') ? top[0] : undefined;
     const guardName = guard?.childForFieldName('name')?.text;
@@ -197,7 +209,7 @@ export async function createAnalyzer(runtime: string, grammar: string) {
         while (end >= 0 && /\\\r?$/.test(text.slice(child.startIndex, end))) end = text.indexOf('\n', end + 1);
         (file.directives ??= []).push({ start: child.startIndex, end: end < 0 ? text.length : end + 1 });
       }
-      if (node.type === 'ERROR') file.issues.push(`Line ${node.startPosition.row + 1}: incomplete or unsupported C syntax`);
+      if (node.type === 'ERROR' && !splitErrors.has(node.id)) file.issues.push(`Line ${node.startPosition.row + 1}: incomplete or unsupported C syntax`);
       const unnamedBitfield = node.isMissing && node.type === 'field_identifier' && node.parent?.type === 'field_declaration' &&
         node.parent.namedChildren.some(child => child.type === 'bitfield_clause' && !child.hasError);
       if (node.isMissing && !unnamedBitfield) file.issues.push(`Line ${node.startPosition.row + 1}: missing ${node.type}`);
@@ -205,7 +217,7 @@ export async function createAnalyzer(runtime: string, grammar: string) {
         const path = node.childForFieldName('path')?.text;
         if (path) file.includes.push(path.slice(1, -1));
         if (path?.startsWith('<')) (file.systemIncludes ??= []).push(path.slice(1, -1));
-        if (path && /^['"<]/.test(path)) (file.preprocessor ??= []).push({ kind: 'include', location: location(node), conditions: conditions.get(node.id) ?? [], path: path.slice(1, -1), system: path.startsWith('<') });
+        if (path && /^['"<]/.test(path)) (file.preprocessor ??= []).push({ kind: 'include', location: location(node), conditions: conditions.get(node.id) ?? [], branches: branches.get(node.id), path: path.slice(1, -1), system: path.startsWith('<') });
       }
       if (['preproc_def', 'preproc_function_def'].includes(node.type)) {
         const name = node.childForFieldName('name');
@@ -214,12 +226,12 @@ export async function createAnalyzer(runtime: string, grammar: string) {
           const parameters = node.childForFieldName('parameters')?.text.slice(1, -1).split(',').map(p => p.trim()).filter(Boolean);
           let variadic: string | undefined;
           if (parameters?.at(-1)?.endsWith('...')) variadic = parameters.pop()!.slice(0, -3).trim() || '__VA_ARGS__';
-          (file.preprocessor ??= []).push({ kind: 'define', location: location(node), conditions: conditions.get(node.id) ?? [],
-            macro: { name: name.text, location: location(name), body: node.childForFieldName('value')?.text ?? '', parameters, variadic, conditions: conditions.get(node.id) ?? [] } });
+          (file.preprocessor ??= []).push({ kind: 'define', location: location(node), conditions: conditions.get(node.id) ?? [], branches: branches.get(node.id),
+            macro: { name: name.text, location: location(name), body: node.childForFieldName('value')?.text ?? '', parameters, variadic, conditions: conditions.get(node.id) ?? [], branches: branches.get(node.id) } });
         }
       }
       if (node.type === 'preproc_call' && node.childForFieldName('directive')?.text === '#undef')
-        (file.preprocessor ??= []).push({ kind: 'undef', name: node.childForFieldName('argument')?.text.trim() ?? '', location: location(node), conditions: conditions.get(node.id) ?? [] });
+        (file.preprocessor ??= []).push({ kind: 'undef', name: node.childForFieldName('argument')?.text.trim() ?? '', location: location(node), conditions: conditions.get(node.id) ?? [], branches: branches.get(node.id) });
       if (node.type === 'function_definition') {
         const declaration = node.childForFieldName('declarator');
         const name = declaration && declarator(declaration).name;
@@ -332,7 +344,7 @@ export async function createAnalyzer(runtime: string, grammar: string) {
         conditions: conditions.get(node.id) ?? [] });
     }
     file.issues = [...new Set(file.issues)];
-    file.statementConditions = nodes.filter(node => (['return_statement', 'expression_statement'].includes(node.type) || node.parent?.type === 'initializer_list') && conditions.get(node.id)?.length)
+    file.statementConditions = nodes.filter(node => (['return_statement', 'expression_statement', 'if_statement'].includes(node.type) || node.parent?.type === 'initializer_list') && conditions.get(node.id)?.length)
       .map(node => ({ start: node.startIndex, conditions: conditions.get(node.id)! }));
     const facts = flowFacts(tree.rootNode, uri, location, new Set(nodes.map(node => node.id)), skipInactive, '', node => conditions.get(node.id) ?? [], policy?.propagateCallbacks === false);
     if(policy?.propagateCallbacks === false) { file.registrationPrograms = facts.programs; file.registrationInitializers = facts.initializers; }
@@ -365,7 +377,7 @@ export async function createAnalyzer(runtime: string, grammar: string) {
       for (const child of node.namedChildren) visit(child, owner);
     }
     visit(tree.rootNode);
-    const issues = tree.rootNode.hasError ? ['Expanded C contains incomplete or unsupported syntax'] : [];
+    const issues = hasUnsupportedSyntax(tree.rootNode) ? ['Expanded C contains incomplete or unsupported syntax'] : [];
     const facts = flowFacts(tree.rootNode, uri, locate, undefined, true, namespace, node => context?.(locate(node)) ?? []);
     tree.delete(); return { references, issues, ...facts };
   }, initializer(uri: string, text: string, original: (start: number, end: number) => Location, context?: (location: Location) => string[]) {
@@ -376,7 +388,8 @@ export async function createAnalyzer(runtime: string, grammar: string) {
     const value: FlowExpression = facts.initializers[0]?.value ?? { kind: 'unknown', location: original(0, text.length) };
     const issues = tree.rootNode.hasError ? ['Expanded initializer has incomplete or unsupported syntax'] : [];
     tree.delete(); return { value, issues };
-  }, basic(files: FileAnalysis[], options: CallbackAnalysisOptions = {}) {
+  }, basic(files: FileAnalysis[], options: CallbackAnalysisOptions = {}, memoryPressure?: () => boolean) {
+    files = bindMacroReferences(files, analyzer.analyze, options.shouldCancel, memoryPressure);
     const index = new RelationIndex(); files.forEach(file=>index.update(file));
     const argumentsFound = new FunctionArguments(files,index);
     const facts=files.map(file=>{const values=argumentsFound.forFile(file.uri);return values.length?{...file,functionArguments:values}:file;});
@@ -391,9 +404,10 @@ export async function createAnalyzer(runtime: string, grammar: string) {
       options.onProgress!({ ...value, elapsedMs: Math.max(0, Math.round(now() - started)),
         outcome: value.stage === 'registrations' && value.outcome === 'completed' ? outcome ?? value.outcome : value.outcome });
     });
-    const control = { ...options, workBudget: options.workBudget ?? new AnalysisWorkBudget(options.workLimits), onProgress: observed };
+    const control = { ...options, workBudget: options.workBudget ?? new AnalysisWorkBudget(options.workLimits, options.workLimits === undefined), onProgress: observed };
     phase?.('macros');
-    const expanded = deriveMacroCalls(files, analyzer.analyze, analyzer.calls, analyzer.initializer, memoryPressure, analyzeCallbacks, options.shouldCancel, control.workBudget);
+    const macros = deriveMacroCalls(files, analyzer.analyze, analyzer.calls, analyzer.initializer, memoryPressure, analyzeCallbacks, options.shouldCancel, control.workBudget);
+    const expanded = control.workBudget.projectExhausted ? macros : bindMacroReferences(macros, analyzer.analyze, options.shouldCancel, memoryPressure);
     phase?.('callbacks');
     const derived = inferPointerCalls(expanded, memoryPressure, analyzer.analyze, analyzeCallbacks, control);
     const memoryLimited = memoryPressure?.() === true;
@@ -404,7 +418,7 @@ export async function createAnalyzer(runtime: string, grammar: string) {
       if(ref.kind !== 'call' || !ref.access || (!ref.indirect && !ref.inference?.incomplete))return ref;
       const reasons = ref.inference?.reasons ?? [];
       const status = options.shouldCancel?.() ? 'cancelled' : memoryLimited || reasons.some(reason=>/memory/i.test(reason)) ? 'memory-limit' :
-        reasons.some(reason=>/work limit|budget/i.test(reason)) ? 'work-limit' : file.analysisPolicy?.propagateCallbacks === false || reasons.some(reason=>reason.includes('outside Detailed Analysis Folders')) ? 'out-of-scope' :
+        reasons.some(reason=>/work limit|budget/i.test(reason)) ? 'work-limit' : file.analysisPolicy?.propagateCallbacks === false || reasons.some(reason=>reason.includes('outside Smart Analysis Include/Exclude')) ? 'out-of-scope' :
         reasons.some(reason=>reason.includes('has no indexed body')) ? 'missing-definition' : 'unresolved';
       return { ...ref, analysis: { status, reasons: reasons.length ? reasons : [status === 'out-of-scope' ? 'Detailed analysis is disabled for this file.' : 'Callback target is not fully resolved.'] } };
       });

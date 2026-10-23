@@ -2,7 +2,7 @@
   "name": "dynsight",
   "displayName": "Dynsight — C Code Explorer",
   "description": "Build-free C references, caller/callee graphs and a linked Context preview.",
-  "version": "0.1.74",
+  "version": "0.1.75",
   "publisher": "dylee",
   "author": "dylee",
   "license": "MIT",
@@ -67,16 +67,12 @@
         "title": "Dynsight: Open Settings"
       },
       {
-        "command": "dynsight.selectDetailedAnalysisFolders",
-        "title": "Dynsight: Select Detailed Analysis Folders"
-      },
-      {
-        "command": "dynsight.selectMacroExpansionFolders",
-        "title": "Dynsight: Select Macro Expansion Folders"
-      },
-      {
         "command": "dynsight.help",
         "title": "Dynsight: Open User Guide"
+      },
+      {
+        "command": "dynsight.selectSmartAnalysisFolders",
+        "title": "Dynsight: Select Smart Analysis Folders"
       }
     ],
     "viewsContainers": {
@@ -108,87 +104,6 @@
     "configuration": {
       "title": "Dynsight",
       "properties": {
-        "dynsight.copilotCallbacks": {
-          "order": 60,
-          "type": "boolean",
-          "default": false,
-          "scope": "window",
-          "markdownDescription": "Automatically request AI candidates for unresolved callbacks using your existing GitHub Copilot account. When enabled, startup, saved source changes and Rebuild analyze eligible calls one at a time and reuse valid cache. Calls must be in Copilot Include and Detailed Analysis Folders and outside exclusions. Choose a model when prompted; relevant source is sent to Copilot and account usage limits apply. Stop Copilot Analysis pauses automatic requests for this session and keeps completed results. [Analyze Callbacks with Copilot](command:dynsight.analyzeCallbacksWithCopilot), toggling this setting, or changing the model or scope resumes automatic analysis. Active User confirmed targets are skipped; use Recheck with AI for an individual comparison. AI candidates are suggestions, not proven calls."
-        },
-        "dynsight.copilotModel": {
-          "order": 61,
-          "type": "string",
-          "default": "",
-          "scope": "window",
-          "markdownDescription": "Copilot model ID for callback candidates. [Select Copilot Model](command:dynsight.selectCopilotModel) lists models available to your Copilot account and saves the selected ID here. Selecting a model resumes automatic analysis when Copilot Callbacks is enabled; it does not enable the setting. An empty value asks you to choose when automatic analysis starts. Model changes reuse only that model's valid cache; unavailable models are not replaced automatically."
-        },
-        "dynsight.copilotInclude": {
-          "order": 62,
-          "type": "array",
-          "items": {
-            "type": "string",
-            "minLength": 1
-          },
-          "default": [],
-          "scope": "resource",
-          "description": "Files whose callback call sites may use AI, using workspace-relative globs. Only explicit paths are used; they are not copied from Include. Call locations must also be in Detailed Analysis Folders. Empty disables all AI callback requests. Copilot Exclude takes priority. Local analysis is unchanged and supporting evidence may come from other indexed paths. When Copilot Callbacks is enabled, scope changes cancel the active AI run and automatically analyze missing eligible results while reusing valid cache."
-        },
-        "dynsight.copilotExclude": {
-          "order": 63,
-          "type": "array",
-          "items": {
-            "type": "string",
-            "minLength": 1
-          },
-          "default": [],
-          "scope": "resource",
-          "description": "Workspace-relative glob patterns whose callback call sites skip AI, for example Vendor/** or Generated/**. Exclude takes priority over Copilot Include. Excluded sites use no AI requests and are omitted from AI results and pending counts; existing cached results are kept for later reuse. Local callback analysis and use as supporting source evidence remain available."
-        },
-        "dynsight.analyzeCallbacks": {
-          "deprecationMessage": "Use Detailed Analysis Folders to scope macro expansion and callback propagation together. Explicit legacy settings remain active until that setting is saved.",
-          "order": 101,
-          "type": "boolean",
-          "default": true,
-          "scope": "window",
-          "description": "Infer function-pointer and structure callback targets in Callers, Callees and Callers & Callees, and trace callbacks when clicking their call sites. Turning off skips full callback propagation. Literal function assignments appear as Registration even without calls. Simple function-pointer and local structure-member assignments remain traceable, and available Copilot candidates remain selectable; unresolved sites use ordinary symbol navigation. Direct calls, macro expansion and literal function arguments remain available; alias-derived arguments require this option. Changes recalculate relationships without reparsing source files, after any running analysis finishes."
-        },
-        "dynsight.includeFunctionArguments": {
-          "order": 51,
-          "type": "boolean",
-          "default": false,
-          "scope": "window",
-          "description": "Include functions passed as arguments in Callers, Callees and Callers & Callees. Dotted connectors mean argument passing, not proof of invocation. Changes reuse the existing index."
-        },
-        "dynsight.callGraphDirection": {
-          "order": 11,
-          "type": "string",
-          "enum": [
-            "callers-left",
-            "callees-left"
-          ],
-          "enumItemLabels": [
-            "Callers left / Callees right",
-            "Callees left / Callers right"
-          ],
-          "default": "callers-left",
-          "scope": "window",
-          "description": "Left/right branch placement in Callers & Callees mode. Changes presentation immediately without reindexing or resetting expanded branches."
-        },
-        "dynsight.calleeSort": {
-          "order": 50,
-          "type": "string",
-          "enum": [
-            "name",
-            "source"
-          ],
-          "enumDescriptions": [
-            "Sort Callees by symbol name.",
-            "Sort Callees by their first call location in source, not runtime execution order."
-          ],
-          "default": "name",
-          "scope": "window",
-          "description": "Callees sorting. Open with the Relation Settings button. Callers and References keep name order."
-        },
         "dynsight.contextLayout": {
           "order": 10,
           "type": "string",
@@ -219,6 +134,21 @@
           "default": "combined",
           "scope": "window",
           "description": "Place Combined across the full bottom, preserve either sidebar's full height, or use only the center below the editor. Separate opens an independent Context view. Explicit alignment also changes Terminal and other bottom-panel views. All layouts share the same analysis and selection."
+        },
+        "dynsight.callGraphDirection": {
+          "order": 11,
+          "type": "string",
+          "enum": [
+            "callers-left",
+            "callees-left"
+          ],
+          "enumItemLabels": [
+            "Callers left / Callees right",
+            "Callees left / Callers right"
+          ],
+          "default": "callers-left",
+          "scope": "window",
+          "description": "Left/right branch placement in Callers & Callees mode. Changes presentation immediately without reindexing or resetting expanded branches."
         },
         "dynsight.include": {
           "order": 20,
@@ -251,10 +181,125 @@
           "default": [],
           "scope": "resource",
           "order": 30,
-          "markdownDescription": "[Select folders…](command:dynsight.selectDetailedAnalysisFolders) for macro expansion and callback propagation. Empty keeps basic navigation and explicit registrations only. Include/Exclude still control indexing; definitions from indexed headers remain available. External function bodies are not traced automatically. Changes refresh affected analysis and relationships. Legacy settings remain active until this setting is explicitly saved."
+          "markdownDescription": "[Select folders…](command:dynsight.selectDetailedAnalysisFolders) for macro expansion and callback propagation. Empty keeps basic navigation and explicit registrations only. Include/Exclude still control indexing; definitions from indexed headers remain available. External function bodies are not traced automatically. Changes refresh affected analysis and relationships. Legacy settings remain active until this setting is explicitly saved.",
+          "included": false,
+          "deprecationMessage": "Use Smart Analysis Include / Exclude and the Macro / Copilot switches. Saved legacy scopes remain active until Smart Analysis Include is explicitly saved."
+        },
+        "dynsight.smartAnalysis.include": {
+          "order": 30,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": [],
+          "scope": "resource",
+          "markdownDescription": "[Select folders…](command:dynsight.selectSmartAnalysisFolders) for both Macro and Copilot, using workspace-relative globs such as `App/**`. Empty disables Smart Analysis. General Include/Exclude still control indexing. Saving this list replaces legacy detailed-analysis and Copilot paths for this workspace. When Copilot is enabled, eligible callback snippets are sent to the selected model; supporting evidence may come from other indexed files."
+        },
+        "dynsight.smartAnalysis.exclude": {
+          "order": 31,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": [],
+          "scope": "resource",
+          "description": "Workspace-relative glob patterns skipped by both Macro and Copilot, for example App/Generated/**. Takes priority over Smart Analysis Include. Files remain available for basic navigation and as supporting definitions unless excluded from the general index."
+        },
+        "dynsight.smartAnalysis.macro": {
+          "order": 32,
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "description": "Expand macros and propagate local function-pointer and callback targets inside the Smart Analysis scope. Both stages run locally without a build toolchain. Turning off keeps basic navigation and explicit registrations. Copilot is controlled separately."
+        },
+        "dynsight.smartAnalysis.copilot": {
+          "order": 33,
+          "type": "boolean",
+          "default": false,
+          "scope": "window",
+          "markdownDescription": "Automatically request AI candidates for unresolved callbacks inside Smart Analysis Include and outside exclusions, using your GitHub Copilot account. Works independently of Macro. Relevant source is sent to the selected Copilot model and account usage limits apply. Requests run one at a time and reuse valid cache. Stop Copilot Analysis pauses requests for this session; [Analyze Callbacks with Copilot](command:dynsight.analyzeCallbacksWithCopilot), changing this setting, model or scope resumes analysis. User confirmed targets are skipped; use Recheck with AI for individual comparisons. AI candidates are suggestions, not proven calls."
+        },
+        "dynsight.copilotModel": {
+          "order": 34,
+          "type": "string",
+          "default": "",
+          "scope": "window",
+          "markdownDescription": "Copilot model ID for callback candidates. [Select Copilot Model](command:dynsight.selectCopilotModel) lists models available to your Copilot account and saves the selected ID here. Selecting a model resumes automatic analysis when Smart Analysis: Copilot is enabled; it does not enable the setting. An empty value asks you to choose when automatic analysis starts. Model changes reuse only that model's valid cache; unavailable models are not replaced automatically."
+        },
+        "dynsight.skipInactive": {
+          "order": 40,
+          "type": "boolean",
+          "default": true,
+          "description": "Exclude provably inactive #if 0/1 branches. Unknown conditions remain visible."
+        },
+        "dynsight.calleeSort": {
+          "order": 50,
+          "type": "string",
+          "enum": [
+            "name",
+            "source"
+          ],
+          "enumDescriptions": [
+            "Sort Callees by symbol name.",
+            "Sort Callees by their first call location in source, not runtime execution order."
+          ],
+          "default": "name",
+          "scope": "window",
+          "description": "Callees sorting. Open with the Relation Settings button. Callers and References keep name order."
+        },
+        "dynsight.includeFunctionArguments": {
+          "order": 51,
+          "type": "boolean",
+          "default": false,
+          "scope": "window",
+          "description": "Include functions passed as arguments in Callers, Callees and Callers & Callees. Dotted connectors mean argument passing, not proof of invocation. Changes reuse the existing index."
+        },
+        "dynsight.copilotCallbacks": {
+          "order": 60,
+          "type": "boolean",
+          "default": false,
+          "scope": "window",
+          "markdownDescription": "Automatically request AI candidates for unresolved callbacks using your existing GitHub Copilot account. When enabled, startup, saved source changes and Rebuild analyze eligible calls one at a time and reuse valid cache. Calls must be in Copilot Include and Detailed Analysis Folders and outside exclusions. Choose a model when prompted; relevant source is sent to Copilot and account usage limits apply. Stop Copilot Analysis pauses automatic requests for this session and keeps completed results. [Analyze Callbacks with Copilot](command:dynsight.analyzeCallbacksWithCopilot), toggling this setting, or changing the model or scope resumes automatic analysis. Active User confirmed targets are skipped; use Recheck with AI for an individual comparison. AI candidates are suggestions, not proven calls.",
+          "included": false,
+          "deprecationMessage": "Use Smart Analysis Include / Exclude and the Macro / Copilot switches. Saved legacy scopes remain active until Smart Analysis Include is explicitly saved."
+        },
+        "dynsight.copilotInclude": {
+          "order": 62,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": [],
+          "scope": "resource",
+          "description": "Files whose callback call sites may use AI, using workspace-relative globs. Only explicit paths are used; they are not copied from Include. Call locations must also be in Detailed Analysis Folders. Empty disables all AI callback requests. Copilot Exclude takes priority. Local analysis is unchanged and supporting evidence may come from other indexed paths. When Copilot Callbacks is enabled, scope changes cancel the active AI run and automatically analyze missing eligible results while reusing valid cache.",
+          "included": false,
+          "deprecationMessage": "Use Smart Analysis Include / Exclude and the Macro / Copilot switches. Saved legacy scopes remain active until Smart Analysis Include is explicitly saved."
+        },
+        "dynsight.copilotExclude": {
+          "order": 63,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": [],
+          "scope": "resource",
+          "description": "Workspace-relative glob patterns whose callback call sites skip AI, for example Vendor/** or Generated/**. Exclude takes priority over Copilot Include. Excluded sites use no AI requests and are omitted from AI results and pending counts; existing cached results are kept for later reuse. Local callback analysis and use as supporting source evidence remain available.",
+          "included": false,
+          "deprecationMessage": "Use Smart Analysis Include / Exclude and the Macro / Copilot switches. Saved legacy scopes remain active until Smart Analysis Include is explicitly saved."
+        },
+        "dynsight.automaticUpdates": {
+          "order": 90,
+          "type": "boolean",
+          "default": true,
+          "scope": "application",
+          "description": "Check GitHub Releases daily and ask before installing a newer version."
         },
         "dynsight.macroExpansionFolders": {
-          "deprecationMessage": "Use Detailed Analysis Folders to scope macro expansion and callback propagation together. Explicit legacy settings remain active until that setting is saved.",
+          "deprecationMessage": "Use Smart Analysis Include / Exclude and the Macro / Copilot switches. Saved legacy scopes remain active until Smart Analysis Include is explicitly saved.",
           "order": 100,
           "type": "array",
           "items": {
@@ -265,20 +310,17 @@
             "**"
           ],
           "scope": "resource",
-          "markdownDescription": "[Select folders…](command:dynsight.selectMacroExpansionFolders) with checkboxes, or enter workspace-relative glob patterns such as `App/**`. Default `[\"**\"]` expands all indexed sources; an empty list disables macro expansion. Unchecked sources keep basic analysis and header definitions remain available to checked sources. Include/Exclude still control which files are indexed. Changes refresh affected source analysis and relationships."
+          "markdownDescription": "[Select folders…](command:dynsight.selectMacroExpansionFolders) with checkboxes, or enter workspace-relative glob patterns such as `App/**`. Default `[\"**\"]` expands all indexed sources; an empty list disables macro expansion. Unchecked sources keep basic analysis and header definitions remain available to checked sources. Include/Exclude still control which files are indexed. Changes refresh affected source analysis and relationships.",
+          "included": false
         },
-        "dynsight.skipInactive": {
-          "order": 40,
+        "dynsight.analyzeCallbacks": {
+          "deprecationMessage": "Use Smart Analysis Include / Exclude and the Macro / Copilot switches. Saved legacy scopes remain active until Smart Analysis Include is explicitly saved.",
+          "order": 101,
           "type": "boolean",
           "default": true,
-          "description": "Exclude provably inactive #if 0/1 branches. Unknown conditions remain visible."
-        },
-        "dynsight.automaticUpdates": {
-          "order": 90,
-          "type": "boolean",
-          "default": true,
-          "scope": "application",
-          "description": "Check GitHub Releases daily and ask before installing a newer version."
+          "scope": "window",
+          "description": "Infer function-pointer and structure callback targets in Callers, Callees and Callers & Callees, and trace callbacks when clicking their call sites. Turning off skips full callback propagation. Literal function assignments appear as Registration even without calls. Simple function-pointer and local structure-member assignments remain traceable, and available Copilot candidates remain selectable; unresolved sites use ordinary symbol navigation. Direct calls, macro expansion and literal function arguments remain available; alias-derived arguments require this option. Changes recalculate relationships without reparsing source files, after any running analysis finishes.",
+          "included": false
         }
       }
     }
@@ -296,7 +338,7 @@
     "test:freertos": "npm run build && node scripts/test-freertos.mjs",
     "test:ui": "npm run build && tsx test/create-ui-fixture.ts && node test/ui.mjs && node test/scoped-ui.mjs",
     "vscode:prepublish": "npm run build",
-    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license --out artifacts/dynsight-0.1.74.vsix"
+    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license --out artifacts/dynsight-0.1.75.vsix"
   },
   "dependencies": {
     "minimatch": "10.2.6",

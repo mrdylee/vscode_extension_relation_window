@@ -58,10 +58,11 @@ all local analysis. Diagnostics shows cache state and parse/relation counters.
 
 ## Optional Copilot callback candidates
 
-Enable **Copilot Callbacks** in Settings, select a **Copilot Model**, and explicitly
-choose **Copilot Include** paths. Invocation files must also be inside **Detailed
-Analysis Folders** and outside the general and Copilot exclusions. Empty Copilot
-Include permits no requests. Paths are not copied from general Include.
+Enable **Smart Analysis: Copilot**, select a **Copilot Model**, and explicitly
+choose **Smart Analysis: Include** paths. Invocation files must be indexed,
+included in the shared Smart Analysis scope and outside its exclusions. Empty
+Smart Analysis Include permits no requests. Paths are not copied from general
+Include. Copilot works independently of the **Macro** switch.
 
 When enabled, analysis starts automatically once the saved index is ready. Startup,
 saved source changes, Rebuild, and model/scope changes analyze missing eligible
@@ -80,7 +81,7 @@ Save modified sources first.
 
 Relevant source snippets are sent to your selected Copilot model. Supporting code
 may come from other indexed paths, even when only the invocation file is inside
-Copilot Include. Account limits and organization policies apply. Source comments
+Smart Analysis Include. Account limits and organization policies apply. Source comments
 and strings are analysis data. Dynsight uses bounded snippets, not chat history or
 an Agent's whole-project search. Missing context is reported as **More context
 needed**; **No target found in provided context** does not prove no target exists.
@@ -109,9 +110,10 @@ callback propagation engine. AI and user overlays never enter the Worker cache.
 ```json
 {
   "dynsight.include": ["App/**", "Drivers/**"],
-  "dynsight.detailedAnalysisFolders": ["App/**"],
-  "dynsight.copilotInclude": ["App/**"],
-  "dynsight.copilotExclude": ["App/Generated/**"]
+  "dynsight.smartAnalysis.include": ["App/**"],
+  "dynsight.smartAnalysis.exclude": ["App/Generated/**"],
+  "dynsight.smartAnalysis.macro": true,
+  "dynsight.smartAnalysis.copilot": true
 }
 ```
 
@@ -155,33 +157,39 @@ Other examples: `App/**/*.{c,h}` matches C/H files under App; `**/vendor/**` mat
 - Definitions and references outside the scope are absent from Relation. Include shared headers and libraries if you need their relationships.
 - To restore full scope, empty Include and remove unwanted Exclude entries.
 
-## Detailed Analysis Folders
+## Smart Analysis
 
-Settings are ordered as **View → Include → Exclude → Detailed Analysis Folders →
-Analysis Options → Relation Display → Copilot**, followed by maintenance settings.
-Include/Exclude select the basic index. **Detailed Analysis Folders** selects the
-subset receiving macro expansion and interprocedural callback propagation.
+Settings are ordered as **View → Include → Exclude → Smart Analysis Include /
+Exclude → Macro / Copilot → other options**. Only four path lists are shown.
+General Include/Exclude select the basic index. The shared Smart Analysis scope
+selects extra analysis within that index:
 
-Use **Select folders…** or **Dynsight: Select Detailed Analysis Folders**. An empty
-list keeps basic symbols, direct calls, explicit callback registrations and
-supported straight-line local pointer candidates. `['**']` selects every indexed
-source. Cancel leaves the setting unchanged. Multi-root selection writes the
-chosen root's setting. Folder patterns use forward slashes on every platform.
+- **Macro** expands macros and propagates local function-pointer and callback
+  targets together. It is enabled by default, but requires a nonempty scope.
+- **Copilot** requests AI candidates for unresolved callbacks. It is off by
+  default and runs independently of Macro.
 
-Unchecked indexed headers still supply definitions. Unchecked function bodies
-are not automatically pulled into detailed propagation; relationships requiring
-such bodies may stay unresolved. Select those folders when needed. This limits
-extra analysis; the basic index itself still needs memory.
+Use **Select folders…** or **Dynsight: Select Smart Analysis Folders**. An empty
+Include list disables both stages. `['**']` selects every indexed source.
+Smart Analysis Exclude takes priority. Cancel leaves the setting unchanged.
+Multi-root selection writes the chosen root's setting. Use forward slashes on
+all platforms. Unselected files keep basic navigation and explicit registrations;
+indexed headers still provide definitions. External function bodies are not
+pulled into local propagation automatically.
 
-Existing explicit **Macro Expansion Folders** and **Analyze Callbacks** settings
-remain a compatibility path until Detailed Analysis Folders is explicitly saved.
-Their old defaults are not silently applied to a new workspace. Saving even an
-empty unified list replaces the old two controls for that root. Old macro picker
-commands now open the unified selection. Changing a scope refreshes affected flow
+Saved legacy Macro Expansion Folders, Analyze Callbacks, Detailed Analysis
+Folders and Copilot paths remain effective until Smart Analysis Include is
+explicitly saved. They are hidden from the Settings UI. Saving even an empty new
+Include replaces those path scopes for that root; Macro and Copilot switches
+remain independent. Legacy picker commands open the new shared selection.
+Changing a scope refreshes affected flow
 facts; increasing the scope may require parsing the affected files again.
 
-Local work has per-function cumulative and project bounds as well as memory and
-manual Stop checks. Partial results retain their reasons. **Basic navigation
+Local work keeps cumulative per-function bounds. Project work continues across
+accounting batches instead of spending the entire callback allowance on macros.
+Memory guards, manual Stop and structural limits remain active; batches are not
+persisted checkpoints and do not promise a maximum elapsed time. Partial results
+retain their reasons. **Basic navigation
 ready** and **Detailed analysis** are separate states; neither an AI candidate nor
 a user choice proves all runtime paths were found.
 
@@ -287,7 +295,7 @@ JSON setting: `"dynsight.includeFunctionArguments": true`.
 
 ### Callback analysis and legacy settings
 
-Use **Detailed Analysis Folders** for new workspaces. Macro expansion and full
+Use **Smart Analysis Include / Exclude** for new workspaces. Macro expansion and full
 callback propagation share this scope; **Include Function Arguments** remains a
 separate display preference. Explicit registrations and safe simple local
 candidates remain available outside detailed analysis.
@@ -405,7 +413,7 @@ the relevant getter, registration and table definitions when collecting a reprod
   callee effects, can fill the limit. Inspect the function/file location,
   `ordered-region` / `function-regions` / `reachable-regions` operation and
   `first omitted` storage in the notice. AI Analyze waits for local indexing and
-  can use a stable partial result. Copilot Include limits paid requests; general
+  can use a stable partial result. Smart Analysis Include / Exclude limit AI requests; general
   Include/Exclude controls the local analysis scope that produced this warning.
 - Object/function macros, nested argument expansion, stringizing, token pasting, variadics and literal indexed includes are supported. The popup shows the expansion chain and tinted effective code. Clicking a call still previews its original invocation in Context.
 - Local pointer initialization/assignment, pointer aliases, branches/loops, callback argument forwarding/registration/returns, static state, struct tables and arrays supply possible targets. Constant array indices stay separate; unknown indices collect possible entries.
