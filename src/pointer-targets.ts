@@ -269,15 +269,21 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
   const heapRegions = new Set<string>(), regionPatterns = new Map<string, RegExp>();
   interface RegionNode { root?: string; children: Map<string, RegionNode> }
   const regionRoots = new WeakMap<object, RegionNode>();
+  const regionPaths = new Map<string, readonly string[]>();
   let stamp = 0;
   const opaqueReason = 'Call may modify this storage; callback bytes are not resolved';
   function storageRoot(slot: string) {
+    const path = regionPaths.get(slot); if (path) return path[0];
     for (let n = slot.indexOf('#') + 1; n < slot.length; n++) if (slot[n] === '.' || slot[n] === '[') return slot.slice(0, n);
     return slot;
   }
   function regionPath(slot: string) {
+    const previous = regionPaths.get(slot); if (previous) return previous;
     const root = storageRoot(slot);
-    return [root, ...Array.from(slot.slice(root.length).matchAll(/\.[^.\[]+|\[[^\]]+\]/g), match => match[0])];
+    const path = [root, ...Array.from(slot.slice(root.length).matchAll(/\.[^.\[]+|\[[^\]]+\]/g), match => match[0])];
+    // Keep only immutable path syntax, bounded and local to this analysis run.
+    if (regionPaths.size >= 4096) regionPaths.clear();
+    regionPaths.set(slot, path); return path;
   }
   function registerRegion(regions: object, root: string) {
     const index = regionRoots.get(regions); if (!index) return;
@@ -290,6 +296,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     node.root = root;
   }
   function matchingRegions(regions: Set<string> | Map<string, unknown>, slot: string): Iterable<string> {
+    if (!regions.size) return [];
     let index = regionRoots.get(regions);
     if (!index) {
       regionRoots.set(regions, index = { children: new Map() });
@@ -348,9 +355,10 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
   // project uncertainty rather than silently discarding an affected object.
   function omitRegion(root: string, state: State, exported = true) {
     state.omittedRegions ??= new Map();
-    if (!state.omittedRegions.has(root) && state.omittedRegions.size >= 256) { projectIncomplete = true; return; }
+    const previous = state.omittedRegions.has(root);
+    if (!previous && state.omittedRegions.size >= 256) { projectIncomplete = true; return; }
     state.omittedRegions.set(root, exported || state.omittedRegions.get(root) === true);
-    registerRegion(state.omittedRegions, root);
+    if (!previous) registerRegion(state.omittedRegions, root);
   }
   const regionCounts = new WeakMap<Map<string, OrderedChange>, Map<string | undefined, number>>();
   function markRegion(root: string, state: State, definite: boolean, exported = true, shallow = false, context?: string) {
@@ -380,7 +388,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
       counts.set(context, (counts.get(context) ?? 0) + 1);
     }
     state.regions.set(root, { stamp: ++stamp, definite, exported, context, shallow: shallow && previous?.shallow !== false });
-    registerRegion(state.regions, root);
+    if (!previous) registerRegion(state.regions, root);
   }
   function invalidate(roots: Iterable<string>, state: State, ctx: Context, definite = true, shallow = false) {
     const pending = [...roots].map(root => ({ root: physical(root), exported: true, context: undefined as string | undefined })), seen = new Map<string | undefined, Set<string>>([[undefined, new Set()]]), affected: typeof pending = [];
@@ -399,8 +407,8 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
       if (visited.size > 256) { state.incomplete = true; notice('Callback region limit: 256 reachable objects; targets may be incomplete', undefined, false,
         () => storageDetail('reachable-regions', affected.filter(item => item.context === context).map(item => item.root), root, visited!.size - 1)); break; }
       affected.push({ root, exported, context });
-      const resolved = new Set([...objects({ ...blank(), objects: new Set([root]) })].map(path => shallow ? byteDestination(path) : physical(path)));
-      const paths = new Set([root, ...resolved]);
+      const paths = !shallow && !root.startsWith('$arg:') ? [root] :
+        new Set([root, ...[...objects({ ...blank(), objects: new Set([root]) })].map(path => shallow ? byteDestination(path) : physical(path))]);
       for (const path of paths) {
         // Actual supplies help analyze this function, but must not escape into
         // its symbolic summary and invalidate other callers' objects.

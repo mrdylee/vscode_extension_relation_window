@@ -36,6 +36,32 @@ test('one actual call reaching 257 objects still reports the region limit',()=>{
   assert.ok(result.issues.some(issue=>/region limit/.test(issue)));
 });
 
+test('repeated region lookup observes wildcard invalidation and later precise writes', () => {
+  const source = 'typedef void(*CB)(void);void first(void){}void second(void){}struct Leaf{CB cb;};struct Box{struct Leaf items[2];};void opaque(struct Leaf*);void run(unsigned n){struct Box box={{{first},{first}}};' +
+    'box.items[0].cb();opaque(&box.items[n]);box.items[0].cb();box.items[0].cb=second;box.items[0].cb();opaque(&box.items[0]);box.items[0].cb();}';
+  const [result] = analyzer.derive([analyzer.analyze('file:///region-order.c', source, true, { expandMacros: false, propagateCallbacks: true })]);
+  const sites = [...source.matchAll(/box\.items\[0\]\.cb\(\)/g)].map(match => match.index);
+  assert.deepEqual(sites.map(start => result.references.filter(ref => ref.kind === 'call' && ref.location.start === start)
+    .map(ref => [ref.name, ref.callKind, ref.inference?.incomplete])), [
+    [['first', 'inferred', false]], [['box.items[0].cb', 'indirect', true]],
+    [['second', 'inferred', false]], [['box.items[0].cb', 'indirect', true]]
+  ]);
+  assert.deepEqual(result.issues, []);
+});
+
+test('many distinct storage paths and source revisions retain callback identity', () => {
+  const declarations = Array.from({ length: 4200 }, (_, n) => `static struct Leaf value${n}={first};`).join('');
+  for (const target of ['first', 'second']) {
+    const source = `typedef void(*CB)(void);void first(void){}void second(void){}struct Leaf{CB cb;};${declarations}
+      void run(void){value0.cb=${target};value0.cb();value4199.cb();}`;
+    const [result] = analyzer.derive([analyzer.analyze('file:///many-region-paths.c', source, true, { expandMacros: false, propagateCallbacks: true })]);
+    const calls = result.references.filter(ref => ref.callKind === 'inferred');
+    assert.deepEqual(calls.map(ref => ref.name), [target, 'first']);
+    assert.ok(calls.every(ref => !ref.inference?.incomplete));
+    assert.deepEqual(result.issues, []);
+  }
+});
+
 test('compatible struct declarations in different files retain scalar selector effects', () => {
   const index = new RelationIndex();
   const files = [

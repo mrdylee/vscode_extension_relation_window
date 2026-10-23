@@ -200,6 +200,30 @@ test('shared conditional member layouts do not multiply numeric dependency work'
   assert.ok(counts[1] < counts[0] * 3, `four more levels must not multiply layout work: ${counts.join(' -> ')}`);
 });
 
+test('repeated region paths do not multiply parsing work after opaque writes', () => {
+  const original = String.prototype.matchAll;
+  const counts: number[] = [];
+  try {
+    for (const repetitions of [8, 80]) {
+      const source = 'typedef void(*CB)(void);void target(void){}struct Leaf{CB cb;};struct Box{struct Leaf items[2];};static struct Box box={{{target},{target}}};void opaque(struct Box*);void run(void){' +
+        'opaque(&box);box.items[0].cb=target;box.items[0].cb();'.repeat(repetitions) + '}';
+      const raw = analyzer.analyze('file:///region-repeat.c', source, true, { expandMacros: false, propagateCallbacks: true });
+      let parsedPaths = 0;
+      String.prototype.matchAll = function(pattern: RegExp) {
+        if (pattern.source === /\.[^.\[]+|\[[^\]]+\]/g.source) parsedPaths++;
+        return original.call(this, pattern);
+      };
+      const [result] = analyzer.derive([raw]);
+      counts.push(parsedPaths);
+      const sites = result.references.filter(ref => ref.callKind === 'inferred');
+      assert.equal(sites.length, repetitions);
+      assert.ok(sites.every(site => site.name === 'target' && !site.inference?.incomplete));
+      assert.deepEqual(result.issues, []);
+    }
+  } finally { String.prototype.matchAll = original; }
+  assert.ok(counts[1] <= Math.max(1, counts[0]) * 3, `repeated reads and writes must reuse paths: ${counts.join(' -> ')}`);
+});
+
 test('numeric lookup dependencies still flow backward from nested callback selectors and aliases', () => {
   const index = project(`typedef void(*CB)(void);void first(void){}void second(void){}
     static CB handlers[2]={first,second};static unsigned values[2],selected;
