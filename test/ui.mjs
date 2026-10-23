@@ -87,8 +87,7 @@ try {
   assert.equal(await page.locator('.copilot-progress').count(),1,'AI progress must be visible outside Diagnostics');
   assert.match(await page.locator('.copilot-progress').textContent(),/5\/7 processed.*Remaining: 2/);
   assert.equal(await page.locator('.graph > .branch').getAttribute('data-ai-progress'),'retained','progress does not rerender the graph');
-  await page.getByRole('button',{name:'Choose callback…',exact:true}).click();
-  assert.ok(await page.evaluate(()=>window.sent.some(m=>m.type==='copilotAnalyze')));
+  assert.equal(await page.getByRole('button',{name:'Choose callback…',exact:true}).count(),0,'enabled analysis must not require choosing a callback');
   Object.assign(aiDiagnostics.copilot,{state:'analyzing',automatic:true});
   await page.evaluate(diagnostics=>window.dispatchEvent(new MessageEvent('message',{data:{type:'diagnostics',diagnostics}})),aiDiagnostics);
   assert.equal(await page.getByRole('button',{name:'Choose callback…',exact:true}).count(),0);
@@ -97,7 +96,7 @@ try {
   Object.assign(aiDiagnostics.copilot,{state:'stopped',automatic:false});
   await page.evaluate(diagnostics=>window.dispatchEvent(new MessageEvent('message',{data:{type:'diagnostics',diagnostics}})),aiDiagnostics);
   assert.match(await page.locator('.copilot-progress').textContent(),/stopped.*5\/7/);
-  assert.equal(await page.getByRole('button',{name:'Choose callback…',exact:true}).count(),1);
+  assert.equal(await page.getByRole('button',{name:'Choose callback…',exact:true}).count(),0);
   Object.assign(aiDiagnostics.copilot,{state:'ready',completed:7,remaining:0,notFound:7});
   await page.evaluate(diagnostics=>window.dispatchEvent(new MessageEvent('message',{data:{type:'diagnostics',diagnostics}})),aiDiagnostics);
   assert.match(await page.locator('.copilot-progress').textContent(),/All detected sites processed.*7\/7/);

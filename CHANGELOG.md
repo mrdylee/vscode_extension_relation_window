@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.74 — 2026-10-23
+
+- Keep Basic navigation, Local and Copilot progress on one footer row, including
+  narrow panels. Truncate long text while keeping Stop local in its fixed action
+  area and preserving full-function-name hover and Copy.
+- Remove Choose callback from the footer. When Copilot Callbacks is enabled,
+  automatically analyze unresolved calls within the existing detailed/AI scope,
+  one request at a time, continuing beyond five calls and reusing valid cache.
+- Stop or request failure pauses automatic work for the session. Resume through
+  Analyze Callbacks with Copilot, a setting toggle, or a model/scope change.
+  Active User confirmed targets are skipped; per-call rechecks remain available.
+- Reject stale source/model responses, preserve completed candidates on Stop,
+  and keep per-call rechecks from counting the same completed site twice.
+
 ## 0.1.73 — 2026-10-23
 
 - Publish explicit registrations and literal function arguments before detailed

@@ -13,7 +13,7 @@ try {
  const site={id:'ai-site',name:'wrong',kind:'call',access:'read',targetId:'wrong',callKind:'ai-candidate',location:at,conditions:[],ambiguous:true,inference:{expression:'ops->cb',incomplete:true,reasons:[],evidence:[]}};
  const node={key:'run/wrong',symbolId:'wrong',name:'wrong',kind:'function',definition:true,location:at,callKind:'ai-candidate',sites:[site],conditions:[],children:[],cycle:false,expanded:false,ambiguous:true};
  const state={graph:{root:{...node,key:'run',symbolId:'run',name:'run',callKind:undefined,sites:[],children:[node]},truncated:false},candidates:[],status:'Basic navigation ready',fileCount:1,issues:[],mode:'callees',accessFilter:'all',depth:1,locked:false,skipInactive:true,calleeSort:'name',contextLayout:'combined',callGraphDirection:'callers-left',includeFunctionArguments:false,analyzeCallbacks:true};
- const diagnostics={environment:'test',host:{at:1,heapUsed:1,heapLimit:100,external:0},index:{callbackAnalysis:{running:true,paused:false,progress:{symbol:'short',stage:'propagation',scopeElapsedMs:10,elapsedMs:10,round:1,maxRounds:12,functionsDone:1,functionsTotal:10,evaluations:1,scopeEvaluations:1}},sessionStartedAt:1,rebuildCount:1,sourceParses:1,relationPasses:1,rebuilds:[]}};
+ const diagnostics={environment:'test',host:{at:1,heapUsed:1,heapLimit:100,external:0},copilot:{state:'waiting-for-saved-index',waitReason:'relations',automatic:false},index:{callbackAnalysis:{running:true,paused:false,progress:{symbol:'short',stage:'propagation',scopeElapsedMs:10,elapsedMs:10,round:1,maxRounds:12,functionsDone:1,functionsTotal:10,evaluations:1,scopeEvaluations:1}},sessionStartedAt:1,rebuildCount:1,sourceParses:1,relationPasses:1,rebuilds:[]}};
  const dispatch=async(data)=>page.evaluate(data=>window.dispatchEvent(new MessageEvent('message',{data})),data);
  let copyOk=true;
  let aiReply,heldAnalysis,holdAnalysis=false,duplicateSearch=false;
@@ -43,6 +43,10 @@ try {
  for(const width of [900,600,320]){
   await page.setViewportSize({width,height:720});await dispatch({type:'diagnostics',diagnostics});
   const before=await page.getByRole('button',{name:'Stop local',exact:true}).boundingBox();
+  const statusBoxes=await page.locator('footer .index-status, .local-summary, .local-actions, .copilot-progress, footer > button').evaluateAll(nodes=>nodes.map(node=>{const b=node.getBoundingClientRect();return {middle:b.y+b.height/2};}));
+  assert.ok(statusBoxes.every(box=>Math.abs(box.middle-(before.y+before.height/2))<=1),`all footer statuses and actions must share one row at ${width}px`);
+  assert.ok((await page.locator('footer').boundingBox()).height<=40,'footer must leave the information pane its vertical space');
+  await page.locator('footer').screenshot({path:`output/playwright/footer-${width}.png`});
   diagnostics.index.callbackAnalysis.progress.symbol='very_long_function_name_'.repeat(15);await dispatch({type:'diagnostics',diagnostics});
   const after=await page.getByRole('button',{name:'Stop local',exact:true}).boundingBox();
   assert.ok(Math.abs(before.x-after.x)<=1&&Math.abs(before.y-after.y)<=1&&Math.abs(before.width-after.width)<=1,'Stop button must not move with function names');

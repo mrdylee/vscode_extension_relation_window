@@ -3,7 +3,7 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { Minimatch } from 'minimatch';
 import { WorkspaceIndex } from './workspace';
-import { CopilotCallbackController, CallbackHint, CopilotSnapshot } from './copilot-callbacks';
+import { CopilotCallbackController, CallbackHint, CopilotSnapshot, CopilotProgress } from './copilot-callbacks';
 import { prepareCallbackContexts, CallbackSite } from './copilot-context';
 import { applyCallbackHints } from './copilot-relations';
 import { CallbackOverrideStore, makeCallbackOverride } from './callback-overrides';
@@ -19,6 +19,7 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
   let model: vscode.LanguageModelChat | undefined, controller: CopilotCallbackController | undefined;
   let overrides = new CallbackOverrideStore(context.workspaceState.get(storageKey));
   let revision = 0, manualRevision = 0, disposed = false, selecting = false, starting = false, running: Promise<unknown> | undefined, timer: ReturnType<typeof setTimeout> | undefined;
+  let automaticPaused = false;
   let writing = Promise.resolve();
   const hints = new Map<string, CallbackHint>();
   const suggestions = new Map<string, {id: string; result: CallbackHint; manualRevision: number}>();
@@ -27,6 +28,10 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
   const canAnalyze = () => !workspace.hasDirtySources && (workspace.copilotSnapshotReady ?? workspace.stable);
   const configuredModel = () => vscode.workspace.getConfiguration('dynsight').get<string>('copilotModel', '').trim();
   function status(value: string) { activity.state = value; workspace.copilotDiagnostics = {...activity}; workspace.diagnosticsChanged.fire(); }
+  function progress(value: CopilotProgress) {
+    for (const key of ['total', 'completed', 'remaining', 'failures', 'candidates', 'notFound', 'contextLimited', 'excluded'] as const) activity[key] = value[key] ?? 0;
+    activity.cacheHits = value.cached;
+  }
   function configFor(uri: string) {
     const value = vscode.Uri.parse(uri);
     return {config: vscode.workspace.getConfiguration('dynsight', vscode.workspace.getWorkspaceFolder(value)?.uri), relative: vscode.workspace.asRelativePath(value, false).replace(/\\/g, '/')};
@@ -54,7 +59,11 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
       {...file, references: file.references.filter(ref => !['ai-candidate', 'user-confirmed'].includes(ref.callKind ?? ''))} : file);
     return {generation: workspace.generation, settingsKey: workspace.analysisKey, scopeRevision: revision, files, callsiteUris: new Set(files.filter(file => eligible(file.uri)).map(file => file.uri))};
   }
-  function stop(value = 'stopped') { revision++; controller?.stop(); controller?.invalidate(); suggestions.clear(); status(value); }
+  function stop(value = 'stopped') {
+    if (value === 'stopped') automaticPaused = true;
+    else { revision++; controller?.invalidate(); }
+    controller?.stop(); suggestions.clear(); activity.automatic = false; status(value);
+  }
   async function selectModel(picker = false) {
     const epoch = revision, id = configuredModel();
     const models = await vscode.lm.selectChatModels(id && !picker ? {vendor: 'copilot', id} : {vendor: 'copilot'});
@@ -67,6 +76,7 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
     if (savedModel?.id !== chosen.id || savedModel.version !== chosen.version) { controller?.dispose(); controller = undefined; }
     model = chosen; savedModel = {id: chosen.id, version: chosen.version};
     await context.workspaceState.update('copilotCallbackModel', savedModel);
+    if (disposed || epoch !== revision) return false;
     selecting = true;
     try { if (configuredModel() !== chosen.id) await vscode.workspace.getConfiguration('dynsight').update('copilotModel', chosen.id, vscode.ConfigurationTarget.Workspace); }
     finally { selecting = false; }
@@ -77,6 +87,15 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
     const selected = savedModel, cacheKey = createHash('sha256').update(JSON.stringify([selected.id, selected.version])).digest('hex');
     controller = new CopilotCallbackController({cacheDir: path.join(context.storageUri.fsPath, 'copilot-callbacks', cacheKey),
       isCurrent: value => !disposed && enabled() && canAnalyze() && value.generation === workspace.generation && value.settingsKey === workspace.analysisKey && value.scopeRevision === revision && configuredModel() === selected.id,
+      onProgress: value => {
+        if (!activity.automatic) return;
+        progress(value); status('analyzing');
+      },
+      onHints: values => {
+        if (!activity.automatic) return;
+        for (const hint of values) hints.set(hint.key, hint);
+        project();
+      },
       provider: {modelKey: `copilot:${selected.id}:${selected.version}`, complete: async (prompt, signal) => {
         const cancellation = new vscode.CancellationTokenSource();
         let cancelled=false;
@@ -99,21 +118,42 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
         })()]); } finally { clearTimeout(timeout); signal.removeEventListener('abort', abort); cancellation.dispose(); }
       }}});
   }
-  async function restore() {
-    if (disposed || running || !canAnalyze()) return;
+  async function analyzeAutomatically() {
+    if (disposed || running || starting) return;
+    if (automaticPaused) { project(); return; }
     if (!enabled()) { project(); status('off'); return; }
-    if (!savedModel || savedModel.id !== configuredModel()) { project(); status('model-selection-required'); return; }
-    setup(); if (!controller) return;
-    const active = controller;
-    running = (async () => {
-      const result = await active.restore(snapshot()); if (result.stale) return;
+    if (!canAnalyze()) { activity.automatic = true; status('waiting-for-saved-index'); return; }
+    const epoch = revision, confirmedRevision = manualRevision;
+    const task = (async () => {
+      const value = snapshot();
+      if (!value.callsiteUris?.size) {
+        Object.assign(activity, {total: 0, completed: 0, cacheHits: 0, remaining: 0, failures: 0, candidates: 0, notFound: 0, contextLimited: 0, excluded: 0, automatic: false});
+        project(); status('ready'); return;
+      }
+      activity.automatic = true; status('restoring-cache');
+      if (!await selectModel()) {
+        if (epoch === revision && !disposed) { automaticPaused = true; activity.automatic = false; status(activity.state); }
+        return;
+      }
+      if (epoch !== revision || disposed || automaticPaused || !canAnalyze()) return;
+      setup(); if (!controller) throw new Error('Copilot storage is unavailable.');
+      value.excludedCallsiteKeys = new Set(overrides.resolve(workspace.index).filter(item => item.status === 'active').map(item => `${item.site!.location.uri}:${item.site!.location.start}:${item.site!.location.end}`));
+      const result = await controller.analyzeUnresolved(value, {reason: 'enabled', automatic: true});
+      if (result.stale || epoch !== revision || confirmedRevision !== manualRevision) return;
       for (const hint of result.hints) hints.set(hint.key, hint);
-      activity.cacheHits = result.cached; activity.remaining = result.remaining; activity.total = result.total;
-      project(); status('ready');
+      progress(result); activity.automatic = false;
+      if (result.failures) automaticPaused = true;
+      project(); status(result.stopped ? 'stopped' : result.failures ? 'request-failed' : 'ready');
     })();
-    try { await running; } finally { running = undefined; }
+    running = task;
+    try { await task; }
+    catch { if (!disposed && epoch === revision) { automaticPaused = true; activity.automatic = false; status('request-failed'); } }
+    finally {
+      if (running === task) running = undefined;
+      if (!disposed && (epoch !== revision || confirmedRevision !== manualRevision)) schedule();
+    }
   }
-  function schedule() { clearTimeout(timer); timer = setTimeout(() => { void restore().catch(() => status('request-failed')); }, 10); }
+  function schedule() { clearTimeout(timer); timer = setTimeout(() => { void analyzeAutomatically().catch(() => status('request-failed')); }, 10); }
   async function siteFor(action: CallbackActionHandle) {
     if (!canAnalyze()) throw new Error('Save source changes and wait for basic navigation to be ready.');
     const confirmed=action.overrideKey&&overrides.resolve(workspace.index).find(value=>value.record.key===action.overrideKey&&value.status==='active'&&
@@ -164,6 +204,7 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
     async analyze(action: CallbackActionHandle, recheck: boolean): Promise<CallbackActionResult> {
       if (!enabled()) throw new Error('Enable Copilot in Settings before requesting AI analysis.');
       if (running || starting) throw new Error('Another callback analysis is running.');
+      const startRevision = revision, startManualRevision = manualRevision;
       starting=true;
       try {
       const {site, snapshot: value} = await siteFor(action);
@@ -179,14 +220,23 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
         if (result.stale || epoch !== revision || confirmedRevision !== manualRevision) throw new Error('The callback or selection changed during AI analysis.');
         if (result.failures) { activity.failures += result.failures; status('request-failed'); throw new Error('Copilot could not analyze this callback.'); }
         const hint = result.hints[0]; if (!hint) throw new Error('No current callback result is available.');
-        if(!action.overrideKey){hints.set(hint.key,hint);project();} activity.completed++; activity.cacheHits += Number(hint.cached); status(result.stopped ? 'stopped' : 'ready');
+        if(!action.overrideKey){
+          const previous=hints.get(hint.key);
+          if(!previous)activity.completed++;
+          activity.total=Math.max(activity.total,activity.completed);activity.remaining=Math.max(0,activity.total-activity.completed);
+          activity.candidates+=hint.candidates.length-(previous?.candidates.length??0);
+          activity.notFound+=Number(hint.status==='not-found')-Number(previous?.status==='not-found');
+          activity.contextLimited+=Number(hint.contextLimited===true)-Number(previous?.contextLimited===true);
+          hints.set(hint.key,hint);project();
+        }
+        activity.cacheHits += Number(hint.cached); status(result.stopped ? 'stopped' : 'ready');
         if (!action.overrideKey) return {hint};
         const selected = overrides.resolve(workspace.index).find(value => value.record.key === action.overrideKey)?.target;
         const suggestionId = randomUUID(); suggestions.set(action.siteKey, {id: suggestionId, result: hint, manualRevision});
         return {hint, suggestionId, comparison: hint.candidates.some(value => value.targetId === selected?.id) ? 'agrees' as const : hint.candidates.length ? 'different' as const : 'insufficient' as const};
       })(); running = task;
       try { return await task; } finally { if (running === task) running = undefined; }
-      } finally {starting=false;}
+      } finally {starting=false;if(startRevision!==revision||startManualRevision!==manualRevision)schedule();}
     },
     async useSuggestion(action: CallbackActionHandle, suggestionId: string, targetId: string) {
       const saved = suggestions.get(action.siteKey);
@@ -196,26 +246,33 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
     cancel(_action?: CallbackActionHandle) { stop(); }
   };
   async function command(recheck = false, action?: CallbackActionHandle) {
-    if (!enabled()) { await vscode.window.showInformationMessage('Enable Copilot in Dynsight Settings, then choose a callback to analyze.'); return; }
-    let selected = action;
-    if (!selected) { const builder = await prepareCallbackContexts(snapshot().files, () => !disposed); const choice = await vscode.window.showQuickPick(builder.sites.filter(value => eligible(value.file.uri)).map(value => ({label: value.expression, description: `${value.file.uri}:${value.call.location.line + 1}`, value})), {title: recheck ? 'Recheck callback with AI' : 'Find callback target with AI'}); if (!choice) return; selected = {siteKey: choice.value.key}; }
-    await actions.analyze(selected, recheck);
+    if (!enabled()) { await vscode.window.showInformationMessage('Enable Copilot Callbacks in Dynsight Settings to analyze unresolved callbacks automatically.'); return; }
+    if (!action) { automaticPaused = false; await running?.catch(() => {}); await analyzeAutomatically(); return; }
+    await actions.analyze(action, recheck);
   }
   context.subscriptions.push(
     vscode.commands.registerCommand('dynsight.analyzeCallbacksWithCopilot', (action?: CallbackActionHandle) => command(false, action)),
     vscode.commands.registerCommand('dynsight.reanalyzeCallbacksWithCopilot', (action?: CallbackActionHandle) => command(true, action)),
-    vscode.commands.registerCommand('dynsight.selectCopilotModel', async () => { await selectModel(true); schedule(); }),
+    vscode.commands.registerCommand('dynsight.selectCopilotModel', async () => {
+      stop('waiting-for-saved-index'); automaticPaused = false;
+      await running?.catch(() => {});
+      if (await selectModel(true)) schedule(); else automaticPaused = true;
+    }),
     vscode.commands.registerCommand('dynsight.stopCopilotAnalysis', () => stop()),
-    workspace.sourceChanged.event(() => { stop('waiting-for-saved-index'); hints.clear(); project(); }),
+    workspace.sourceChanged.event(() => {
+      const pausedState = ['request-failed', 'model-unavailable'].includes(activity.state) ? activity.state : 'stopped';
+      stop('waiting-for-saved-index'); hints.clear(); project(); if (automaticPaused) status(pausedState);
+    }),
     workspace.settled.event(schedule),
     vscode.workspace.onDidChangeConfiguration(event => {
       if (selecting) return;
       if (['copilotCallbacks', 'copilotModel', 'copilotInclude', 'copilotExclude', 'detailedAnalysisFolders', 'include', 'exclude'].some(key => event.affectsConfiguration(`dynsight.${key}`))) {
+        automaticPaused = false;
         stop(enabled() ? 'waiting-for-saved-index' : 'off'); controller?.dispose(); controller = undefined; model = undefined; hints.clear(); project(); schedule();
       }
     }),
     {dispose() { disposed = true; clearTimeout(timer); controller?.dispose(); }}
   );
-  return {ready: workspace.ready.then(restore), actions};
+  return {ready: workspace.ready.then(analyzeAutomatically), actions};
 }
 export type CallbackActions = ReturnType<typeof registerCopilotCallbacks>['actions'];

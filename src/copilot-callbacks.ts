@@ -4,7 +4,7 @@ import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/p
 import path from 'node:path';
 import { CallbackContext, prepareCallbackContexts, callbackDigest } from './copilot-context';
 export interface CopilotSnapshot { generation: number | string; files: readonly FileAnalysis[]; settingsKey: string;
-  callsiteUris?: ReadonlySet<string>; scopeRevision?: number; preferredTargetId?: string; callsiteKeys?: ReadonlySet<string> }
+  callsiteUris?: ReadonlySet<string>; scopeRevision?: number; preferredTargetId?: string; callsiteKeys?: ReadonlySet<string>; excludedCallsiteKeys?: ReadonlySet<string> }
 export interface CopilotProvider { readonly modelKey: string; complete(prompt: string, signal: AbortSignal): Promise<string> }
 export interface CallbackHint {
   key: string; callsite: Location; expression: string; status: 'candidates' | 'not-found' | 'insufficient-context'; missing?: string[];
@@ -67,8 +67,9 @@ export class CopilotCallbackController {
     if (!current()) return {...result,stale:true};
     const builder = await prepareCallbackContexts(snapshot.files,current,snapshot.preferredTargetId?snapshot.callsiteKeys:undefined);
     if (!current()) return {...result,stale:true};
-    const sites = builder.sites.filter(site => (!snapshot.callsiteUris || snapshot.callsiteUris.has(site.file.uri)) && (!snapshot.callsiteKeys || snapshot.callsiteKeys.has(site.key)));
-    result.excluded = builder.sites.length - sites.length;
+    const scoped = builder.sites.filter(site => (!snapshot.callsiteUris || snapshot.callsiteUris.has(site.file.uri)) && (!snapshot.callsiteKeys || snapshot.callsiteKeys.has(site.key)));
+    const sites = scoped.filter(site => !snapshot.excludedCallsiteKeys?.has(site.key));
+    result.excluded = builder.sites.length - scoped.length;
     const progress = () => {
       if (!current()) return;
       const { hints, stale, ...value } = result;

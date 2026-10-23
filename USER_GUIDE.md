@@ -63,12 +63,20 @@ choose **Copilot Include** paths. Invocation files must also be inside **Detaile
 Analysis Folders** and outside the general and Copilot exclusions. Empty Copilot
 Include permits no requests. Paths are not copied from general Include.
 
-Open a callback's details popup and choose **Find target with AI**. Command Palette
-**Analyze Callbacks with Copilot** also lets you choose one callback. Enabling,
-model selection, startup, navigation, saving and Rebuild reuse valid cache only;
-they never send new AI requests. Saved basic navigation can support a manual
-request after local detailed analysis is stopped or reaches a limit. Save modified
-sources first. **Stop Copilot Analysis** cancels the active request.
+When enabled, analysis starts automatically once the saved index is ready. Startup,
+saved source changes, Rebuild, and model/scope changes analyze missing eligible
+results one at a time, reusing valid cache and continuing past five calls.
+Choose a model when prompted if none is configured. Active **User confirmed**
+calls are skipped. Open a callback's popup for an individual **Find target with AI**
+or **Recheck with AI** request.
+
+**Stop analysis** or **Stop Copilot Analysis** cancels the active request, retains
+completed results, and pauses automatic requests for this session. Index and source
+notifications do not resume it. Run **Analyze Callbacks with Copilot**, toggle the
+Copilot setting, or change its model/scope to resume. Request failures also pause
+automation without automatic retries or model fallback. Saved basic navigation
+can support analysis after local detailed analysis is stopped or reaches a limit.
+Save modified sources first.
 
 Relevant source snippets are sent to your selected Copilot model. Supporting code
 may come from other indexed paths, even when only the invocation file is inside

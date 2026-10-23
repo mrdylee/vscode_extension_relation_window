@@ -54,7 +54,6 @@ function renderCopilot(ai: Diagnostics['copilot']) {
     return;
   }
   const total = ai.total ?? 0, completed = ai.completed ?? 0;
-  const busy = ['analyzing', 'restoring-cache', 'waiting-for-saved-index'].includes(ai.state);
   const ready = ai.state === 'ready';
   const state = ready ? total ? 'All detected sites processed' : ai.excluded ? 'No callback sites in AI scope' : 'No unresolved callback sites detected' : ai.state.replaceAll('-', ' ');
   copilotProgress.append(el('span', '', `Copilot: ${state} · ${completed}/${total} processed · Remaining: ${ai.remaining} · Failed: ${ai.failures}`));
@@ -62,7 +61,6 @@ function renderCopilot(ai: Diagnostics['copilot']) {
   if (total) copilotProgress.append(el('span', 'muted', `Candidates: ${ai.candidates} · No candidate in supplied context: ${ai.notFound} · Context limited: ${ai.contextLimited}`));
   copilotProgress.title = 'Coverage of detected callback sites in the current saved index. Failed sites remain pending. Processing every site does not prove every runtime target was found.';
   if (ai.state === 'analyzing' || ai.automatic) stop();
-  else if (ai.remaining > 0 && !busy) copilotProgress.append(button('Choose callback…', () => send('copilotAnalyze'), 'Choose one callback to investigate with AI. No automatic requests.'));
 }
 const divider = el('div', 'divider'); divider.tabIndex = 0;
 divider.setAttribute('role', 'separator'); divider.setAttribute('aria-label', 'Context width'); divider.setAttribute('aria-orientation', 'vertical');

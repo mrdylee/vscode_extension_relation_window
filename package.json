@@ -2,7 +2,7 @@
   "name": "dynsight",
   "displayName": "Dynsight — C Code Explorer",
   "description": "Build-free C references, caller/callee graphs and a linked Context preview.",
-  "version": "0.1.73",
+  "version": "0.1.74",
   "publisher": "dylee",
   "author": "dylee",
   "license": "MIT",
@@ -113,14 +113,14 @@
           "type": "boolean",
           "default": false,
           "scope": "window",
-          "markdownDescription": "Optional AI candidates for unresolved callbacks using your existing GitHub Copilot account. Start with [Analyze Callbacks with Copilot](command:dynsight.analyzeCallbacksWithCopilot) to select a model and grant access. Relevant source is sent to Copilot and account usage limits apply. Choose a single callback and use Find target with AI or Recheck with AI. Enabling, startup, navigation, saving and Rebuild only reuse valid cache and never send new AI requests. Stop Copilot Analysis cancels the current request and keeps existing results. Set manually records a separate User confirmed target that AI does not overwrite. AI candidates are suggestions, not proven calls. Rebuild Index preserves valid AI cache."
+          "markdownDescription": "Automatically request AI candidates for unresolved callbacks using your existing GitHub Copilot account. When enabled, startup, saved source changes and Rebuild analyze eligible calls one at a time and reuse valid cache. Calls must be in Copilot Include and Detailed Analysis Folders and outside exclusions. Choose a model when prompted; relevant source is sent to Copilot and account usage limits apply. Stop Copilot Analysis pauses automatic requests for this session and keeps completed results. [Analyze Callbacks with Copilot](command:dynsight.analyzeCallbacksWithCopilot), toggling this setting, or changing the model or scope resumes automatic analysis. Active User confirmed targets are skipped; use Recheck with AI for an individual comparison. AI candidates are suggestions, not proven calls."
         },
         "dynsight.copilotModel": {
           "order": 61,
           "type": "string",
           "default": "",
           "scope": "window",
-          "markdownDescription": "Copilot model ID for callback candidates. [Select Copilot Model](command:dynsight.selectCopilotModel) lists models available to your Copilot account and saves the selected ID here. Selecting a model does not enable analysis or send source. An empty value asks you to choose when starting Analyze Callbacks with Copilot. Model changes reuse only that model's valid cache; unavailable models are not replaced automatically."
+          "markdownDescription": "Copilot model ID for callback candidates. [Select Copilot Model](command:dynsight.selectCopilotModel) lists models available to your Copilot account and saves the selected ID here. Selecting a model resumes automatic analysis when Copilot Callbacks is enabled; it does not enable the setting. An empty value asks you to choose when automatic analysis starts. Model changes reuse only that model's valid cache; unavailable models are not replaced automatically."
         },
         "dynsight.copilotInclude": {
           "order": 62,
@@ -131,7 +131,7 @@
           },
           "default": [],
           "scope": "resource",
-          "description": "Files whose callback call sites may use AI, using workspace-relative globs. Only explicit paths are used; they are not copied from Include. Call locations must also be in Detailed Analysis Folders. Empty disables all AI callback requests. Copilot Exclude takes priority. Local analysis is unchanged and supporting evidence may come from other indexed paths. Scope changes cancel the active AI run and restore eligible cache only; use Analyze for missing results."
+          "description": "Files whose callback call sites may use AI, using workspace-relative globs. Only explicit paths are used; they are not copied from Include. Call locations must also be in Detailed Analysis Folders. Empty disables all AI callback requests. Copilot Exclude takes priority. Local analysis is unchanged and supporting evidence may come from other indexed paths. When Copilot Callbacks is enabled, scope changes cancel the active AI run and automatically analyze missing eligible results while reusing valid cache."
         },
         "dynsight.copilotExclude": {
           "order": 63,
@@ -296,7 +296,7 @@
     "test:freertos": "npm run build && node scripts/test-freertos.mjs",
     "test:ui": "npm run build && tsx test/create-ui-fixture.ts && node test/ui.mjs && node test/scoped-ui.mjs",
     "vscode:prepublish": "npm run build",
-    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license --out artifacts/dynsight-0.1.73.vsix"
+    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license --out artifacts/dynsight-0.1.74.vsix"
   },
   "dependencies": {
     "minimatch": "10.2.6",
