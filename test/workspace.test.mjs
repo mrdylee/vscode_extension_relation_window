@@ -373,6 +373,9 @@ test('watcher events respect the file limit while existing files can update and 
   assert.equal(workspace.index.files.size, 10000);
   assert.equal(workspace.diagnostics.index.rebuilds[0].files.discoveryComplete, false,
     'a file-limit stop must not claim complete discovery');
+  assert.equal(workspace.diagnostics.index.detailedCurrent, true);
+  assert.equal(workspace.diagnostics.index.callbackAnalysis.limited, false);
+  assert.equal(workspace.diagnostics.index.fileLimitReached, true, 'source scope limits must remain distinguishable from callback limits');
   const extra = uri('extra.h');
   created.fire(extra); changed.fire(files[10000]); await bounded(workspace.whenIdle());
   assert.equal(workspace.index.files.size, 10000);
@@ -398,6 +401,7 @@ test('watcher events respect the file limit while existing files can update and 
   created.fire(uri('after-rebuild.c')); await bounded(workspace.whenIdle());
   assert.equal(workspace.index.files.size, 1);
   assert.equal(workspace.status, 'Index ready');
+  assert.equal(workspace.diagnostics.index.fileLimitReached, false, 'a successful smaller rebuild clears the scope limit');
 });
 
 test('in-flight new files reserve capacity and a failed read frees its slot', async t => {

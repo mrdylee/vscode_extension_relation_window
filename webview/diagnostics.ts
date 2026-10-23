@@ -37,8 +37,9 @@ export function createDiagnostics(version: string, refresh: () => void, reportIs
     if (data.index) {
       const index = data.index;
       const outcome = index.callbackAnalysis?.progress?.outcome;
-      const partial = !!index.failedSources || index.callbackAnalysis?.limited || index.callbackAnalysis?.paused || (outcome && outcome !== 'completed');
-      const basic = index.basicReady ? 'ready' : index.basicWaitReason === 'source-failed' ? 'blocked' : 'preparing';
+      const partial = !!data.workerError || !!index.failedSources || index.fileLimitReached || index.callbackAnalysis?.limited || index.callbackAnalysis?.paused || (outcome && outcome !== 'completed');
+      const blocked = data.workerError || (index.basicWaitReason && !['indexing', 'source-update', 'relations'].includes(index.basicWaitReason));
+      const basic = index.basicReady ? 'ready' : blocked ? 'blocked' : 'preparing';
       if(index.basicReady !== undefined)body.append(el('div',`Basic navigation: ${basic} · Detailed results: ${index.detailedCurrent ? partial ? 'current (partial)' : 'current' : 'pending or partial'}`));
       if (index.failedSources) body.append(el('div', `Source failures: ${index.failedSources}. Check Analysis notices for affected files.`, 'warning'));
       if (index.basicReady === false && index.basicWaitReason) body.append(el('div', copilotWaitMessage(index.basicWaitReason)));

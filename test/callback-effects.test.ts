@@ -180,6 +180,26 @@ for (const form of ['if', 'while', 'array', 'member array', 'nested array'])
     assert.ok(inferred(index, 'run').every(group => group.sites.every(site => !site.inference?.incomplete)));
   });
 
+test('shared conditional member layouts do not multiply numeric dependency work', () => {
+  const original = RelationIndex.prototype.layout;
+  const counts: number[] = [];
+  try {
+    for (const depth of [6, 10]) {
+      let calls = 0;
+      RelationIndex.prototype.layout = function(record) { calls++; return original.call(this, record); };
+      let source = 'typedef void(*CB)(void);void target(void){}struct L0{unsigned values[2];};';
+      for (let n = 1; n <= depth; n++) source += `\n#if VARIANT_${n}\nstruct L${n}{struct L${n-1}*next;};\n#else\nstruct L${n}{struct L${n-1}*next;};\n#endif\n`;
+      source += `static struct L${depth}*root;unsigned selected;void consume(unsigned);
+        void inspect(void){consume(root${'->next'.repeat(depth)}->values[selected]);}void run(void){CB cb=target;cb();}`;
+      const index = project(source);
+      counts.push(calls);
+      assert.deepEqual(inferred(index, 'run').map(group => group.name), ['target']);
+      assert.equal([...index.files.values()].some(file => file.issues.length), false);
+    }
+  } finally { RelationIndex.prototype.layout = original; }
+  assert.ok(counts[1] < counts[0] * 3, `four more levels must not multiply layout work: ${counts.join(' -> ')}`);
+});
+
 test('numeric lookup dependencies still flow backward from nested callback selectors and aliases', () => {
   const index = project(`typedef void(*CB)(void);void first(void){}void second(void){}
     static CB handlers[2]={first,second};static unsigned values[2],selected;

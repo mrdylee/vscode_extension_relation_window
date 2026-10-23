@@ -77,7 +77,8 @@ export class WorkspaceIndex implements vscode.Disposable {
       host: { at: Date.now(), heapUsed: heap.used_heap_size, heapLimit: heap.heap_size_limit, external: heap.external_memory },
       copilot: this.copilotDiagnostics?.state === 'waiting-for-saved-index'
         ? { ...this.copilotDiagnostics, waitReason: this.copilotWaitReason } : this.copilotDiagnostics,
-      index: { ...this.indexDiagnostics, basicReady, failedSources, basicWaitReason: basicReady ? undefined : this.copilotWaitReason,
+      index: { ...this.indexDiagnostics, basicReady, failedSources, fileLimitReached: this.fileLimitReached,
+        basicWaitReason: basicReady ? undefined : this.copilotWaitReason,
         detailedCurrent: this.derivedRevision === this.revision, callbackAnalysis: { paused: this.analysisPaused, running: !!this.activeAnalysis,
         limited: [...this.index.files.values()].some(file=>file.issues.some(issue=>/^(Macro|Callback) .*(limit|budget)/i.test(issue))),
         progress: this.callbackProgress }, cache: this.indexDiagnostics.cache && { ...this.indexDiagnostics.cache }, rebuilds: this.indexDiagnostics.rebuilds.map(record => ({ ...record,

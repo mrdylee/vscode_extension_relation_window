@@ -31,7 +31,7 @@ export interface RebuildRecord {
 }
 export interface IndexDiagnostics {
   basicReady?: boolean; detailedCurrent?: boolean;
-  failedSources?: number; basicWaitReason?: CopilotWaitReason;
+  failedSources?: number; basicWaitReason?: CopilotWaitReason; fileLimitReached?: boolean;
   callbackAnalysis?: { paused: boolean; running: boolean; limited?: boolean; progress?: CallbackProgress };
   sessionStartedAt: number; rebuildCount: number; sourceParses: number; relationPasses: number;
   rebuilds: RebuildRecord[]; lastSourceEvent?: { at: number; kind: SourceEvent };

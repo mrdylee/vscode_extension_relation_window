@@ -638,7 +638,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
         if (!values?.length) return undefined;
         layouts.push(...values);
       }
-      return layouts;
+      return [...new Set(layouts)];
     }
     if (bases.some(base => base.layers[0] !== 'array' && base.layers[0] !== 'pointer')) return undefined;
     return bases.map(base => ({ ...base, layers: base.layers.slice(1) }));

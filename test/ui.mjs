@@ -684,14 +684,18 @@ try {
   await page.getByRole('button', { name: 'Diagnostics', exact: true }).click();
   const diagnosticDialog = page.getByRole('dialog', { name: 'Memory diagnostics' });
   assert.ok(await diagnosticDialog.isVisible());
-  for (const [basicReady, detailedCurrent, failedSources, limited, basicWaitReason, label] of [
+  for (const [basicReady, detailedCurrent, failedSources, limited, basicWaitReason, label, fileLimitReached = false, workerError] of [
     [false, true, 2, false, 'source-failed', 'Basic navigation: blocked · Detailed results: current (partial)'],
     [false, false, 0, false, 'source-update', 'Basic navigation: preparing · Detailed results: pending or partial'],
     [true, true, 0, true, undefined, 'Basic navigation: ready · Detailed results: current (partial)'],
+    [true, true, 0, false, undefined, 'Basic navigation: ready · Detailed results: current (partial)', true],
+    [false, true, 0, false, 'worker-unavailable', 'Basic navigation: blocked · Detailed results: current (partial)', false, 'Synthetic Worker stopped'],
+    [false, false, 0, false, 'cache-rebuild-required', 'Basic navigation: blocked · Detailed results: pending or partial'],
     [true, true, 0, false, undefined, 'Basic navigation: ready · Detailed results: current']
   ]) {
-    Object.assign(diagnostics.index, { basicReady, detailedCurrent, failedSources, basicWaitReason,
+    Object.assign(diagnostics.index, { basicReady, detailedCurrent, failedSources, basicWaitReason, fileLimitReached,
       callbackAnalysis: { paused: false, running: false, limited } });
+    diagnostics.workerError = workerError;
     await page.evaluate(diagnostics => window.dispatchEvent(new MessageEvent('message', { data: { type: 'diagnostics', diagnostics } })), diagnostics);
     assert.equal(await diagnosticDialog.getByText(label, { exact: true }).count(), 1);
     if (failedSources) {
@@ -700,7 +704,8 @@ try {
     } else assert.doesNotMatch(await diagnosticDialog.textContent(), /Source failures:/);
   }
   // Keep the following memory-incident fixture independent of readiness cases.
-  for (const key of ['basicReady', 'detailedCurrent', 'failedSources', 'basicWaitReason', 'callbackAnalysis']) delete diagnostics.index[key];
+  for (const key of ['basicReady', 'detailedCurrent', 'failedSources', 'basicWaitReason', 'fileLimitReached', 'callbackAnalysis']) delete diagnostics.index[key];
+  delete diagnostics.workerError;
   assert.match(await diagnosticDialog.textContent(), /Disk cache: incompatible \(analysis-version\)/);
   assert.match(await diagnosticDialog.textContent(), /Analysis v2 \/ saved v1/);
   delete diagnostics.index.cache; // Keep the existing memory-incident fixture independent of this compatibility case.
