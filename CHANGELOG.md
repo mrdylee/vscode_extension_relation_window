@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.76 — 2026-10-23
+
+- Avoid treating ordinary numeric conditions and data-only array reads as callback
+  dependency roots, while retaining actual callback selectors, aliases and side effects.
+- Deduplicate identical cached member layouts and reuse bounded, analysis-local
+  storage paths. Skip empty region queries and redundant region registration;
+  preserve callback candidates, wildcard writes, byte ranges and existing limits.
+- Distinguish blocked source preparation from active analysis, and show current
+  partial results for source failures, file-count limits and stopped Workers.
+- Raise analysis cache compatibility from 8 to 9 for the dependency corrections.
+  Older saved analysis is rebuilt; user-confirmed callbacks remain separate.
+- Publish WSL-labelled downloads with universal and legacy updater aliases.
+  Large-project analysis can still be slow or Partial. Project-strategy AI and
+  ELF integration remain designs and are not included as runtime features.
+
 ## 0.1.75 — 2026-10-23
 
 - Consolidate paths into Include, Exclude, Smart Analysis Include and Exclude.

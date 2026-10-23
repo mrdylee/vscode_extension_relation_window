@@ -2,7 +2,7 @@
   "name": "dynsight",
   "displayName": "Dynsight — C Code Explorer",
   "description": "Build-free C references, caller/callee graphs and a linked Context preview.",
-  "version": "0.1.75",
+  "version": "0.1.76",
   "publisher": "dylee",
   "author": "dylee",
   "license": "MIT",
@@ -338,7 +338,7 @@
     "test:freertos": "npm run build && node scripts/test-freertos.mjs",
     "test:ui": "npm run build && tsx test/create-ui-fixture.ts && node test/ui.mjs && node test/scoped-ui.mjs",
     "vscode:prepublish": "npm run build",
-    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license --out artifacts/dynsight-0.1.75.vsix"
+    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license --out artifacts/dynsight-0.1.76.vsix"
   },
   "dependencies": {
     "minimatch": "10.2.6",
