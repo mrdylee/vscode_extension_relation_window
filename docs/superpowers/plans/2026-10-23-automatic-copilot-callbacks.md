@@ -32,3 +32,8 @@ Files: `webview/main.ts`, `src/view.ts`, `test/ui.mjs`, `package.json`, `README.
 ## Verification
 
 Typecheck, all 546 unit tests, both Chromium UI suites, and diff whitespace checks passed. Service regressions cover serial automatic requests beyond five calls, cache reuse, Stop persistence with completed candidates retained, source/model changes, failures, scope, manual target exclusion, and per-call recheck progress. The manual-only lifecycle and footer chooser tests failed before their corresponding fixes. Existing footer layout changes and unrelated untracked review files were preserved. No publication or installation was performed.
+
+The subsequent user-authorized release is 0.1.74. WSL download, public checksums,
+cross-platform CI and updater verification are recorded in
+`docs/reviews/2026-10-23-release-0.1.74.md`. Installation into the user's WSL host
+is separate from this publication.
