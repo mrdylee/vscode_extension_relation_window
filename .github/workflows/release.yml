@@ -53,7 +53,9 @@ jobs:
       - name: Prepare downloads and checksums
         run: |
           version=$(node -p 'require("./package.json").version')
-          cp "artifacts/dynsight-$version.vsix" "artifacts/dynsight-$version-wsl.vsix"
+          for platform in windows macos wsl; do
+            cp "artifacts/dynsight-$version.vsix" "artifacts/dynsight-$version-$platform.vsix"
+          done
           # Older installed versions still request this universal filename.
           cp "artifacts/dynsight-$version.vsix" "artifacts/c-relation-explorer-$version.vsix"
           cd artifacts
@@ -64,5 +66,5 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           version=$(node -p 'require("./package.json").version')
-          gh release create "$RELEASE_TAG" artifacts/*.vsix artifacts/SHA256SUMS.txt --verify-tag --draft --title "Dynsight $version — WSL" --notes-file "docs/releases/$version.md"
+          gh release create "$RELEASE_TAG" artifacts/*.vsix artifacts/SHA256SUMS.txt --verify-tag --draft --title "Dynsight $version — Windows / macOS / WSL" --notes-file "docs/releases/$version.md"
           gh release edit "$RELEASE_TAG" --draft=false --latest

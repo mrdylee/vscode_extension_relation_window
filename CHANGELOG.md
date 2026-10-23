@@ -11,7 +11,7 @@
   partial results for source failures, file-count limits and stopped Workers.
 - Raise analysis cache compatibility from 8 to 9 for the dependency corrections.
   Older saved analysis is rebuilt; user-confirmed callbacks remain separate.
-- Publish WSL-labelled downloads with universal and legacy updater aliases.
+- Publish Windows, macOS and WSL downloads with universal and legacy updater aliases.
   Large-project analysis can still be slow or Partial. Project-strategy AI and
   ELF integration remain designs and are not included as runtime features.
 

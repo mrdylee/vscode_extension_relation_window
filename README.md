@@ -8,7 +8,7 @@ C 소스 폴더만 열어 함수의 호출·참조 관계, 변수의 읽기·쓰
 
 ## 설치와 시작
 
-1. [GitHub Releases](https://github.com/mrdylee/vscode_extension_relation_window/releases/latest)에서 WSL용 `dynsight-<version>-wsl.vsix`를 받고, WSL에 연결된 VS Code 창에서 **Extensions: Install from VSIX…**로 설치합니다. 자동 업데이트용 `dynsight-<version>.vsix`와 이전 업데이터 호환 파일도 같은 JavaScript/WASM 패키지입니다.
+1. [GitHub Releases](https://github.com/mrdylee/vscode_extension_relation_window/releases/latest)에서 Windows용 `dynsight-<version>-windows.vsix`, macOS용 `dynsight-<version>-macos.vsix`, WSL용 `dynsight-<version>-wsl.vsix` 중 사용 환경에 맞는 파일을 받고 **Extensions: Install from VSIX…**로 설치합니다. WSL은 WSL에 연결된 VS Code 창에서 설치합니다. 세 OS용 파일, 자동 업데이트용 `dynsight-<version>.vsix`와 이전 업데이터 호환 파일은 같은 JavaScript/WASM 패키지입니다.
 2. C 소스가 있는 폴더를 엽니다. 빌드, SDK, clangd, `compile_commands.json`은 필요하지 않습니다.
 3. **Dynsight: Open Relation and Context**를 실행합니다.
 4. 메인 편집기에서 함수나 변수 이름을 클릭합니다. 하단에 Context(왼쪽)와 Relation(오른쪽)이 표시됩니다.
@@ -175,7 +175,7 @@ Settings 화면에서는 `@id:dynsight.include` 또는 `@id:dynsight.exclude`를
 1. `package.json`, `package-lock.json`의 버전 및 `package` 스크립트의 VSIX 이름을 함께 올리고 CHANGELOG를 작성합니다.
 2. `docs/releases/<버전>.md`에 변경 사항과 설치 안내를 작성합니다.
 3. 변경을 커밋·푸시한 뒤 `v0.1.10` 같은 버전 태그를 푸시합니다. 태그와 패키지 버전이 일치해야 합니다.
-4. GitHub Actions가 Windows·macOS·Ubuntu 검증을 통과한 후 WSL용 VSIX와 SHA-256 목록을 정식 릴리스로 게시합니다. 접미사 없는 공통 VSIX와 이전 업데이터 호환 이름도 유지합니다.
+4. GitHub Actions가 Windows·macOS·Ubuntu 검증을 통과한 후 Windows·macOS·WSL용 VSIX와 SHA-256 목록을 정식 릴리스로 게시합니다. 접미사 없는 공통 VSIX와 이전 업데이터 호환 이름도 유지합니다.
 5. 이전 버전에서 **Check for Updates**를 실행해 확인합니다. 일반 커밋만으로는 릴리스가 생성되지 않습니다.
 
 ## 탐색
