@@ -10,6 +10,7 @@ export const copilotWaitMessages = {
   'cache-rebuild-required': 'Saved index is unavailable. Run Rebuild index.',
   'worker-unavailable': 'Analysis Worker stopped. Run Rebuild index.',
   'analysis-failed': 'Local relation analysis failed. Check Analysis notices, then Rebuild index.',
+  'source-failed': 'Some source files failed to index. Check Analysis notices, fix or exclude those files, then Rebuild index.',
   'analysis-paused': 'Local analysis is paused. Resume local analysis to continue.',
   'closed': 'Workspace analysis has closed.'
 } as const;
@@ -30,6 +31,7 @@ export interface RebuildRecord {
 }
 export interface IndexDiagnostics {
   basicReady?: boolean; detailedCurrent?: boolean;
+  failedSources?: number; basicWaitReason?: CopilotWaitReason;
   callbackAnalysis?: { paused: boolean; running: boolean; limited?: boolean; progress?: CallbackProgress };
   sessionStartedAt: number; rebuildCount: number; sourceParses: number; relationPasses: number;
   rebuilds: RebuildRecord[]; lastSourceEvent?: { at: number; kind: SourceEvent };

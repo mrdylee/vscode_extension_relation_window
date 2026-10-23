@@ -228,8 +228,12 @@ test('Copilot readiness identifies blockers without blocking stable partial resu
   workspace.jobs.add('pending'); assert.equal(workspace.copilotWaitReason, 'source-update'); workspace.jobs.clear();
   workspace.derivedRevision--;
   assert.equal(workspace.copilotWaitReason, 'relations'); workspace.derivedRevision = workspace.revision;
-  workspace.failures.set('derived', 'failed'); assert.equal(workspace.copilotWaitReason, 'analysis-failed'); workspace.failures.clear();
-  workspace.workerError = new Error('stopped'); assert.equal(workspace.copilotWaitReason, 'worker-unavailable'); workspace.workerError = undefined;
+  workspace.failures.set('derived', 'failed'); assert.equal(workspace.copilotWaitReason, 'analysis-failed');
+  assert.equal(workspace.diagnostics.index.failedSources, 0, 'derived failures are not source failures'); workspace.failures.clear();
+  workspace.workerError = new Error('stopped'); workspace.failures.set('worker', 'stopped');
+  assert.equal(workspace.copilotWaitReason, 'worker-unavailable');
+  assert.equal(workspace.diagnostics.index.failedSources, 0, 'a stopped Worker is not a failed source file');
+  workspace.workerError = undefined; workspace.failures.clear();
   workspace.cacheBlocked = true; assert.equal(workspace.copilotWaitReason, 'cache-rebuild-required'); workspace.cacheBlocked = false;
   assert.equal(workspace.copilotWaitReason, undefined);
 });
@@ -680,11 +684,18 @@ test('failed source reads and oversized files cannot report a complete index', a
   assert.equal(workspace.index.files.size, 1);
   assert.match(workspace.status, /Partial index: 2 file.*failed/);
   assert.equal(workspace.diagnostics.index.rebuilds.at(-1).outcome, 'partial');
+  assert.equal(workspace.basicReady, false);
+  assert.equal(workspace.diagnostics.index.failedSources, 2);
+  assert.equal(workspace.diagnostics.index.basicWaitReason, 'source-failed');
+  assert.equal(workspace.copilotWaitReason, 'source-failed');
   adapter.fs.readFile = async () => Buffer.from('');
   changed.fire(files[1]); changed.fire(files[2]);
   await bounded(workspace.whenIdle());
   assert.equal(workspace.index.files.size, 3);
   assert.equal(workspace.status, 'Index ready', 'recovered files clear the partial status');
+  assert.equal(workspace.diagnostics.index.failedSources, 0, 'live failures clear independently of old rebuild snapshots');
+  assert.equal(workspace.diagnostics.index.basicWaitReason, undefined);
+  assert.equal(workspace.copilotWaitReason, undefined);
 });
 
 test('rebuild file counts distinguish search results, filtering and failed analysis', async t => {

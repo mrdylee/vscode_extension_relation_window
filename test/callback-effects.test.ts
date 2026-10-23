@@ -164,6 +164,56 @@ for (const reader of ['same object', 'different struct', 'different struct selec
   assert.ok(inferred(index, 'run').find(group => group.name === 'target')?.sites.every(site => site.inference?.incomplete === false));
 });
 
+for (const form of ['if', 'while', 'array', 'member array', 'nested array'])
+  test(`numeric ${form} reads do not seed callback effect dependencies`, () => {
+    const fields = Array.from({ length: 270 }, (_, n) => `unsigned status${n};`).join('');
+    const writes = Array.from({ length: 270 }, (_, n) => `data.status${n}=0;`).join('');
+    const reads = Array.from({ length: 270 }, (_, n) => form === 'if' || form === 'while'
+      ? `${form}(data.status${n}){}` : `consume(${form === 'array' ? 'values' : form === 'member array' ? 'samples.values' : 'samples.nested[0]'}[data.status${n}]);`).join('');
+    const index = project(`typedef void(*CB)(void);void target(void){}
+      struct Data{${fields}CB cb;};static struct Data data;static unsigned values[2];
+      struct Samples{unsigned values[2];unsigned nested[2][2];};static struct Samples samples;
+      void consume(unsigned);void reader(void){${reads}}void configure(void){${writes}data.cb=target;}
+      void run(void){configure();data.cb();}`);
+    assert.equal([...index.files.values()].some(file => file.issues.some(issue => /mutation limit|region limit/.test(issue))), false);
+    assert.deepEqual(inferred(index, 'run').map(group => group.name), ['target']);
+    assert.ok(inferred(index, 'run').every(group => group.sites.every(site => !site.inference?.incomplete)));
+  });
+
+test('numeric lookup dependencies still flow backward from nested callback selectors and aliases', () => {
+  const index = project(`typedef void(*CB)(void);void first(void){}void second(void){}
+    static CB handlers[2]={first,second};static unsigned values[2],selected;
+    void configure(void){values[1]=1;selected=1;}
+    void run(void){unsigned*p=&selected;values[1]=0;selected=0;configure();handlers[values[*p]]();}`);
+  assert.deepEqual(inferred(index, 'run').map(group => group.name), ['second']);
+  assert.ok(inferred(index, 'run').every(group => group.sites.every(site => !site.inference?.incomplete)));
+});
+
+for (const condition of ['(current=second)', 'configure()']) test(`condition side effects survive numeric root pruning: ${condition}`, () => {
+  const index = project(`typedef void(*CB)(void);void first(void){}void second(void){}
+    static CB current=first;int configure(void){current=second;return 0;}
+    void update(void){if(${condition}){}}void run(void){current=first;update();current();}`);
+  assert.deepEqual(inferred(index, 'run').map(group => group.name), ['second']);
+});
+
+for (const numericFirst of [true, false]) test(`ambiguous member array element types remain conservative (numeric first=${numericFirst})`, () => {
+  const fields = Array.from({ length: 270 }, (_, n) => `unsigned status${n};`).join('');
+  const writes = Array.from({ length: 270 }, (_, n) => `data.status${n}=0;`).join('');
+  const reads = Array.from({ length: 270 }, (_, n) => `if(samples.values[data.status${n}]){}`).join('');
+  const index = project(`typedef void(*CB)(void);void target(void){}
+    struct Data{${fields}};static struct Data data;
+    #if VARIANT
+    struct Samples{unsigned ${numericFirst ? '' : '*'}values[2];};
+    #else
+    struct Samples{unsigned ${numericFirst ? '*' : ''}values[2];};
+    #endif
+    static struct Samples samples;void reader(void){${reads}}void configure(void){${writes}}
+    void run(void){CB cb=target;configure();cb();}`);
+  assert.ok([...index.files.values()].some(file => file.issues.some(issue => /mutation limit/.test(issue))),
+    'an unproven pointer alternative cannot be discarded as numeric data');
+  assert.ok(inferred(index, 'run').some(group => group.name === 'target'));
+});
+
 test('unrelated scalar addresses and their parent do not consume region entries', () => {
   const fields = Array.from({ length: 270 }, (_, n) => `int status${n};`).join('');
   const escapes = Array.from({ length: 270 }, (_, n) => `opaque(&data.status${n});`).join('');

@@ -65,16 +65,20 @@ export class WorkspaceIndex implements vscode.Disposable {
     if (this.hasDirtySources) return 'unsaved-sources';
     if (this.indexing) return 'indexing';
     if (this.jobs.size || this.timers.size) return 'source-update';
+    if ([...this.failures.keys()].some(key => key !== 'derived' && key !== 'worker')) return 'source-failed';
     if (this.derivedRevision !== this.revision) return 'relations';
     return undefined;
   }
   get diagnostics(): Diagnostics {
     const heap = getHeapStatistics();
+    const basicReady = this.basicReady;
+    const failedSources = [...this.failures.keys()].filter(key => key !== 'derived' && key !== 'worker').length;
     return { environment: `${process.platform} ${process.arch} · ${vscode.env.remoteName ?? 'local'} · VS Code ${vscode.version}`,
       host: { at: Date.now(), heapUsed: heap.used_heap_size, heapLimit: heap.heap_size_limit, external: heap.external_memory },
       copilot: this.copilotDiagnostics?.state === 'waiting-for-saved-index'
         ? { ...this.copilotDiagnostics, waitReason: this.copilotWaitReason } : this.copilotDiagnostics,
-      index: { ...this.indexDiagnostics, basicReady: this.basicReady, detailedCurrent: this.derivedRevision === this.revision, callbackAnalysis: { paused: this.analysisPaused, running: !!this.activeAnalysis,
+      index: { ...this.indexDiagnostics, basicReady, failedSources, basicWaitReason: basicReady ? undefined : this.copilotWaitReason,
+        detailedCurrent: this.derivedRevision === this.revision, callbackAnalysis: { paused: this.analysisPaused, running: !!this.activeAnalysis,
         limited: [...this.index.files.values()].some(file=>file.issues.some(issue=>/^(Macro|Callback) .*(limit|budget)/i.test(issue))),
         progress: this.callbackProgress }, cache: this.indexDiagnostics.cache && { ...this.indexDiagnostics.cache }, rebuilds: this.indexDiagnostics.rebuilds.map(record => ({ ...record,
         files: record.files ? { ...record.files } : undefined })) },

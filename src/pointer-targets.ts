@@ -620,6 +620,29 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
       scalarDependencies.set(key, dependencies);
     }
   }
+  function dependencyLayouts(expr: Expr, ctx: Context): ReturnType<RelationIndex['layout']> | undefined {
+    if (expr.kind === 'name') {
+      const local = expr.localId && valueType(expr, ctx);
+      const records = expr.localId ? local ? [local] : [] : globalSymbols(expr);
+      const layouts = records.map(record => index.layout(record));
+      return layouts.length && layouts.every(values => values.length) ? layouts.flat() : undefined;
+    }
+    if (expr.kind !== 'member' && expr.kind !== 'index' && expr.kind !== 'dereference') return undefined;
+    const bases = dependencyLayouts(expr.object, ctx);
+    if (!bases?.length) return undefined;
+    if (expr.kind === 'member') {
+      const layouts: ReturnType<RelationIndex['layout']> = [];
+      for (const base of bases) {
+        const field = base.fields.find(field => field.name === expr.field);
+        const values = field && index.layout(field);
+        if (!values?.length) return undefined;
+        layouts.push(...values);
+      }
+      return layouts;
+    }
+    if (bases.some(base => base.layers[0] !== 'array' && base.layers[0] !== 'pointer')) return undefined;
+    return bases.map(base => ({ ...base, layers: base.layers.slice(1) }));
+  }
   function collectReads(expr: Expr, ctx: Context, needed = false): Set<string> {
     const reads = new Set<string>();
     if (expired()) return reads;
@@ -652,7 +675,11 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
           if (storage) linkScalar(data, [param]);
         });
       }
-    } else if (expr.kind === 'index') { collect(expr.object); collect(expr.index, true); }
+    } else if (expr.kind === 'index') {
+      const layouts = dependencyLayouts(expr, ctx);
+      const numeric = !!layouts?.length && layouts.every(layout => layout.scalar && layout.layers.every(layer => layer === 'array'));
+      collect(expr.object); collect(expr.index, !numeric);
+    }
     else if (expr.kind === 'address') for (const key of addressReads(expr.object, ctx)) reads.add(key);
     else if (expr.kind === 'dereference' || expr.kind === 'cast') collect(expr.object);
     else if (expr.kind === 'choice' || expr.kind === 'sequence') expr.values.forEach(value => collect(value));
@@ -689,7 +716,9 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
         if (statement.kind === 'return') linkScalar([ctx.program.id], reads);
       }
       else if (statement.kind === 'loop' || statement.kind === 'branch') {
-        collectReads(statement.condition, ctx, true);
+        // Both possible paths are joined; only condition side effects and actual
+        // callback consumers need dependencies, not the numeric truth value.
+        collectReads(statement.condition, ctx);
         if (statement.kind === 'loop') collectBodyReads(statement.body, ctx);
         else { collectBodyReads(statement.then, ctx); collectBodyReads(statement.otherwise, ctx); }
       }
