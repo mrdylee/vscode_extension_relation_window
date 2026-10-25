@@ -10,7 +10,7 @@ const projectionCache = new WeakMap<FileAnalysis, { signature: string; result: F
 
 // A written registration is useful evidence even when full pointer propagation is
 // disabled or incomplete. This deliberately does not prove a runtime invocation.
-export function suggestExplicitCallbacks(raw: FileAnalysis[], derived: FileAnalysis[], options: CallbackAnalysisOptions = {}): FileAnalysis[] {
+export function suggestExplicitCallbacks(raw: FileAnalysis[], derived: FileAnalysis[], options: CallbackAnalysisOptions = {}, expanded: FileAnalysis[] = []): FileAnalysis[] {
   const now = options.now ?? (() => performance.now()), started = now();
   const cancelled = {}, added = new Map<string, ReferenceRecord[]>(), registrations = new Map<string, Map<string, ReferenceRecord>>();
   let stopped = false, symbol: SymbolRecord | undefined, scopeStarted = started, operations = 0, scopeOperations = 0;
@@ -150,6 +150,13 @@ export function suggestExplicitCallbacks(raw: FileAnalysis[], derived: FileAnaly
       const object = { root: init.id, path: [], evidence: [], address: false };
       initializer(object, init.value, initial);
     }
+  }
+  // Reuse already-expanded bodies only for literal registration facts. Keep
+  // local invocation inference on its existing source flow; no propagation runs.
+  const sourcePrograms = new Set(raw.flatMap(file => file.registrationPrograms ?? file.programs ?? []));
+  for (const file of expanded) for (const program of file.programs ?? []) {
+    if (sourcePrograms.has(program)) continue;
+    check(); collectStatements(program.body, program.id);
   }
   for (const file of raw) for (const program of file.registrationPrograms ?? file.programs ?? []) {
     check(); symbol = index.symbol(program.id); scopeStarted = now(); scopeOperations = operations; progress(true);

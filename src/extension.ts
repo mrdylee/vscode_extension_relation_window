@@ -6,6 +6,7 @@ import { selectMacroExpansionFolders, selectDetailedAnalysisFolders } from './ma
 import { registerIssueReporting } from './issue-report-service';
 import { migrateSettings, prepareUpgrade } from './branding-migration';
 import { registerCopilotCallbacks } from './copilot-service';
+import { registerScopeFolders } from './scope-folders';
 
 export async function activate(context: vscode.ExtensionContext) {
   if (!await prepareUpgrade()) return;
@@ -15,6 +16,7 @@ export async function activate(context: vscode.ExtensionContext) {
     throw error;
   }
   registerUpdates(context);
+  registerScopeFolders(context);
   const workspace = new WorkspaceIndex(context.extensionPath, context.storageUri?.fsPath);
   const copilot = registerCopilotCallbacks(context, workspace);
   const view = new RelationView(workspace, context.extensionUri, copilot.actions);

@@ -71,10 +71,67 @@
         "title": "Dynsight: Open User Guide"
       },
       {
+        "command": "dynsight.selectIncludeFolders",
+        "title": "Dynsight: Select Analysis Include Folders"
+      },
+      {
+        "command": "dynsight.selectExcludeFolders",
+        "title": "Dynsight: Select Analysis Exclude Folders"
+      },
+      {
+        "command": "dynsight.addIncludeFolders",
+        "title": "Add to Analysis Include",
+        "enablement": "explorerResourceIsFolder"
+      },
+      {
+        "command": "dynsight.addExcludeFolders",
+        "title": "Exclude from Analysis",
+        "enablement": "explorerResourceIsFolder"
+      },
+      {
         "command": "dynsight.selectSmartAnalysisFolders",
         "title": "Dynsight: Select Smart Analysis Folders"
       }
     ],
+    "submenus": [
+      {
+        "id": "dynsight.analysisScope",
+        "label": "Dynsight"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "submenu": "dynsight.analysisScope",
+          "when": "explorerResourceIsFolder",
+          "group": "navigation@90"
+        }
+      ],
+      "dynsight.analysisScope": [
+        {
+          "command": "dynsight.addIncludeFolders",
+          "group": "1_scope@1"
+        },
+        {
+          "command": "dynsight.addExcludeFolders",
+          "group": "1_scope@2"
+        },
+        {
+          "command": "dynsight.openSettings",
+          "group": "2_settings@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "dynsight.addIncludeFolders",
+          "when": "false"
+        },
+        {
+          "command": "dynsight.addExcludeFolders",
+          "when": "false"
+        }
+      ]
+    },
     "viewsContainers": {
       "panel": [
         {
@@ -159,7 +216,7 @@
           },
           "default": [],
           "scope": "resource",
-          "description": "Workspace-relative glob patterns to include in C/H analysis, for example App/** or Drivers/**. Empty includes all C/H files. Exclude always takes priority. Uses forward slashes. Changes reconcile selected files while reusing unchanged source analysis."
+          "markdownDescription": "[Select folders…](command:dynsight.selectIncludeFolders) · Workspace-relative glob patterns to include in C/H analysis, for example App/** or Drivers/**. Empty includes all C/H files. Exclude always takes priority. Uses forward slashes. Changes reconcile selected files while reusing unchanged source analysis. Review folder additions and rule removals, then Apply to save. Esc cancels without saving."
         },
         "dynsight.exclude": {
           "order": 21,
@@ -168,9 +225,33 @@
             "type": "string",
             "minLength": 1
           },
-          "default": [],
+          "default": [
+            "**/unit_test*/**",
+            "**/unit-test*/**",
+            "**/unittest*/**",
+            "**/test/**",
+            "**/tests/**",
+            "**/mock*/**",
+            "**/[Uu]nity/**",
+            "**/[Cc][Mm]ock*/**",
+            "**/[Cc]pp[Uu][Tt]est/**",
+            "**/third*/**",
+            "**/build/**",
+            "**/CMakeFiles/**",
+            "**/cmake-build-*/**",
+            "**/coverage/**",
+            "**/[Pp]oly[Ss]pace*/**",
+            "**/POLYSPACE*/**",
+            "**/[Oo]bj/**",
+            "**/[Oo]bjects/**",
+            "**/[Ll]istings/**",
+            "**/BrowseInfo/**",
+            "**/C-STAT/**",
+            "**/EWARM/**/List/**",
+            "**/EWARM/**/Exe/**"
+          ],
           "scope": "resource",
-          "description": "Workspace-relative glob patterns excluded from indexing and file watching, for example **/Tools/Polyspace/**. Exclude takes priority over Include. Uses forward slashes. Changes reconcile selected files while reusing unchanged source analysis. Independent of files.exclude, search.exclude and C_Cpp.files.exclude."
+          "markdownDescription": "[Select folders…](command:dynsight.selectExcludeFolders) · Workspace-relative glob patterns excluded from indexing and file watching. Defaults exclude test/mock folders, Unity/CMock/CppUTest frameworks, `third*`, build/coverage output, Polyspace folders, `Obj`/`obj`, `Objects`/`objects`, `Listings`/`listings`, `BrowseInfo`, `C-STAT` and `List`/`Exe` under `EWARM`. See the default list for exact patterns. A saved list replaces these defaults; use [] to disable them. Exclude takes priority over Include. Uses forward slashes. Changes reconcile selected files while reusing unchanged source analysis. Independent of files.exclude, search.exclude and C_Cpp.files.exclude. Review folder additions and rule removals, then Apply to save. Esc cancels without saving."
         },
         "dynsight.detailedAnalysisFolders": {
           "type": "array",
@@ -331,7 +412,8 @@
     "test:analysis-performance": "tsx test/analysis-performance.ts",
     "test": "tsx --test test/analysis-policy.test.ts test/analysis-budget.test.ts test/scoped-analysis.test.ts test/callback-overrides.test.ts test/copilot-single-site.test.ts test/core.test.ts test/analysis-notices.test.ts test/macros.test.ts test/pointer-calls.test.ts test/callback-effects.test.ts test/callback-uncertainty.test.ts test/callback-safety.test.ts test/callback-index-regressions.test.ts test/analysis-cache.test.ts test/incremental-analysis.test.ts test/copilot-callbacks.test.ts test/copilot-progress.test.ts test/explicit-callbacks.test.ts test/copilot-relations.test.ts test/copilot-service.test.ts test/panel-layout.test.ts test/function-arguments.test.ts test/members.test.ts test/syntax.test.ts test/updates.test.ts test/issue-report.test.ts test/issue-report-service.test.ts test/diagnostic-history.test.ts test/branding-migration.test.ts",
     "test:extension": "npm run build && node scripts/test-extension.mjs",
-    "test:worker": "npm run build && node --test test/analysis-worker.test.mjs test/analysis-cache-worker.test.mjs test/workspace.test.mjs",
+    "test:scope-folders:host": "npm run build && node scripts/test-scope-folders.mjs",
+    "test:worker": "npm run build && node --test test/analysis-worker.test.mjs test/analysis-cache-worker.test.mjs test/workspace.test.mjs test/scope-folders.test.mjs",
     "test:memory": "node --expose-gc --import tsx --test test/analysis-memory.test.ts",
     "test:performance": "tsx test/index-performance.ts",
     "test:large": "npm run build && node scripts/test-large-workspace.mjs",

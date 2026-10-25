@@ -20,6 +20,45 @@ function inferred(index: RelationIndex, name: string) {
   return index.relations(symbol(index, name).id, 'callees').filter(group => group.callKind === 'inferred');
 }
 
+for (const operation of ['copy', 'array copy', 'member copies']) test(`${operation} of unrelated numeric aggregates does not exhaust callback effects`,()=>{
+  const fields=operation==='array copy' ? 'struct Data data[270];' : Array.from({length:270},(_,n)=>`struct Data data${n};`).join('');
+  const initial=operation==='array copy' ? '.data={'+Array.from({length:270},(_,n)=>`{${n}}`).join(',')+'},'
+    : Array.from({length:270},(_,n)=>`.data${n}={${n}},`).join('');
+  const index=project(`typedef void(*CB)(void);struct Data{unsigned value;};
+    struct Object{${fields}CB cb;};static void target(void){}
+    static struct Object source={${initial}.cb=target},destination;
+    static void configure(void){${operation==='member copies' ? Array.from({length:270},(_,n)=>`destination.data${n}=source.data${n};`).join('')+'destination.cb=target;' : 'destination=source;'}}
+    void run(void){configure();destination.cb();}`);
+  assert.equal([...index.files.values()].some(file=>file.issues.some(issue=>/mutation limit|region limit/.test(issue))),false);
+  assert.deepEqual(inferred(index,'run').map(group=>group.name),['target']);
+  assert.ok(inferred(index,'run').every(group=>group.sites.every(site=>!site.inference?.incomplete)));
+});
+
+test('aggregate copy summaries retain nested scalar selectors and pointer fields',()=>{
+  const fields=Array.from({length:270},(_,n)=>`struct Data data${n};`).join('');
+  const initial=Array.from({length:270},(_,n)=>`.data${n}={${n}},`).join('');
+  const index=project(`typedef void(*CB)(void);struct Data{unsigned value;};struct Selector{unsigned selected;};
+    struct Object{${fields}struct Selector selector;CB *pointer;};
+    static void first(void){}static void second(void){}static CB table[2]={first,second};
+    static struct Object source={${initial}.selector={1},.pointer=&table[1]},destination;
+    static void configure(void){destination=source;}
+    void run(void){configure();table[destination.selector.selected]();(*destination.pointer)();}`);
+  assert.equal([...index.files.values()].some(file=>file.issues.some(issue=>/mutation limit|region limit/.test(issue))),false);
+  assert.deepEqual(inferred(index,'run').map(group=>group.name),['second']);
+  assert.equal(inferred(index,'run')[0].sites.length,2);
+  assert.ok(inferred(index,'run')[0].sites.every(site=>!site.inference?.incomplete));
+});
+
+test('aggregate copies with 257 actual callback fields still report omitted effects',()=>{
+  const fields=Array.from({length:257},(_,n)=>`CB cb${n};`).join('');
+  const initial=Array.from({length:257},(_,n)=>`.cb${n}=target`).join(',');
+  const index=project(`typedef void(*CB)(void);struct Object{${fields}};static void target(void){}
+    static struct Object source={${initial}},destination;
+    static void configure(void){destination=source;}void run(void){configure();destination.cb256();}`);
+  assert.ok([...index.files.values()].some(file=>file.issues.some(issue=>/mutation limit/.test(issue))));
+  assert.ok(inferred(index,'run').some(group=>group.sites.some(site=>site.inference?.incomplete)));
+});
+
 for (const count of [248, 257, 400]) for (const offset of ['variable', 'unexpanded macro']) test(`${count} scalar writes through ${offset} offsets do not exhaust callback effects`, () => {
   const writes = Array.from({ length: count }, (_, n) => `regs[${n}]=${n};`).join('');
   const source = `#define BASE 0\ntypedef void(*CB)(void);void target(void){}static unsigned short buffer[2048];
@@ -508,4 +547,34 @@ for (const type of ['void', 'unsigned char']) test(`memory writes through a ${ty
     void clear(${type}*p){memset(p,0,100);}void run(void){struct Ops object={target};clear((${type}*)&object);object.cb();}`);
   assert.ok(index.relations(symbol(index, 'run').id, 'callees').some(group => group.callKind === 'indirect'));
   assert.equal(inferred(index, 'run').some(group => group.sites.some(site => site.kind === 'call' && !site.inference?.incomplete)), false);
+});
+
+test('nested diagnostic table copies spend effects on callback leaves, not container addresses', () => {
+  const entries=Array.from({length:96},()=>'{.check={{.check_func=target}}}').join(',');
+  const index=project(`typedef void(*CB)(void);void target(void){}
+    struct Check{CB check_func;};struct Diagnostic{struct Check check[1];};struct Table{struct Diagnostic diagnostic[96];};
+    static struct Table source={.diagnostic={${entries}}},destination;
+    static void configure(struct Table*out){*out=source;}
+    void run(void){configure(&destination);${Array.from({length:96},(_,n)=>`destination.diagnostic[${n}].check[0].check_func();`).join('')}}`);
+  assert.deepEqual([...index.files.values()].flatMap(file=>file.issues).filter(issue=>/mutation limit|region limit/.test(issue)),[]);
+  const targets=inferred(index,'run');
+  assert.deepEqual(targets.map(group=>group.name),['target']);
+  assert.equal(targets[0].sites.length,96);
+  assert.ok(targets.every(group=>group.sites.every(site=>!site.inference?.incomplete)));
+});
+
+for (const variant of ['parameter copy', 'return copy', 'conditional copy']) test(`nested table leaf summaries retain caller storage and overwrites: ${variant}`,()=>{
+  const entries=Array.from({length:80},()=>'{.check={{.check_func=first}}}').join(',');
+  const index=project(`typedef void(*CB)(void);void first(void){}void second(void){}
+    struct Check{CB check_func;};struct Diagnostic{struct Check check[1];};struct Table{struct Diagnostic diagnostic[80];};
+    static struct Table source={.diagnostic={${entries}}},destination,other;
+    static void configure(struct Table*out){*out=source;}
+    static struct Table copy(void){return source;}
+    void run(int flag){${variant==='return copy'?'destination=copy();':variant==='conditional copy'?'if(flag)configure(&destination);else destination=source;':'configure(&destination);configure(&other);'}
+    destination.diagnostic[79].check[0].check_func=second;
+    destination.diagnostic[79].check[0].check_func();destination.diagnostic[0].check[0].check_func();}`);
+  assert.deepEqual([...index.files.values()].flatMap(file=>file.issues).filter(issue=>/mutation limit|region limit/.test(issue)),[]);
+  const targets=inferred(index,'run');
+  assert.deepEqual(targets.map(group=>group.name).sort(),['first','second']);
+  assert.ok(targets.every(group=>group.sites.every(site=>!site.inference?.incomplete)));
 });

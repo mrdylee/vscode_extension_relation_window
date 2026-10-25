@@ -152,7 +152,17 @@ Analyze the full project except Polyspace and build output:
 
 Other examples: `App/**/*.{c,h}` matches C/H files under App; `**/vendor/**` matches vendor folders at any depth. Paths are case-sensitive in WSL. Windows-hosted analysis ignores path casing.
 
+Use **Select folders…** in the general Include/Exclude setting to avoid typing patterns. Choose **Add folders…**, select one or more folders (including nested folders), review the rules, then **Apply** to save and refresh analysis. Select a rule to remove it. **Esc** cancels without saving. **Analyze all C/H files** clears Include; adding folders to an empty Include restricts analysis to the selected paths. Existing broad globs such as `**` are preserved; remove those rules to narrow the scope. Matching folder exclusion rules appear beneath Include entries. Exclude also offers **Restore default exclusions**. Opening Settings from the picker discards staged changes and lets you edit arbitrary glob patterns directly.
+
+Alternatively, select folders in Explorer and right-click **Dynsight → Add to Analysis Include / Exclude from Analysis**. This opens the same review before saving. Existing rules, including default exclusions, are retained when adding folders. Multi-root workspaces save each root's folder settings. These commands configure general indexing, separately from Smart Analysis Macro/Copilot scope.
+
+Selecting a workspace root for Include restores all C/H files using the normal discovery limit; selecting the root for Exclude excludes all files. Settings editing opens the selected root's folder settings when folder scope applies. Fixed exclusions are marked as always excluded and cannot be overridden by Include/Exclude settings.
+
 - `node_modules`, `.git` and `.vscode-test` are always excluded.
+- Default Exclude covers test folders (`unit_test*`, `unit-test*`, `unittest*`, `test`, `tests`, `mock*`), external code (`third*`) and build/coverage output (`build`, `CMakeFiles`, `cmake-build-*`, `coverage`) at any depth. Each uses a folder-subtree pattern such as `**/test/**`. A saved Exclude list replaces these defaults; save `[]` to disable them.
+- Firmware tool defaults also exclude `**/[Pp]oly[Ss]pace*/**`, `**/POLYSPACE*/**`, `**/[Oo]bj/**`, `**/[Oo]bjects/**`, `**/[Ll]istings/**`, `**/BrowseInfo/**`, `**/C-STAT/**`, `**/EWARM/**/List/**` and `**/EWARM/**/Exe/**`. These naming conventions are configurable; remove a rule if a project uses that name for runtime sources.
+- Test framework folders use `**/[Uu]nity/**`, `**/[Cc][Mm]ock*/**` and `**/[Cc]pp[Uu][Tt]est/**`, including frameworks outside test directories.
+- Debug/Release, generated code, MDK-ARM/EWARM project folders, SDK/HAL/BSP/RTOS and PlatformIO `.pio/libdeps` remain available unless another rule excludes them. `.pio/build` is already covered by `**/build/**`.
 - `files.exclude`, `search.exclude` and `C_Cpp.files.exclude` do not configure this extension's analysis scope.
 - Definitions and references outside the scope are absent from Relation. Include shared headers and libraries if you need their relationships.
 - To restore full scope, empty Include and remove unwanted Exclude entries.

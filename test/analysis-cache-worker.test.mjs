@@ -106,6 +106,52 @@ test('changed file reparses while restored raw flow recomputes dependent callbac
   assert.equal((await second.request({ type: 'cache-save', versions: changed }).promise).saved, false);
 }));
 
+test('alias conditions and numeric aggregate copies remain complete across warm, disk and saved edits', async () => temporary(async (directory, spawn) => {
+  const definitions=Array.from({length:6},(_,n)=>`#if BOARD\n#define M${n} first\n#else\n#define M${n} second\n#endif\n`).join('');
+  const fields=Array.from({length:270},(_,n)=>`struct Data data${n};`).join('');
+  const values=Array.from({length:270},(_,n)=>`.data${n}={${n}},`).join('');
+  const inputs=[
+    {uri:'file:///alias.c',text:'#define BOARD FEATURE\n'+definitions+'typedef void(*CB)(void);static void first(void){}static void second(void){}void macro_run(void){'+Array.from({length:6},(_,n)=>`CB cb${n}=M${n};cb${n}();`).join('')+'}'},
+    {uri:'file:///aggregate.c',text:`typedef void(*CB)(void);struct Data{unsigned value;};struct Object{${fields}CB cb;};
+      static void target(void){}static void replacement(void){}static struct Object source={${values}.cb=target},destination;
+      static void configure(void){destination=source;}void run(void){configure();destination.cb();}`}
+  ];
+  const files=new Map(),versions=[];
+  const snapshot=(expected='target')=>{
+    assert.ok([...files.values()].every(file=>!file.issues.some(issue=>/limit|budget|cancelled/i.test(issue))));
+    const references=[...files.values()].flatMap(file=>file.references).filter(ref=>ref.callKind==='inferred');
+    assert.deepEqual([...new Set(references.map(ref=>ref.name))].sort(),['first','second',expected].sort());
+    assert.equal(references.length,13);
+    const registrations=files.get('file:///alias.c').callbackRegistrations;
+    assert.equal(registrations.length,12);
+    assert.ok(registrations.every(ref=>ref.kind==='reference'&&ref.callKind==='registered'));
+    assert.ok(references.every(ref=>ref.inference?.incomplete===false));
+    return references.map(ref=>({name:ref.name,location:ref.location,conditions:ref.conditions,inference:ref.inference}));
+  };
+  const derive=async connection=>{
+    const result=await connection.request({type:'derive',versions,analyzeCallbacks:true}).promise;
+    for(const file of result.files)files.set(file.uri,file);
+    for(const [uri,stamp] of result.versions)versions.find(value=>value[0]===uri)[2]=stamp;
+  };
+  const first=spawn();await first.request({type:'cache-init',directory,key:'root-fixes'}).promise;
+  for(const input of inputs){const job=first.request({...input,skip:true,expandMacros:true,propagateCallbacks:true});files.set(input.uri,await job.promise);versions.push([input.uri,job.id,-job.id]);}
+  await derive(first);const cold=snapshot();
+  await derive(first);assert.deepEqual(snapshot(),cold);
+  assert.equal((await first.request({type:'cache-save',versions}).promise).saved,true);
+  await first.worker.terminate();
+  const second=spawn();await second.request({type:'cache-init',directory,key:'root-fixes'}).promise;
+  versions.length=0;files.clear();
+  for(const input of inputs){
+    const job=second.request({type:'cache-restore',...input,skip:true,expandMacros:true,propagateCallbacks:true}),result=await job.promise;
+    assert.equal(result.hit,true);files.set(input.uri,result.file);versions.push([input.uri,job.id,result.stamp]);
+  }
+  assert.equal((await second.request({type:'cache-validate',versions,analyzeCallbacks:true}).promise).valid,true);
+  assert.deepEqual(snapshot(),cold);
+  const edit={...inputs[1],text:inputs[1].text.replace('.cb=target','.cb=replacement')};
+  const job=second.request({...edit,skip:true,expandMacros:true,propagateCallbacks:true});files.set(edit.uri,await job.promise);versions[1]=[edit.uri,job.id,-job.id];
+  await derive(second);snapshot('replacement');
+}));
+
 test('corrupt cache record requests manual recovery instead of masquerading as a source edit', async () => temporary(async (directory, spawn) => {
   const first = spawn(); await first.request({ type: 'cache-init', directory, key: 'v1' }).promise;
   const versions = await build(first); await first.request({ type: 'cache-save', versions }).promise;
@@ -114,4 +160,36 @@ test('corrupt cache record requests manual recovery instead of masquerading as a
   const second = spawn(); await second.request({ type: 'cache-init', directory, key: 'v1' }).promise;
   const result = await second.request({ type: 'cache-restore', uri: sources[0][0], text: sources[0][1], skip: true, expandMacros: false }).promise;
   assert.deepEqual(result, { hit: false, invalid: true });
+}));
+
+test('nested diagnostic callback leaves survive cold, warm, disk and saved target changes',async()=>temporary(async(directory,spawn)=>{
+  const entries=Array.from({length:96},()=>'{.check={{.check_func=first}}}').join(',');
+  const input={uri:'file:///diagnostic-table.c',text:`typedef void(*CB)(void);static void first(void){}static void second(void){}
+    struct Check{CB check_func;};struct Diagnostic{struct Check check[1];};struct Table{struct Diagnostic diagnostic[96];};
+    static struct Table source={.diagnostic={${entries}}},destination;
+    static void configure(struct Table*out){*out=source;}void run(void){configure(&destination);
+    ${Array.from({length:96},(_,n)=>`destination.diagnostic[${n}].check[0].check_func();`).join('')}}`,skip:true,expandMacros:true,propagateCallbacks:true};
+  const check=(file,name)=>{
+    assert.deepEqual(file.issues,[]);
+    const calls=file.references.filter(ref=>ref.callKind==='inferred');
+    assert.equal(calls.length,96);
+    assert.ok(calls.every(ref=>ref.name===name&&ref.inference?.incomplete===false));
+    return calls;
+  };
+  const first=spawn();await first.request({type:'cache-init',directory,key:'photo-pattern'}).promise;
+  const job=first.request(input);await job.promise;
+  let versions=[[input.uri,job.id,-job.id]];
+  const cold=await first.request({type:'derive',versions,analyzeCallbacks:true}).promise;
+  const expected=check(cold.files[0],'first');versions[0][2]=cold.versions[0][1];
+  const warm=await first.request({type:'derive',versions,analyzeCallbacks:true}).promise;
+  if(warm.files.length)assert.deepEqual(check(warm.files[0],'first'),expected);
+  assert.equal((await first.request({type:'cache-save',versions}).promise).saved,true);
+  await first.worker.terminate();
+  const second=spawn();await second.request({type:'cache-init',directory,key:'photo-pattern'}).promise;
+  const restoredJob=second.request({type:'cache-restore',...input}),restored=await restoredJob.promise;
+  assert.equal(restored.hit,true);assert.deepEqual(check(restored.file,'first'),expected);
+  assert.equal((await second.request({type:'cache-validate',versions:[[input.uri,restoredJob.id,restored.stamp]],analyzeCallbacks:true}).promise).valid,true);
+  const edit=second.request({...input,text:input.text.replaceAll('check_func=first','check_func=second')});await edit.promise;
+  const changed=await second.request({type:'derive',versions:[[input.uri,edit.id,-edit.id]],analyzeCallbacks:true}).promise;
+  check(changed.files[0],'second');
 }));

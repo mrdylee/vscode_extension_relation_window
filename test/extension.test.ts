@@ -45,6 +45,15 @@ export async function run() {
   assert.equal(automaticReleaseChecks, 0, 'test-mode activation never checks GitHub automatically');
   assert.ok((await vscode.commands.getCommands()).includes('dynsight.checkForUpdates'));
   assert.ok((await vscode.commands.getCommands()).includes('dynsight.openSettings'), 'scope settings command registered');
+  for (const command of ['selectIncludeFolders', 'selectExcludeFolders', 'addIncludeFolders', 'addExcludeFolders']) {
+    assert.ok((await vscode.commands.getCommands()).includes(`dynsight.${command}`), `scope folder command registered: ${command}`);
+  }
+  const includeBeforePicker = vscode.workspace.getConfiguration('dynsight', root).get('include');
+  const scopePicker = vscode.commands.executeCommand('dynsight.addIncludeFolders', root, [root]);
+  await new Promise(resolve => setTimeout(resolve, 300));
+  await vscode.commands.executeCommand('workbench.action.closeQuickOpen');
+  await scopePicker;
+  assert.deepEqual(vscode.workspace.getConfiguration('dynsight', root).get('include'), includeBeforePicker, 'cancelling native scope review preserves settings');
   assert.ok((await vscode.commands.getCommands()).includes('dynsight.help'), 'offline help command registered');
   assert.ok((await vscode.commands.getCommands()).includes('dynsight.selectCopilotModel'), 'Copilot model picker command registered');
   assert.equal(vscode.workspace.getConfiguration('dynsight').get('copilotModel'), '', 'model choice is visible in Settings');
@@ -357,9 +366,13 @@ export async function run() {
   const commaUri = vscode.Uri.joinPath(root, 'App,Main', 'comma.c');
   await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(root, 'App,Main'));
   await vscode.workspace.fs.writeFile(commaUri, Buffer.from('void comma_target(void){}'));
+  const bracketUri = vscode.Uri.joinPath(root, 'App[old]', 'literal.c');
+  await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(root, 'App[old]'));
+  await vscode.workspace.fs.writeFile(bracketUri, Buffer.from('void literal_folder_target(void){}'));
   for (const [patterns, expected] of [
     [['App/**/*.{c,h}', 'control.c', 'App/**'], [appUri.toString(), document.uri.toString()]],
-    [['App,Main/**', 'control.c'], [commaUri.toString(), document.uri.toString()]]
+    [['App,Main/**', 'control.c'], [commaUri.toString(), document.uri.toString()]],
+    [['App[[]old[]]/**', 'control.c'], [bracketUri.toString(), document.uri.toString()]]
   ]) {
     await settings.update('include', patterns, vscode.ConfigurationTarget.Workspace);
     await new Promise(resolve => setTimeout(resolve, 500));
@@ -377,12 +390,33 @@ export async function run() {
   await new Promise(resolve => setTimeout(resolve, 500));
   await api.workspace.whenIdle();
   assert.equal(api.workspace.index.files.size, 0, 'no include matches means zero files, not fallback to all');
-  await settings.update('include', [], vscode.ConfigurationTarget.Workspace);
+  const rootPicker = vscode.commands.executeCommand('dynsight.addIncludeFolders', root, [root]);
+  await new Promise(resolve => setTimeout(resolve, 300));
+  await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
+  await rootPicker;
+  assert.deepEqual(vscode.workspace.getConfiguration('dynsight', root).get('include'), [], 'root picker restores bounded default discovery instead of a wildcard Include');
   await new Promise(resolve => setTimeout(resolve, 500));
   await api.workspace.whenIdle();
   assert.ok(api.workspace.index.files.has(outsideUri.toString()), 'empty include restores the full scope');
   assert.ok(api.workspace.index.files.get(faultDocument.uri.toString()).text.includes('outside include'), 'restored scope uses unsaved content');
   assert.equal(api.workspace.index.files.has(excludedUri.toString()), false, 'empty include still respects exclude');
+  await api.workspace.reindex();
+  assert.equal(api.workspace.diagnostics.index.rebuilds.at(-1).files.searchResults, api.workspace.index.files.size, 'root picker discovery returns C/H files, not non-source assets');
+  for (const file of [bracketUri, commaUri]) {
+    assert.ok(api.workspace.index.files.has(file.toString()));
+    const folder = vscode.Uri.joinPath(file, '..');
+    const picker = vscode.commands.executeCommand('dynsight.addExcludeFolders', folder, [folder]);
+    await new Promise(resolve => setTimeout(resolve, 300));
+    await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
+    await picker;
+    await new Promise(resolve => setTimeout(resolve, 500));
+    await api.workspace.whenIdle();
+    assert.equal(api.workspace.index.files.has(file.toString()), false, 'native folder picker exclusions match literal special characters');
+    await settings.update('exclude', excludedPatterns, vscode.ConfigurationTarget.Workspace);
+    await new Promise(resolve => setTimeout(resolve, 500));
+    await api.workspace.whenIdle();
+    assert.ok(api.workspace.index.files.has(file.toString()), 'removing picker exclusion restores the folder');
+  }
   const rootBeforeHelp = api.view.state.graph?.root.symbolId;
   const guideUri = vscode.Uri.joinPath(ext.extensionUri, 'USER_GUIDE.md');
   const guide = Buffer.from(await vscode.workspace.fs.readFile(guideUri)).toString('utf8');

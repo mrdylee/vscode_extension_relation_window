@@ -412,7 +412,7 @@ export async function createAnalyzer(runtime: string, grammar: string) {
     const derived = inferPointerCalls(expanded, memoryPressure, analyzer.analyze, analyzeCallbacks, control);
     const memoryLimited = memoryPressure?.() === true;
     const partial = !memoryLimited && analyzeCallbacks && !options.shouldCancel?.() ? suggestPartialCallbacks(expanded, derived, memoryPressure, options.shouldCancel) : derived;
-    return (memoryLimited ? partial : suggestExplicitCallbacks(files, partial, control)).map(file => {
+    return (memoryLimited ? partial : suggestExplicitCallbacks(files, partial, control, expanded)).map(file => {
       const cached = statusCache.get(file); if(cached && !options.shouldCancel?.())return cached;
       const references = file.references.map((ref): ReferenceRecord => {
       if(ref.kind !== 'call' || !ref.access || (!ref.indirect && !ref.inference?.incomplete))return ref;

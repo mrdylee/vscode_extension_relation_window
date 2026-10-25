@@ -82,7 +82,19 @@ GitHub를 방문하지 않아도 Dynsight 상단의 두 버튼으로 사용할 �
 
 ## 분석 범위 설정: Include / Exclude
 
-Include는 v0.1.18부터 구현되었으며, 여러 패턴을 함께 사용할 때의 누락 수정까지 포함한 **v0.1.19 이상**을 권장합니다. Exclude는 v0.1.16 이상에서 사용할 수 있습니다. 분석할 폴더가 적으면 **Include**로 포함할 범위를 지정하고, 불필요한 도구·생성 코드 폴더는 **Exclude**로 제외하세요. 예를 들어 Polyspace 설치 파일이나 분석 결과가 소스 폴더 안에 있다면 해당 경로를 제외할 수 있습니다. 기본 사용자 제외 목록은 비어 있으므로 Polyspace나 SDK 폴더가 자동으로 제외되지는 않습니다.
+Include는 v0.1.18부터 구현되었으며, 여러 패턴을 함께 사용할 때의 누락 수정까지 포함한 **v0.1.19 이상**을 권장합니다. Exclude는 v0.1.16 이상에서 사용할 수 있습니다. 분석할 폴더가 적으면 **Include**로 포함할 범위를 지정하고, 불필요한 도구·생성 코드 폴더는 **Exclude**로 제외하세요. 기본 Exclude는 모든 깊이의 테스트 폴더(`unit_test*`, `unit-test*`, `unittest*`, `test`, `tests`, `mock*`), 외부 코드 폴더(`third*`), 빌드·측정 산출물 폴더(`build`, `CMakeFiles`, `cmake-build-*`, `coverage`)를 제외합니다. 각 이름은 `**/test/**`처럼 폴더 하위 전체를 제외하는 패턴으로 적용됩니다. 직접 저장한 Exclude 목록은 이 기본값을 대체하며, `[]`로 저장하면 이 기본 제외를 해제할 수 있습니다. Polyspace 계열 폴더와 펌웨어 도구 출력도 기본 제외에 포함됩니다. SDK·HAL·BSP·RTOS 소스는 기본 제외에 추가하지 않습니다.
+
+펌웨어 도구용 기본 제외는 다음과 같습니다. 폴더 이름에 따른 기본 규칙이므로 실제 소스가 같은 이름을 사용한다면 해당 규칙을 제거하세요.
+
+| 용도 | 추가 기본 패턴 |
+| --- | --- |
+| Polyspace 도구·분석 생성물 | `**/[Pp]oly[Ss]pace*/**`, `**/POLYSPACE*/**` |
+| 테스트 프레임워크 | `**/[Uu]nity/**`, `**/[Cc][Mm]ock*/**`, `**/[Cc]pp[Uu][Tt]est/**` |
+| 컴파일·목록 출력 | `**/[Oo]bj/**`, `**/[Oo]bjects/**`, `**/[Ll]istings/**` |
+| IAR 탐색·정적 분석 정보 | `**/BrowseInfo/**`, `**/C-STAT/**` |
+| IAR 출력 중 일반적인 이름 | `**/EWARM/**/List/**`, `**/EWARM/**/Exe/**` |
+
+`Debug`, `Release`, `generated`, `MDK-ARM`, `EWARM` 전체는 자동 제외하지 않습니다. PlatformIO의 `.pio/build`는 기존 `**/build/**`로 제외하고, 의존 소스가 있는 `.pio/libdeps`는 유지합니다.
 
 1. C 소스 폴더를 연 VS Code 창에서 명령 팔레트의 **Preferences: Open Workspace Settings (JSON)**을 실행합니다. WSL 프로젝트라면 WSL에 연결된 창에서 설정합니다.
 2. 설정 객체에 `dynsight.include`와 `dynsight.exclude`를 필요에 맞게 추가하고 저장합니다. 기존 설정이 있다면 다른 항목을 지우지 말고 이 항목을 합칩니다. 일반적인 단일 폴더 프로젝트에서는 `.vscode/settings.json`에 저장됩니다.
@@ -117,6 +129,12 @@ Include는 v0.1.18부터 구현되었으며, 여러 패턴을 함께 사용할 �
 **Exclude가 최종 우선**입니다. Include는 패턴 중 하나에 일치하면 포함하며, 겹치는 패턴으로 같은 파일을 중복 분석하지 않습니다. v0.1.19부터는 `App/**/*.{c,h}`와 `Drivers/**`처럼 중괄호 패턴과 다른 패턴을 함께 써도 각각의 의미를 유지합니다. Include가 설정되어 있지만 일치하는 파일이 없으면 분석 결과는 0개입니다. 전체 범위로 돌아가려면 Include를 `[]`로 비우세요.
 
 Settings 화면에서는 `@id:dynsight.include` 또는 `@id:dynsight.exclude`를 검색하고 **Workspace** 범위에서 항목을 추가할 수 있습니다. 폴더 안의 모든 파일을 지정할 때는 `App` 대신 `App/**`처럼 작성하세요. 폴더 패턴에 다른 종류의 파일이 있어도 분석은 C/H 파일만 대상으로 합니다.
+
+패턴을 직접 입력하지 않으려면 Include/Exclude 설명의 **Select folders…**를 누르세요. **Add folders…**에서 하위 폴더를 여러 개 선택하고, 목록에서 불필요한 규칙을 선택해 제거한 뒤 **Apply**로 한 번에 저장합니다. **Esc**로 닫으면 변경을 버립니다. Include의 **Analyze all C/H files**는 전체 분석으로 돌아가며, Include가 비어 있을 때 폴더를 추가하면 선택한 경로만 분석합니다. 기존 `**` 같은 광범위한 glob은 보존하므로 범위를 좁히려면 목록에서 해당 규칙을 제거하세요. Exclude에 걸리는 폴더에는 일치하는 폴더 제외 규칙을 표시합니다. 기본 제외 복원과 기존 glob 직접 편집도 가능합니다. 설정 편집으로 이동하면 선택기의 미적용 변경은 버립니다.
+
+탐색기에서도 폴더를 여러 개 선택한 뒤 우클릭 → **Dynsight → Add to Analysis Include / Exclude from Analysis**로 같은 검토 목록을 열 수 있습니다. 여러 루트를 연 경우 각 루트의 설정으로 저장하며, 기본 Exclude와 직접 작성한 기존 패턴은 추가 시 유지합니다. 이 선택기는 일반 분석 범위용이며 **Smart Analysis**의 Macro/Copilot 범위와는 별개입니다.
+
+워크스페이스 루트를 Include로 선택하면 기존 Include를 비워 검색 제한이 적용되는 전체 C/H 분석으로 돌아갑니다. 루트를 Exclude로 선택하면 전체 파일을 제외합니다. 폴더별 설정이 적용되는 경우 설정 편집은 선택한 루트의 설정을 엽니다. `node_modules`, `.git`, `.vscode-test`에는 설정으로 해제할 수 없는 고정 제외라는 안내를 표시합니다.
 
 | 패턴 예시 | 일치 범위 (Include/Exclude 공통) |
 | --- | --- |

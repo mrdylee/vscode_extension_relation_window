@@ -4,6 +4,7 @@ import path from 'node:path';
 import { createAnalyzer } from '../src/analyzer';
 import { suggestExplicitCallbacks } from '../src/explicit-callbacks';
 import { RelationIndex } from '../src/relations';
+import { AnalysisWorkBudget } from '../src/analysis-budget';
 
 let analyzer: Awaited<ReturnType<typeof createAnalyzer>>;
 before(async () => { analyzer = await createAnalyzer(path.resolve('node_modules/web-tree-sitter/web-tree-sitter.wasm'), path.resolve('node_modules/tree-sitter-c/tree-sitter-c.wasm')); });
@@ -263,4 +264,45 @@ test('conditional aggregate alternatives retain branch-specific registrations wi
   const registrations = files[0].callbackRegistrations ?? [];
   assert.deepEqual(registrations.map(ref=>ref.name).sort(), ['first','second']);
   assert.ok(registrations.every(ref=>ref.conditions.length === 1));
+});
+
+for(const callbacks of [false,true])test(`macro callback assignments are registrations without requiring propagation (${callbacks})`,()=>{
+  const header='#define SET_TASK_PARAM(p,name,cb) (p).on_create=cb; (p).memory=mem_##name;\n';
+  const source='#include "task.h"\nstruct Param{void(*on_create)(void);void*memory;};static char mem_LOG[16];static void handler(void){}void service(struct Param*);void create(void){struct Param p;SET_TASK_PARAM(p,LOG,handler);service(&p);}';
+  const raw=[analyzer.analyze('file:///macro-registration/task.h',header),analyzer.analyze('file:///macro-registration/main.c',source,true,{expandMacros:true,propagateCallbacks:callbacks})];
+  const budget=new AnalysisWorkBudget();
+  const files=analyzer.derive(raw,undefined,undefined,callbacks,{workBudget:budget}),index=new RelationIndex();
+  if(!callbacks)assert.equal(budget.usage().callbacks,0);files.forEach(file=>index.update(file));
+  const owner=index.symbols().find(symbol=>symbol.name==='create')!;
+  const registration=index.relations(owner.id,'callees').find(group=>group.name==='handler');
+  assert.equal(registration?.callKind,'registered');
+  assert.equal(registration?.sites.length,1);
+  assert.equal(registration?.sites[0].kind,'reference');
+  assert.equal(source.slice(registration!.sites[0].location.start,registration!.sites[0].location.end),'handler');
+  assert.ok(!files.flatMap(file=>file.references).some(ref=>ref.name==='handler'&&ref.kind==='call'));
+  assert.deepEqual(files.flatMap(file=>file.issues),[]);
+});
+
+test('macro registration follows header changes and warm reuse without inventing invocations',()=>{
+  const source='#include "assign.h"\nstruct Ops{void(*cb)(void);};void first(void){}void second(void){}void setup(void){struct Ops ops;ASSIGN(ops);}';
+  const raw=analyzer.analyze('file:///registration-edit/main.c',source,true,{expandMacros:true,propagateCallbacks:false});
+  for(const name of ['first','second','first']){
+    const header=analyzer.analyze('file:///registration-edit/assign.h',`#define ASSIGN(p) (p).cb=${name};\n`);
+    const result=analyzer.derive([raw,header],undefined,undefined,false);
+    const refs=result[0].callbackRegistrations??[];
+    assert.deepEqual(refs.map(ref=>ref.name),[name]);
+    assert.ok(refs.every(ref=>ref.kind==='reference'&&ref.callKind==='registered'&&ref.location.uri===raw.uri));
+    assert.equal(source.slice(refs[0].location.start,refs[0].location.end),'ASSIGN');
+    assert.deepEqual(analyzer.derive([raw,header],undefined,undefined,false)[0].callbackRegistrations,refs);
+    assert.ok(!result[0].references.some(ref=>ref.kind==='call'&&(ref.name==='first'||ref.name==='second')));
+  }
+});
+
+test('macro registration remains distinct from a real local callback invocation',()=>{
+  const source='#define SET(p,cb) (p).fn=cb\nstruct Ops{void(*fn)(void);};void target(void){}void run(void){struct Ops ops;SET(ops,target);ops.fn();}';
+  const [result]=analyzer.derive([analyzer.analyze('file:///macro-register-call.c',source)]);
+  assert.equal(result.callbackRegistrations?.filter(ref=>ref.name==='target'&&ref.kind==='reference').length,1);
+  const call=result.references.find(ref=>ref.name==='target'&&ref.kind==='call'&&ref.callKind==='inferred');
+  assert.ok(call);
+  assert.equal(source.slice(call.location.start,call.location.end),'ops.fn');
 });

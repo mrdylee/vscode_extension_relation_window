@@ -761,8 +761,10 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
   function copyStorage(destination: string, sources: ReadonlySet<string>, layout: ReturnType<RelationIndex['layout']>[number], state: State, ctx: Context, depth = 0, record?: SymbolRecord) {
     sources = new Set([...sources].map(physical));
     if (depth >= 16) { write(destination, unknown('Aggregate copy depth limit'), state, ctx); return; }
+    // Container self-addresses describe storage shape, not mutations. Keep them
+    // in memory; only copied leaf values belong in the callee effect summary.
     if (layout.layers[0] === 'array') {
-      write(destination, { ...blank(), objects: new Set([destination]) }, state, ctx, true, summarize(record));
+      write(destination, { ...blank(), objects: new Set([destination]) }, state, ctx, true, false);
       const indices = new Set<string>();
       for (const root of sources) {
         heapShape(root);
@@ -770,7 +772,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
       }
       for (const suffix of indices) copyStorage(destination + suffix, new Set([...sources].map(root => root + suffix)), { ...layout, layers: layout.layers.slice(1) }, state, ctx, depth + 1, record);
     } else if (!layout.layers.length && layout.fields.length) {
-      write(destination, { ...blank(), objects: new Set([destination]) }, state, ctx);
+      write(destination, { ...blank(), objects: new Set([destination]) }, state, ctx, true, false);
       for (const field of layout.fields) copyStorage(destination + '.' + field.name, new Set([...sources].map(root => root + '.' + field.name)),
         index.layout(field)[0] ?? { id: '', layers: [], conditions: [], fields: [] }, state, ctx, depth + 1, field);
     } else write(destination, union(...[...sources].map(root => read(root, state))), state, ctx, true, summarize(record));
@@ -912,7 +914,15 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     invalidate(roots, state, ctx, true, true);
     return evidence(args[0], { location: expr.location, reason: 'Memory function returns its destination' });
   }
-  function evaluate(expr: Expr, state: State, ctx: Context): Value {
+  function effectFree(expr: Expr): boolean {
+    if (expr.kind === 'call' || expr.kind === 'assign') return false;
+    if (expr.kind === 'member' || expr.kind === 'address' || expr.kind === 'dereference' || expr.kind === 'cast') return effectFree(expr.object);
+    if (expr.kind === 'index') return effectFree(expr.object) && effectFree(expr.index);
+    if (expr.kind === 'choice' || expr.kind === 'sequence') return expr.values.every(effectFree);
+    if (expr.kind === 'initializer') return expr.entries.every(entry => effectFree(entry.value));
+    return expr.kind !== 'unknown' || (expr.children ?? []).every(effectFree);
+  }
+  function evaluate(expr: Expr, state: State, ctx: Context, discarded = false): Value {
     currentLocation = expr.location; evaluations++;
     const work = options.workBudget?.consume(activeSymbol?.id ?? 'callback-setup');
     if(work && work !== 'ok') {
@@ -980,14 +990,20 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     }
     if (expr.kind === 'sequence') { let value = blank(); for (const child of expr.values) value = evaluate(child, state, ctx); return value; }
     if (expr.kind === 'assign') {
-      const targets = slots(expr.left, state, ctx, true), record = valueType(expr.left, ctx);
+      const record = valueType(expr.left, ctx);
+      // A discarded numeric result with no callback/storage consumers needs no
+      // slot evaluation. Calls and nested assignments must still execute.
+      if (discarded && record && !summarize(record) && effectFree(expr.left) && effectFree(expr.right)) return blank();
+      const targets = slots(expr.left, state, ctx, true);
       const initializerValue = (value: Expr): boolean => value.kind === 'initializer' ||
         (value.kind === 'choice' && value.values.length > 0 && value.values.every(initializerValue));
       if (initializerValue(expr.right)) {
         for (const target of targets) initializer(target, expr.right, record ? index.layout(record) : [], state, ctx, record);
         return union(...targets.map(target => read(target, state)));
       }
-      let value = expr.operator === '=' ? evaluate(expr.right, state, ctx) : unknown('Compound pointer mutation');
+      // Compound arithmetic has an unknown value, but its RHS may register a callback.
+      const right = evaluate(expr.right, state, ctx);
+      let value = expr.operator === '=' ? right : unknown('Compound pointer mutation');
       const layouts = record ? index.layout(record) : [];
       if (layouts.length && layouts.every(layout => !layout.layers.length && layout.scalar)) value = scalar(value);
       const pointer = layouts[0]?.layers[0] === 'pointer' && layouts[0].layers[1] !== 'function';
@@ -995,7 +1011,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
         value = { ...value, objects: new Set(['$object:' + expr.right.location.uri + '#' + expr.right.location.start]) };
       value = evidence(value, { location: expr.location, reason: 'Assignment or initialization' });
       if (expr.operator === '=' && layouts[0] && !layouts[0].layers.length && layouts[0].fields.length) {
-        for (const target of targets) copyStorage(target, objects(value), layouts[0], state, ctx);
+        for (const target of targets) copyStorage(target, objects(value), layouts[0], state, ctx, 0, record);
         return union(...targets.map(target => read(target, state)));
       }
       for (const target of targets) {
@@ -1097,7 +1113,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     for (const statement of body) {
       if (!state.alive || timedOut || steps > 2_000_000) break;
       if (options.workBudget?.exhausted(ctx.program.id)) { state.incomplete = true; break; }
-      if (statement.kind === 'expression') evaluate(statement.value, state, ctx);
+      if (statement.kind === 'expression') evaluate(statement.value, state, ctx, true);
       else if (statement.kind === 'return') {
         const evaluated = evaluate(statement.value, state, ctx);
         const value = returnStorage.get(ctx.program.id) ? evaluated : unknown('Scalar return is not a tracked callback/storage value'); publish(value, state);

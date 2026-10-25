@@ -332,7 +332,8 @@ test('review: conditional callback parameter types retain callable alternatives'
 });
 test('review: same-offset calls in different macro bodies retain local and global bindings', () => {
   const index=project({'main.c':prelude+'void fp(void){}\n#if BOARD\n#define DECL CB fp=foo;\n#else\n#define DECL CB xy=bar;\n#endif\nvoid run(void){DECL fp();}'});
-  assert.deepEqual(calls(index).filter(g=>g.symbol?.kind==='function').map(g=>g.name).sort(),['foo','fp']);
+  assert.deepEqual(calls(index).filter(g=>g.symbol?.kind==='function'&&g.sites.some(site=>site.kind==='call')).map(g=>g.name).sort(),['foo','fp']);
+  assert.ok(calls(index).some(g=>g.name==='bar'&&g.callKind==='registered'&&g.sites.every(site=>site.kind==='reference')));
   const fp=index.symbols().find(symbol=>symbol.name==='fp'&&symbol.kind==='function')!;
   assert.equal(index.relations(fp.id,'references').find(group=>group.name==='run')!.sites.length,1,'macro-local callback use is not a reference to the same-named global function');
 });

@@ -127,6 +127,35 @@ test('genuinely independent conditions still report the 32-alternative bound',()
   assert.ok(result.issues.some(issue=>/alternative limit/.test(issue)));
 });
 
+for(const alias of ['#define BOARD FEATURE\n', '#define ENABLED(x) (x)\n#define BOARD ENABLED(FEATURE)\n'])
+  test(`unchanged transitive condition dependencies share alternatives: ${alias.trim()}`,()=>{
+    const definitions=Array.from({length:6},(_,n)=>`#if BOARD\n#define M${n}() first()\n#else\n#define M${n}() second()\n#endif\n`).join('');
+    const source=alias+definitions+'void first(void){}void second(void){}void run(void){'+Array.from({length:6},(_,n)=>`M${n}();`).join('')+'}';
+    const raw=analyzer.analyze('file:///alias-groups.c',source),[result]=analyzer.derive([raw]);
+    const id=raw.symbols.find(symbol=>symbol.name==='run')!.id;
+    assert.ok(!result.issues.some(issue=>/alternative limit/.test(issue)));
+    assert.equal(result.programs!.filter(program=>program.id===id).length,2);
+    const index=new RelationIndex();index.update(result);
+    assert.deepEqual(calls(index).map(group=>group.name).sort(),['first','second']);
+    assert.equal(analyzer.derive([raw])[0],result);
+  });
+
+test('alias condition correlation preserves callback pairs and invalidates after header edits',()=>{
+  const source='#include "flags.h"\n#if BOARD\n#define ROW 0\n#else\n#define ROW 1\n#endif\n#if BOARD\n#define COL 0\n#else\n#define COL 1\n#endif\n'+
+    'typedef void(*CB)(void);void first(void){}void crossA(void){}void crossB(void){}void last(void){}void run(void){CB table[2][2]={{first,crossA},{crossB,last}};table[ROW][COL]();}';
+  const raw=analyzer.analyze('file:///alias-pairs/main.c',source);
+  for(const [body,expected] of [
+    ['#define BOARD FEATURE\n',['first','last']],
+    ['#define BOARD __COUNTER__\n',['crossA','crossB','first','last']],
+    ['#define BOARD FEATURE\n',['first','last']]
+  ] as const){
+    const header=analyzer.analyze('file:///alias-pairs/flags.h',body);
+    const result=analyzer.derive([raw,header]),index=new RelationIndex();result.forEach(file=>index.update(file));
+    assert.deepEqual(calls(index).filter(group=>group.callKind==='inferred').map(group=>group.name).sort(),expected);
+    assert.ok(result.every(file=>!file.issues.some(issue=>/limit|budget/.test(issue))));
+  }
+});
+
 test('unused conditional definitions do not consume expansion alternatives',()=>{
   const definitions=Array.from({length:40},(_,n)=>`#if FLAG${n}\n#define UNUSED ${n}\n#endif\n`).join('');
   const index=project({'unused.c':definitions+'void target(void){}void run(void){target();}'});
@@ -144,6 +173,10 @@ test('changed or opaque condition dependencies are not treated as an unchanged b
   for(const [prefix,between,condition] of [
     ['#define BOARD 1\n','#undef BOARD\n#define BOARD 0\n','BOARD'],
     ['#define BOARD FLAG\n','#define FLAG 0\n','BOARD'],
+    ['#define BOARD ENABLED\n#define ENABLED FLAG\n','#define FLAG 0\n','BOARD'],
+    ['#define BOARD FLAG\n','#if CHANGE\n#undef FLAG\n#define FLAG 0\n#endif\n','BOARD'],
+    ['#define JOIN_(a,b) a##b\n#define BOARD JOIN_(FLAG,_VALUE)\n','#define FLAG_VALUE 0\n','BOARD'],
+    ['#define BOARD __COUNTER__\n','','BOARD'],
     ['','','__COUNTER__'],
     ['','#pragma pop_macro("BOARD")\n','BOARD']
   ]){

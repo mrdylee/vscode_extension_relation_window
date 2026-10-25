@@ -19,7 +19,7 @@ function timeline(file: FileAnalysis, files: Map<string, FileAnalysis>, issues: 
   const result: Event[] = [];
   const defined = new Set<string>();
   const uncertainGuards = new Set<string>();
-  const bindings = new Map<string, {version: number; complex: boolean}>(), equivalent = new Map<string, string>(), opaqueFiles = new Map<FileAnalysis, boolean>();
+  const bindings = new Map<string, {version: number; dependencies: Set<string>; opaque: boolean}>(), equivalent = new Map<string, string>(), opaqueFiles = new Map<FileAnalysis, boolean>();
   let bindingVersion = 0, branchId = 0, opaqueEnvironment = false;
   function identity(branch: MacroBranch, identities: Map<string, string>) {
     const previous = identities.get(branch.key);
@@ -28,9 +28,20 @@ function timeline(file: FileAnalysis, files: Map<string, FileAnalysis>, issues: 
     if (opaqueEnvironment || referenceNames) { const key = local(); identities.set(branch.key, key); return key; }
     const text = branch.condition.replace(/^else of /, '').replace(/^#\s*elif/, '#if');
     const tokens = tokenizeC(text, locationIn(text, '')), names = [...new Set(tokens.slice(2).filter(token => identifier.test(token.text)).map(token => token.text))];
-    // Aliases may depend on macros not named in the test. Keep those groups
-    // independent rather than assuming their environments stayed equivalent.
-    const signature = names.some(name => name.startsWith('__') || bindings.get(name)?.complex) ? undefined : JSON.stringify([tokens.map(token => token.text), names.map(name => [name, bindings.get(name)?.version ?? 0])]);
+    // Repeated alias conditions share a choice only while every transitive
+    // definition is unchanged. Pasting and dynamic builtins remain opaque.
+    const dependencies = new Set(names);
+    let opaque = false;
+    for (const name of dependencies) {
+      const binding = bindings.get(name);
+      if (dependencies.size > 256 || name.startsWith('__') || binding?.opaque) { opaque = true; break; }
+      for (const dependency of binding?.dependencies ?? []) {
+        dependencies.add(dependency);
+        if (dependencies.size > 256) { opaque = true; break; }
+      }
+      if (opaque) break;
+    }
+    const signature = opaque ? undefined : JSON.stringify([tokens.map(token => token.text), [...dependencies].sort().map(name => [name, bindings.get(name)?.version ?? 0])]);
     const key = signature === undefined ? local() : equivalent.get(signature) ?? local();
     if (signature !== undefined) equivalent.set(signature, key);
     identities.set(branch.key, key); return key;
@@ -83,8 +94,12 @@ function timeline(file: FileAnalysis, files: Map<string, FileAnalysis>, issues: 
         }
         if (!opaqueEnvironment && !referenceNames) {
           const name = event.kind === 'define' ? event.macro.name : event.name;
-          const complex = event.kind === 'define' && tokenizeC(event.macro.body, () => event.location).some(token => identifier.test(token.text));
-          bindings.set(name, {version: ++bindingVersion, complex: complex || (!!branches.length && bindings.get(name)?.complex === true)});
+          const tokens = event.kind === 'define' ? tokenizeC(event.macro.body, () => event.location) : [];
+          const parameters = event.kind === 'define' ? new Set([...(event.macro.parameters ?? []), event.macro.variadic]) : new Set();
+          const dependencies = new Set(tokens.filter(token => identifier.test(token.text) && !parameters.has(token.text)).map(token => token.text));
+          const previous = branches.length ? bindings.get(name) : undefined;
+          previous?.dependencies.forEach(dependency => dependencies.add(dependency));
+          bindings.set(name, {version: ++bindingVersion, dependencies, opaque: tokens.some(token => token.text === '#' || token.text === '##') || previous?.opaque === true});
         }
         if (!conditions.length) { if (event.kind === 'define') defined.add(event.macro.name); else defined.delete(event.name); uncertainGuards.delete(name!); }
         else if (referenceNames && guards!.has(name!) && (event.kind === 'undef' ? defined.has(name!) : !defined.has(name!))) {

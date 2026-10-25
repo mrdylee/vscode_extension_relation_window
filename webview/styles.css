@@ -34,16 +34,16 @@ button[aria-pressed=true] { border-color: var(--accent); color: var(--accent); }
 .callback-candidates { flex-wrap: wrap; }.callback-note { flex-basis: 100%; overflow-wrap: anywhere; }
 .callback-diagnosis { flex-basis: 100%; overflow-wrap: anywhere; max-height: 160px; overflow: auto; }.callback-diagnosis summary { cursor: pointer; }
 footer { position: relative; display: flex; align-items: center; gap: 8px; flex-shrink: 0; padding: 7px 12px; border-top: 1px solid var(--border); font-size: 10px; white-space: nowrap; }
-footer .index-status { flex: 0 1 20%; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+footer .index-status { flex: 0 1 auto; max-width: 20%; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .local-progress { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .local-progress[hidden] { display: none; }
 .local-progress > span { max-width: 36vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-footer .footer-shortcuts { flex: 1 3 auto; min-width: 0; margin-left: auto; overflow: hidden; text-overflow: ellipsis; }
+footer .footer-shortcuts { flex: 0 3 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 footer > button, footer > .warning, .copilot-progress > button { flex-shrink: 0; }
 .warning { color: var(--vscode-editorWarning-foreground, #d6b36a); }details pre { max-height: 130px; overflow: auto; white-space: pre-wrap; }
 footer summary { cursor: pointer; }
 footer details pre { position: absolute; z-index: 10; bottom: 100%; left: 12px; right: 12px; margin: 0 0 4px; padding: 8px; border: 1px solid var(--border); background: var(--bg); box-shadow: 0 4px 18px #0005; overflow-wrap: anywhere; }
-.copilot-progress { display: flex; flex: 1 1 30%; min-width: 0; gap: 8px; align-items: center; }
+.copilot-progress { display: flex; flex: 0 1 auto; min-width: 0; gap: 8px; align-items: center; }
 .copilot-progress > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .copilot-progress[hidden] { display: none; }
 @media (max-width: 640px) { .panes { grid-template-columns: 1fr; grid-template-rows: 45% 55%; }.divider { display: none; }.context { border-right: 0; border-bottom: 1px solid var(--border); }.brand { display: none; }.skip { margin-left: 0; } }
@@ -118,7 +118,7 @@ body.vscode-light, body.vscode-high-contrast-light { --argument-color: var(--vsc
 
 /* Keep analysis actions independent of changing function names and counters. */
 footer { flex-wrap: nowrap; }
-.local-progress { display: grid; grid-template-columns: minmax(0, 1fr) 10em; align-items: center; gap: 8px; flex: 1 1 40%; min-width: calc(10em + 8px); }
+.local-progress { display: grid; grid-template-columns: minmax(0, 1fr) 10em; align-items: center; gap: 8px; flex: 0 1 40%; max-width: 420px; min-width: calc(10em + 8px); }
 .local-summary { display: flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden; }
 .local-summary > span { flex-shrink: 0; max-width: 60%; overflow: hidden; text-overflow: ellipsis; }
 .function-name-trigger { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 0; padding: 0; background: transparent; text-align: left; }
