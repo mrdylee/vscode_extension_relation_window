@@ -38,7 +38,8 @@ export class BuildAnalysis {
     shouldCancel?: () => boolean, eligibleHeader: (uri: string) => boolean = () => true, scopeKey = '', memoryPressure?: () => boolean): Promise<FileAnalysis[]> {
     const sources = new Map(files.map(file => [canonicalBuildUri(file.uri), file])), result: FileAnalysis[] = [], next = new Map<string, PreparedUnit>();
     const getSource=(uri:string)=>sources.get(canonicalBuildUri(uri));
-    const fs: BuildFileSystem = { readText: async uri => getSource(uri)?.text, list: async () => [] };
+    const unavailable=new Set(profile.unresolvedArtifacts?.map(uri=>canonicalBuildUri(uri)));
+    const fs: BuildFileSystem = { readText: async uri => unavailable.has(canonicalBuildUri(uri))?undefined:getSource(uri)?.text, list: async () => [] };
     for (const unit of profile.units) {
       if(unit.membership!=='included')continue;
       if (shouldCancel?.()) break;

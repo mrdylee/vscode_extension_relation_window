@@ -29,6 +29,7 @@ export interface CompileUnitContext extends CompileInvocation {
 export interface BuildProfile {
   id: string; entry: BuildEntry; fingerprint: string; units: CompileUnitContext[];
   coverage: 'complete' | 'partial' | 'unknown'; dependencies: { uri: string; digest: string }[];
+  unresolvedArtifacts?: string[];
   relevantEnvironment: string[]; issues: BuildIssue[];
 }
 export interface BuildEpoch { profileId: string; fingerprint: string; contextRevision: number; sourceRevision: number }
@@ -99,8 +100,8 @@ export async function normalizeCompileContext(invocation: CompileInvocation, fs:
     return out;
   }
   const args = await response(invocation.argv.slice(1));
-  if (compiler !== 'gcc') issue('unsupported-compiler-options', `Compiler options have not been verified for ${binary || 'this command'}`);
-  for (let n = 0; n < args.length && compiler === 'gcc'; n++) {
+  if (compiler === 'unknown') issue('unsupported-compiler-options', `Compiler options have not been verified for ${binary || 'this command'}`);
+  for (let n = 0; n < args.length && compiler !== 'unknown'; n++) {
     const arg = args[n];
     const value = (prefix: string) => arg === prefix ? args[++n] : arg.slice(prefix.length);
     if (/^-([DU])/.test(arg)) {
@@ -109,20 +110,20 @@ export async function normalizeCompileContext(invocation: CompileInvocation, fs:
       const equal = body.indexOf('='), name = equal < 0 ? body : body.slice(0, equal);
       unit.macroActions.push(arg[1] === 'U' ? { kind: 'undef', name } : { kind: 'define', name, replacement: equal < 0 ? '1' : body.slice(equal + 1) });
     } else {
-      const include = ['-iquote', '-isystem', '-idirafter', '-I'].find(prefix => arg.startsWith(prefix));
-      const forced = ['-imacros', '-include'].find(prefix => arg.startsWith(prefix));
+      const include = (compiler==='gcc'?['-iquote', '-isystem', '-idirafter', '-I']:['-I']).find(prefix => arg.startsWith(prefix));
+      const forced = compiler==='gcc'?['-imacros', '-include'].find(prefix => arg.startsWith(prefix)):undefined;
       if (include || forced) {
         const raw = value((include ?? forced)!);
         if (!raw) { issue('missing-option-value', `Missing option value: ${arg}`); continue; }
-        if(raw==='-'||raw.startsWith('=')||raw.startsWith('$SYSROOT')){issue('unsupported-option',`Include search semantics not resolved: ${arg} ${raw}`);continue;}
+        if(raw==='-'||raw==='@'||raw.startsWith('=')||raw.startsWith('$SYSROOT')){issue('unsupported-option',`Include search semantics not resolved: ${arg} ${raw}`);continue;}
         const uri = resolveBuildUri(invocation.cwdUri, raw);
         if (include) unit.includeSearch.push({ kind: include === '-iquote' ? 'quote' : include === '-isystem' ? 'system' : include === '-idirafter' ? 'after' : 'user', uri });
         else unit.forcedInputs.push({ kind: forced === '-imacros' ? 'macros' : 'header', uri });
       } else if (arg === '-o') { const output = args[++n]; if (output) unit.outputUri = resolveBuildUri(invocation.cwdUri, output); else issue('missing-option-value', 'Missing output path'); }
       else if (/^-M[FQT]/.test(arg)) {if(arg.length===3&&!args[++n])issue('missing-option-value',`Missing dependency output: ${arg}`);}
       else if (arg === '-x') { if (!args[++n]) issue('missing-option-value', 'Missing language'); }
-      else if (arg.startsWith('-') && !/^(?:-c|-S|-E|-g\w*|-O[\w]*|-W[\w=,-]*|-std=[\w+]+|-f(?:no-)?(?:builtin|common|strict-aliasing|function-sections|data-sections|omit-frame-pointer|unwind-tables|asynchronous-unwind-tables)|-m[\w=.+-]+|-M(?:D|MD|P)?|-pipe)$/.test(arg))
-        issue('unsupported-option', `Option semantics not resolved: ${arg}`);
+      else if (arg.startsWith('-') && !(compiler==='diab'?/^(?:-c|-S|-E|-g\d*|-O\d*|-w)$/ : /^(?:-c|-S|-E|-g\w*|-O[\w]*|-W[\w=,-]*|-std=[\w+]+|-f(?:no-)?(?:builtin|common|strict-aliasing|function-sections|data-sections|omit-frame-pointer|unwind-tables|asynchronous-unwind-tables)|-m[\w=.+-]+|-M(?:D|MD|P)?|-pipe)$/).test(arg))
+        issue(compiler==='diab'?'unsupported-compiler-options':'unsupported-option', `Option semantics not resolved: ${arg}`);
     }
   }
   unit.id = fingerprintBuildInput([invocation.profileId, invocation.sourceUri, unit.outputUri, invocation.cwdUri, invocation.argv]);

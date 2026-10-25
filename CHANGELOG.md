@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.78 — 2026-10-25
+
+- Repair Windows batch build discovery: case-insensitive environment and metadata names, PATH assignments, direct batch transfers, and read-only generated cfg/mk overlays.
+- Resolve nested pure Make functions, lazy define blocks, target-specific and inherited module flags, pattern prerequisites and recursive build contexts.
+- Preserve known compile commands after unsupported postprocessing; keep unknown pre-build effects and generated artifacts visible with source locations.
+- Apply ordered explicit defines, undefines and include paths for both GCC and Diab dcc; unsupported compiler semantics remain partial.
+- Advance analysis cache compatibility to 14 and explain compile membership separately from final link coverage. Existing analysis limits are unchanged.
+
 ## 0.1.77 — 2026-10-25
 
 - Discover existing Make build configurations from indexed source directories and

@@ -3,6 +3,16 @@ import assert from 'node:assert/strict';
 import { fingerprintBuildInput, normalizeCompileContext, sameBuildEpoch } from '../src/build-context';
 import { buildFixture } from './build-fixtures';
 
+test('GCC and Diab preserve the same ordered explicit macro and include options',async()=>{
+  const {fs}=buildFixture({});
+  for(const compiler of ['gcc','dcc']){
+    const unit=await normalizeCompileContext({profileId:'x',sourceUri:'file:///p/a.c',cwdUri:'file:///p',argv:[compiler,'-DMODE=0','-UMODE','-D','MODE=1','-I','inc','-c','a.c','-o','a.o'],dialect:'posix',evidence:[]},fs);
+    assert.equal(unit.status,'resolved');assert.equal(unit.builtins,'unknown');
+    assert.deepEqual(unit.macroActions,[{kind:'define',name:'MODE',replacement:'0'},{kind:'undef',name:'MODE'},{kind:'define',name:'MODE',replacement:'1'}]);
+    assert.equal(unit.includeSearch[0].uri,'file:///p/inc');assert.equal(unit.outputUri,'file:///p/a.o');
+  }
+});
+
 test('build fingerprints preserve option order and normalize object key order', () => {
   assert.equal(fingerprintBuildInput({ a: 1, b: 2 }), fingerprintBuildInput({ b: 2, a: 1 }));
   assert.notEqual(fingerprintBuildInput(['-DX=1', '-UX']), fingerprintBuildInput(['-UX', '-DX=1']));

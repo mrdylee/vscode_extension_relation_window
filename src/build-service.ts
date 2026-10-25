@@ -75,8 +75,9 @@ export function registerBuildConfigurations(context: vscode.ExtensionContext, wo
       return vscode.workspace.openTextDocument({language:'plaintext',content:discoveryIssues.map(issue=>issue.code+': '+issue.message).join('\n')}).then(document=>vscode.window.showTextDocument(document,{preview:true}));
     }
     const lines = [`Build configuration: ${current.entry.entryUri}`, `Arguments: ${current.entry.args.join(' ')}`, `Source coverage: ${current.coverage}`, '',
-      ...current.units.flatMap(unit => [unit.sourceUri, `  ${unit.status} · ${unit.compiler}`, `  cwd: ${unit.cwdUri}`, `  ${unit.argv.join(' ')}`, ...unit.evidence.map(e => `  ${e.uri}:${e.line + 1}: ${e.expression}`), '']),
-      ...[...discoveryIssues,...current.issues].map(issue => `${issue.code}: ${issue.message}`)];
+      ...current.units.flatMap(unit => [unit.sourceUri, `  ${unit.status} · ${unit.compiler} · compile membership: ${unit.membership}`, `  cwd: ${unit.cwdUri}`, `  ${unit.argv.join(' ')}`, ...unit.evidence.map(e => `  ${e.uri}:${e.line + 1}: ${e.expression}`), ...unit.issues.map(issue=>`  ${issue.code}: ${issue.message}`), '']),
+      'Source coverage describes the final build/link set; partial coverage can still contain verified compile commands.',
+      ...[...discoveryIssues,...current.issues].map(issue => `${issue.code}: ${issue.message}${issue.evidence?`\n  ${issue.evidence.uri}:${issue.evidence.line+1}: ${issue.evidence.expression}`:''}`)];
     return vscode.workspace.openTextDocument({ language: 'plaintext', content: lines.join('\n') }).then(document => vscode.window.showTextDocument(document, { preview: true }));
   }
   async function select() {

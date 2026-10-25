@@ -881,7 +881,7 @@ export async function run() {
   await vscode.workspace.getConfiguration('dynsight').update('skipInactive',true,vscode.ConfigurationTarget.Workspace);
   await vscode.workspace.getConfiguration('dynsight').update('smartAnalysis.include',['**'],vscode.ConfigurationTarget.Workspace);
   await vscode.workspace.fs.writeFile(buildSourceUri,Buffer.from(buildSource));
-  const makeText=(mode:number)=>`CC=gcc\nall: native.o\nnative.o: native-build-context.c\n\t$(CC) -DMODE=${mode} -c $< -o $@\n`;
+  const makeText=(mode:number)=>`CC=${mode===1?'gcc':'dcc'}\nOBJS := $(addprefix objects/,native.o)\nall: $(OBJS)\n$(OBJS): CFLAGS := -DMODE=${mode}\nobjects/native.o: native-build-context.c\n\t$(CC) $(CFLAGS) -c $< -o $@\n`;
   await vscode.workspace.fs.writeFile(makeUri,Buffer.from(makeText(1)));
   await new Promise(resolve=>setTimeout(resolve,500));await api.workspace.whenIdle();
   await vscode.commands.executeCommand('dynsight.refreshBuildConfiguration');
@@ -898,6 +898,8 @@ export async function run() {
   await vscode.workspace.fs.writeFile(makeUri,Buffer.from(makeText(2)));
   await vscode.commands.executeCommand('dynsight.refreshBuildConfiguration');await api.workspace.whenIdle();
   api.view.track(buildEditor,true);api.view.refresh();
+  assert.equal(api.workspace.buildProfile.units[0].compiler,'diab');
+  assert.equal(api.workspace.buildProfile.units[0].status,'resolved');
   assert.deepEqual(api.workspace.index.callbackAt(buildSourceUri.toString(),buildSource.lastIndexOf('native_cb();')+2).targets.map((target:any)=>target.name),['native_second']);
   assert.equal(api.workspace.diagnostics.index.sourceParses,sourceParses,'Make options refresh reuses the generic source parse');
   const output = process.env.C_RELATION_TEST_OUTPUT!;

@@ -10,9 +10,35 @@ import { IncrementalAnalysis } from '../src/incremental-analysis';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { buildFixture } from './build-fixtures';
+import { extractStaticBuildOptions } from '../src/build-options';
 
 let parser: Awaited<ReturnType<typeof createAnalyzer>>;
 before(async () => { parser = await createAnalyzer(path.resolve('node_modules/web-tree-sitter/web-tree-sitter.wasm'), path.resolve('node_modules/tree-sitter-c/tree-sitter-c.wasm')); });
+test('GCC and Diab Make target options select the correct callback cold, warm and after configuration edit',async()=>{
+  for(const compiler of ['gcc','dcc']){
+    const make=(mode:number)=>`CC=${compiler}\nOBJS := $(addprefix out/,a.o)\nall: $(OBJS)\nout/a.o: CFLAGS := -DMODE=${mode}\nout/%.o: %.c\n\t$(CC) $(CFLAGS) -c $< -o $@`;
+    const f=buildFixture({Makefile:make(1),'a.c':'void first(void){}void second(void){}\n#if MODE==1\n#define TARGET first\n#else\n#define TARGET second\n#endif\nvoid run(void){void(*cb)(void)=TARGET;cb();}'});
+    const raw=[parser.analyze('file:///p/a.c',f.texts.get('file:///p/a.c')!,true,{expandMacros:true,propagateCallbacks:true})];
+    const entry={id:'x',rootUri:'file:///p',entryUri:'file:///p/Makefile',cwdUri:'file:///p',dialect:'make' as const,args:[],evidence:[]},build=new BuildAnalysis();
+    for(const mode of [1,1,2]){
+      f.texts.set('file:///p/Makefile',make(mode));const profile=await extractStaticBuildOptions(f.fs,entry,['file:///p/a.c'],{});
+      assert.equal(profile.units[0].membership,'included');assert.equal(profile.units[0].status,'resolved');
+      const prepared=await build.prepare(parser,raw,profile,new AnalysisWorkBudget()),index=new RelationIndex();parser.derive(prepared).forEach(file=>index.update(file));
+      const run=index.symbols().find(s=>s.name==='run'&&s.definition)!;
+      assert.deepEqual(index.relations(run.id,'callees').filter(r=>r.callKind==='inferred').map(r=>r.name),[mode===1?'first':'second']);
+    }
+  }
+});
+test('an unevaluated generated header cannot prune branches using an old disk copy',async()=>{
+  const f=buildFixture({Makefile:'CC=gcc\nall: a.o\na.o: a.c | generated.h\n\t$(CC) -c $<\ngenerated.h:\n\tsh gen.sh > $@',
+    'a.c':'#include "generated.h"\nvoid first(void){}void second(void){}\n#if MODE==1\n#define PICK() first()\n#else\n#define PICK() second()\n#endif\nvoid run(void){PICK();}', 'generated.h':'#define MODE 1'});
+  const profile=await extractStaticBuildOptions(f.fs,{id:'x',rootUri:'file:///p',entryUri:'file:///p/Makefile',cwdUri:'file:///p',dialect:'make',args:[],evidence:[]},['file:///p/a.c'],{});
+  const raw=[...f.texts].filter(([uri])=>/\.(?:c|h)$/.test(uri)).map(([uri,text])=>parser.analyze(uri,text,true,{expandMacros:true,propagateCallbacks:true}));
+  const input=await new BuildAnalysis().prepare(parser,raw,profile,new AnalysisWorkBudget()),index=new RelationIndex();parser.derive(input).forEach(file=>index.update(file));
+  const owner=index.symbols().find(s=>s.name==='run'&&s.definition)!;
+  assert.deepEqual(index.relations(owner.id,'callees').filter(r=>r.callKind==='expanded').map(r=>r.name).sort(),['first','second']);
+  assert.ok(input.some(file=>file.issues.some(issue=>/generated|unavailable|not found/i.test(issue))));
+});
 async function fixture() {
   const sources = {
     'a.c': '#include "ops.h"\nvoid run_a(void){invoke();}', 'b.c': '#include "ops.h"\nvoid run_b(void){invoke();}',

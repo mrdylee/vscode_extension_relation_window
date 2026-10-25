@@ -4,6 +4,115 @@ import { discoverBuildEntries } from '../src/build-discovery';
 import { extractStaticBuildOptions } from '../src/build-options';
 import { buildFixture } from './build-fixtures';
 
+const makeEntry = { id: 'repair', rootUri: 'file:///p', entryUri: 'file:///p/Makefile', cwdUri: 'file:///p', dialect: 'make' as const, args: [], evidence: [] };
+test('nested pure Make functions and per-target flags preserve module and inherited defines', async () => {
+  const f = buildFixture({Makefile: 'CC=gcc\nNAMES=a.o b.o\nOBJECTS := $(filter-out out/unused.o,$(addprefix out/,$(NAMES)))\nall: $(OBJECTS)\nCFLAGS=-DBASE=1\nout/a.o: CFLAGS := $(CFLAGS) -DMODE=1\nout/b.o: CFLAGS += -DMODE=2\nout/%.o: %.c\n\t$(CC) $(CFLAGS) -c $< -o $@'});
+  const p=await extractStaticBuildOptions(f.fs,makeEntry,['file:///p/a.c','file:///p/b.c'],{});
+  assert.equal(p.units.length,2);
+  assert.deepEqual(p.units.map(u=>u.macroActions.map(a=>a.name+'='+a.replacement)),[['BASE=1','MODE=1'],['BASE=1','MODE=2']]);
+  assert.ok(p.units.every(u=>u.membership==='included'&&u.status==='resolved'));
+});
+test('Make define blocks are lazy and unused shell work does not poison compilation',async()=>{
+  const f=buildFixture({Makefile:'define PACKAGE\nNAME := $(shell unsafe-generator)\nendef\nCC=gcc\na.o: a.c\n\t$(CC) -DOK -c $<'});
+  const p=await extractStaticBuildOptions(f.fs,makeEntry,['file:///p/a.c'],{});
+  assert.equal(p.units[0].status,'resolved');assert.equal(p.units[0].membership,'included');assert.equal(p.issues.length,0);
+});
+test('metadata generation and direct batch transfer reach Make without mutating disk inputs',async()=>{
+  const files={'Build.bat':'PATH=C:\\cygwin64\\bin\ncd source\ndel make.cfg\necho MODE := 1 >> make.cfg\ncd ..\nbuild.bat\nunknown-after-transfer.exe',
+    'build.bat':'set PATH=C:\\compiler;%path%\ncompile.bat', 'compile.bat':'make -C source\ncall post.bat\npause', 'post.bat':'setlocal enabledelayedexpansion\nfor /f %%x in (output.txt) do echo %%x',
+    'source/make.cfg':'MODE := 2', 'source/Makefile':'include make.cfg\nCC=gcc\na.o: a.c\n\t$(CC) -DMODE=$(MODE) -c $<'};
+  const f=buildFixture(files),before=new Map(f.texts);
+  const p=await extractStaticBuildOptions(f.fs,{...makeEntry,entryUri:'file:///p/Build.bat',dialect:'cmd'},['file:///p/source/a.c'],{Path:'C:\\system'});
+  assert.equal(p.units.length,1);assert.equal(p.units[0].membership,'included');assert.equal(p.units[0].status,'resolved');
+  assert.equal(p.units[0].macroActions[0].replacement,'1');assert.deepEqual(f.texts,before);
+  assert.ok(!p.issues.some(i=>i.message.includes('unknown-after-transfer')));
+  assert.ok(p.issues.some(i=>/Delayed|Unresolved/.test(i.message)),'uninterpreted postprocessing stays visible');
+  assert.ok(p.dependencies.some(d=>d.uri.endsWith('/make.cfg')));
+});
+test('unknown commands before compilation retain uncertainty while postprocessing preserves established facts',async()=>{
+  for(const before of [true,false]){
+    const f=buildFixture({'build.bat':before?'unknown.exe\nmake':'make\nunknown.exe',Makefile:'CC=gcc\na.o: a.c\n\t$(CC) -c $<'});
+    const p=await extractStaticBuildOptions(f.fs,{...makeEntry,entryUri:'file:///p/build.bat',dialect:'cmd'},['file:///p/a.c'],{});
+    assert.equal(p.units[0].membership,before?'unknown':'included');
+  }
+});
+test('generated artifact recipes retain unavailable-output notices without erasing known compile flags',async()=>{
+  const f=buildFixture({Makefile:'CC=gcc\nall: a.o\na.o: a.c | generated.h\n\t$(CC) -DMODE=1 -c $<\ngenerated.h:\n\tsh gen.sh > $@'});
+  const p=await extractStaticBuildOptions(f.fs,makeEntry,['file:///p/a.c'],{});
+  assert.equal(p.units[0].membership,'included');assert.equal(p.units[0].macroActions[0].replacement,'1');
+  assert.ok(p.issues.some(i=>i.code==='unresolved-artifact'));
+});
+test('pure path and substitution functions resolve module paths and configuration',async()=>{
+  const f=buildFixture({Makefile:'CC=gcc\nDIRS := $(sort $(dir out/b.o out/a.o))\nD := $(DIRS:/=)\nNAME := $(notdir module/board)\nall: a.o\na.o: a.c\n\t$(CC) -I$(D) -DNAME=$(NAME) -DUP=$(shell basename board | tr [a-z] [A-Z]) -c $<'});
+  const p=await extractStaticBuildOptions(f.fs,makeEntry,['file:///p/a.c'],{});
+  assert.equal(p.units[0].status,'resolved');assert.equal(p.units[0].includeSearch[0].uri,'file:///p/out');
+  assert.deepEqual(p.units[0].macroActions.map(a=>a.replacement),['board','BOARD']);
+});
+test('an unresolved target option does not downgrade a sibling compile unit',async()=>{
+  const f=buildFixture({Makefile:'CC=gcc\nall: a.o b.o\na.o: CFLAGS = $(shell unknown-generator)\nb.o: CFLAGS = -DMODE=2\n%.o: %.c\n\t$(CC) $(CFLAGS) -c $<'});
+  const p=await extractStaticBuildOptions(f.fs,makeEntry,['file:///p/a.c','file:///p/b.c'],{});
+  const b=p.units.find(u=>u.sourceUri.endsWith('/b.c'))!;
+  assert.equal(b.membership,'included');assert.equal(b.status,'resolved');
+  assert.equal(b.macroActions[0].replacement,'2');assert.ok(p.issues.length>0);
+});
+test('sequential target-specific immediate assignments use the preceding target value',async()=>{
+  const f=buildFixture({Makefile:'CC=gcc\nCFLAGS=-DGLOBAL\nall: a.o\na.o: CFLAGS := -DFIRST\na.o: CFLAGS := $(CFLAGS) -DSECOND\n%.o: %.c\n\t$(CC) $(CFLAGS) -c $<'});
+  const p=await extractStaticBuildOptions(f.fs,makeEntry,['file:///p/a.c'],{});
+  assert.deepEqual(p.units[0].macroActions.map(a=>a.name),['FIRST','SECOND']);
+});
+test('oversized pure functions and unsupported shell effects remain bounded and unresolved',async()=>{
+  for(const expression of ['$(addprefix '+ 'x'.repeat(4000) +','+'a '.repeat(1000)+')','$(shell touch must-not-run)','$(shell cat settings;touch must-not-run)']){
+    const f=buildFixture({Makefile:`CC=gcc\nFLAGS := ${expression}\na.o: a.c\n\t$(CC) $(FLAGS) -c $<`});
+    const p=await extractStaticBuildOptions(f.fs,makeEntry,['file:///p/a.c'],{});
+    assert.ok(p.issues.some(i=>/limit|expression/.test(i.code)));assert.equal(p.units.length,0);
+  }
+});
+test('nested functions and combinatorial Make filters obey extraction limits',async()=>{
+  for(const expression of ['$(strip '.repeat(100)+'x'+')'.repeat(100),`$(filter ${Array.from({length:200},(_,n)=>'p'+n).join(' ')},${Array.from({length:200},(_,n)=>'q'+n).join(' ')})`]){
+    const f=buildFixture({Makefile:`CC=gcc\nFLAGS := ${expression}\na.o: a.c\n\t$(CC) $(FLAGS) -c $<`});
+    const p=await extractStaticBuildOptions(f.fs,makeEntry,['file:///p/a.c'],{});
+    assert.ok(p.issues.some(i=>i.code==='extraction-limited'));assert.ok(p.units.every(u=>u.membership!=='included'));
+  }
+});
+test('reassigning an exported shell variable keeps it exported for Make',async()=>{
+  const f=buildFixture({'build.sh':'export MODE=1\nMODE=2\nmake',Makefile:'CC=gcc\na.o: a.c\n\t$(CC) -DMODE=$(MODE) -c $<'});
+  const p=await extractStaticBuildOptions(f.fs,{...makeEntry,entryUri:'file:///p/build.sh',dialect:'sh'},['file:///p/a.c'],{});
+  assert.equal(p.units[0].macroActions[0].replacement,'2');
+});
+test('unknown generator commands retain the effect on later recursive Make invocations',async()=>{
+  const f=buildFixture({Makefile:'all:\n\tcustom-generator flags.mk\n\t$(MAKE) -f child.mk','child.mk':'CC=gcc\na.o: a.c\n\t$(CC) -DMODE=1 -c $<'});
+  const p=await extractStaticBuildOptions(f.fs,makeEntry,['file:///p/a.c'],{});
+  assert.equal(p.units[0].membership,'unknown');
+});
+test('cmd generated metadata follows case-insensitive Windows file names',async()=>{
+  const f=buildFixture({'build.bat':'del make.cfg\necho MODE := 1 >> make.cfg\nmake',
+    'make.cfg':'MODE := 2',Makefile:'include MAKE.CFG\nCC=gcc\na.o: a.c\n\t$(CC) -DMODE=$(MODE) -c $<'});
+  const fs={...f.fs,readText:async(uri:string)=>[...f.texts].find(([name])=>name.toLowerCase()===uri.toLowerCase())?.[1]};
+  const p=await extractStaticBuildOptions(fs,{...makeEntry,entryUri:'file:///p/build.bat',dialect:'cmd'},['file:///p/a.c'],{});
+  assert.equal(p.units[0].macroActions[0].replacement,'1');
+});
+test('only referenced environment variables are retained as build dependencies',async()=>{
+  const f=buildFixture({Makefile:'CC=gcc\na.o: a.c\n\t$(CC) -DMODE=$(MODE) -c $<'});
+  const p=await extractStaticBuildOptions(f.fs,makeEntry,['file:///p/a.c'],{MODE:'1',UNUSED:'value'});
+  assert.deepEqual(p.relevantEnvironment,['MODE']);
+});
+test('exact target flags take precedence over later pattern-specific defaults',async()=>{
+  const f=buildFixture({Makefile:'CC=gcc\nall: a.o\na.o: CFLAGS = -DEXACT\n%.o: CFLAGS = -DPATTERN\n%.o: %.c\n\t$(CC) $(CFLAGS) -c $<'});
+  const p=await extractStaticBuildOptions(f.fs,makeEntry,['file:///p/a.c'],{});
+  assert.deepEqual(p.units[0].macroActions.map(a=>a.name),['EXACT']);
+});
+test('read-only product-name transforms track input files without executing a shell',async()=>{
+  const text=String.raw`CC=gcc
+NAME := $(shell sed 's/[\t ]//g' product.txt | tr -d \\n)
+all: a.o
+a.o: a.c
+\t$(CC) -DPRODUCT=$(NAME) -c $<`.replace('\n\\t','\n\t');
+  const f=buildFixture({Makefile:text,'product.txt':'A B\tC\n'});
+  const p=await extractStaticBuildOptions(f.fs,makeEntry,['file:///p/a.c'],{});
+  assert.equal(p.units[0].macroActions[0].replacement,'ABC');assert.equal(p.units[0].status,'resolved');
+  assert.ok(p.dependencies.some(d=>d.uri.endsWith('/product.txt')));
+});
+
 test('root script and multiple module includes provide per-file commands, not nearby unrelated flags', async () => {
   const f = buildFixture({ 'build.sh': 'export BOARD=A\nmake -f Makefile BOARD=$BOARD',
     Makefile: 'CC := arm-none-eabi-gcc\nall: a.o b.o\ninclude config/common.mk\ninclude App/a/module.mk App/b/module.mk',

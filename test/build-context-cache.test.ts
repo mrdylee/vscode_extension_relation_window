@@ -25,6 +25,16 @@ test('warm source indexing reuses directory, file reads and resolved profile', a
   assert.equal(updated.units[0].macroActions[0].replacement, '2');
   assert.notEqual(updated.fingerprint, profile.fingerprint);
 });
+test('batch metadata overlay is cached read-only and invalidates after script or source config edits',async()=>{
+  const f=buildFixture({'build.bat':'cd source\ndel make.cfg\necho MODE := 1 >> make.cfg\nmake',
+    'source/make.cfg':'MODE := 9','source/Makefile':'include make.cfg\nCC=gcc\na.o: a.c\n\t$(CC) -DMODE=$(MODE) -c $<'}),cache=new BuildMetadataCache(f.fs);
+  const entry={id:'x',rootUri:'file:///p',entryUri:'file:///p/build.bat',cwdUri:'file:///p',dialect:'cmd' as const,args:[],evidence:[]},sources=['file:///p/source/a.c'];
+  const first=await cache.profile(entry,sources,{}),reads=f.reads.length;
+  assert.equal(first.units[0].macroActions[0].replacement,'1');assert.equal(await cache.profile(entry,sources,{}),first);assert.equal(f.reads.length,reads);
+  f.texts.set(entry.entryUri,'cd source\ndel make.cfg\necho MODE := 2 >> make.cfg\nmake');assert.equal(cache.invalidate(entry.entryUri),true);
+  const second=await cache.profile(entry,sources,{});assert.equal(second.units[0].macroActions[0].replacement,'2');assert.notEqual(second.fingerprint,first.fingerprint);
+  assert.equal(f.texts.get('file:///p/source/make.cfg'),'MODE := 9');assert.equal(cache.invalidate('file:///p/source/make.cfg'),true);
+});
 test('a new nearby mk invalidates negative directory dependencies; unrelated C edits do not', async () => {
   const f = buildFixture({ Makefile: '' }), cache = new BuildMetadataCache(f.fs);
   const request = { rootUri: 'file:///p', sourceUris: ['file:///p/App/a.c'] };
