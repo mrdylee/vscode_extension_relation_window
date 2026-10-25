@@ -5,6 +5,10 @@ export class AnalysisWorkBudget {
   private project: AnalysisWorkUsage = {macros: 0, callbacks: 0, total: 0};
   private functions = new Map<string, AnalysisWorkUsage>();
   constructor(private limits: AnalysisWorkLimits = defaultWorkLimits, readonly progressive = false) {}
+  consumeProject(units = 1, phase: 'macros' | 'callbacks' = 'macros'): 'ok' | 'project-limit' {
+    this.project[phase] += units; this.project.total += units;
+    return this.projectExhausted ? 'project-limit' : 'ok';
+  }
   consume(id: string, units = 1, phase: 'macros' | 'callbacks' = 'callbacks'): 'ok' | 'function-limit' | 'project-limit' {
     const work = this.functions.get(id) ?? {macros: 0, callbacks: 0, total: 0};
     this.functions.set(id, work); work[phase] += units; work.total += units;

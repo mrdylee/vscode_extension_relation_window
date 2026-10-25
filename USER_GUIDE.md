@@ -458,7 +458,7 @@ struct Ops ops = { .run = target };
 void run(void) { ops.run(); }
 ```
 
-Analysis runs in the Worker. Macro expansion is bounded to 32 alternatives, 32 nested steps and 40,000 tokens per function. Callback propagation is bounded to 64 value/alias candidates, 256 mutation slots per function, 12 project passes and 4 loop passes. There is no project time cutoff; use **Stop local** to interrupt it. **Analysis notices** and unknown targets identify partial results; narrowing Include/Exclude scope can reveal more targets. Ordinary integer values are not propagated across functions, so array candidates may be broader; addresses stored in integer variables and converted back remain unknown. This is not a complete compiler preprocessor or a proof of every build/runtime path; computed include paths and build-specific header instantiation are outside the supported scope.
+Analysis runs in the Worker. Macro expansion is bounded to 32 alternatives, 32 nested steps and 40,000 tokens per function. Callback propagation is bounded to 64 value/alias candidates, 256 mutation slots per function, 12 project passes and 4 loop passes. There is no project time cutoff; use **Stop local** to interrupt it. **Analysis notices** and unknown targets identify partial results; narrowing Include/Exclude scope can reveal more targets. Ordinary integer values are not propagated across functions, so array candidates may be broader; addresses stored in integer variables and converted back remain unknown. This is not a complete compiler preprocessor or a proof of every build/runtime path. A selected Make build configuration supports contextual header occurrences; computed include paths, unsupported options and compiler defaults can still leave them unresolved. See **Existing Make build configurations** below.
 
 ## Skip inactive branches
 
@@ -646,6 +646,18 @@ index** to resynchronize the Worker. Obsolete reads after edits/deletion/rebuild
 are discarded automatically.
 
 The graph displays at most 300 nodes. Recursion stops expansion along that path. Macro and callback analysis is bounded, and compiler-specific syntax may remain unsupported. Missing relationships can therefore also be an analysis limitation.
+
+## Existing Make build configurations
+
+Run **Dynsight: Select Build Configuration**, or use the **Build** button in Relation, to choose an existing Makefile or shell/batch build entry. Discovery starts from the C/H files selected by general Include/Exclude and checks their parent directories up to the workspace root. It finds multiple module `.mk` files and follows actual include and script calls. A nearby `.mk` alone is not treated as proof that its options apply. Use **Choose build entry file…** when a nested entry was not discovered.
+
+The selected configuration is remembered for this workspace. A read-only preview shows each compile command, working directory, source locations and unresolved reasons. Required script arguments can be entered when selecting that script. Existing compiler commands are inspected without executing scripts, Make, or the compiler; no compilation database is required.
+
+Supported static GCC Define/Include options affect preprocessing, macro expansion and callback candidates. Settings changes do not widen general or Smart Analysis scope. A required header outside the general scope is reported rather than indexed silently. Files whose build membership is unknown remain available through basic navigation. Header functions and static storage are distinguished by the source file that includes them; select that source context when prompted. Opening a contextual definition from Relation preserves its context.
+
+Build-file changes refresh the affected configuration. Ordinary C edits reuse cached build metadata. **Dynsight: Refresh Build Configuration** forces a fresh configuration check. **Use basic source analysis** in the selection list clears the chosen build. With **Skip Inactive** disabled, all preprocessing branches remain visible and build conditions do not prune them.
+
+The initial implementation supports a bounded static subset of scripts and Make, not a full shell/Make interpreter. Unsupported control flow, dynamic expressions, compiler wrappers or missing inputs stay partial. Diab-specific option semantics, compiler predefined macros/default include paths and final link membership are unverified. Cross-translation-unit links therefore remain candidates with explicit uncertainty. Changing a build configuration also invalidates AI context and requires review of saved manual targets. Existing macro/callback work, alternative, memory and mutation limits remain in force.
 
 ## WSL and updates
 

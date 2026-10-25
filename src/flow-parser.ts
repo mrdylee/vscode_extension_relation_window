@@ -1,5 +1,5 @@
 import { Node } from 'web-tree-sitter';
-import { FlowExpression as Expr, FlowLocal, FlowProgram, FlowStatement as Statement, GlobalInitializer, Location } from './model';
+import { FlowExpression as Expr, FlowLocal, FlowProgram, FlowStatement as Statement, GlobalInitializer, Location, locationKey } from './model';
 import { splitStatement, SplitStatement } from './split-statements';
 import { declaredType, declarator } from './type-info';
 
@@ -75,7 +75,7 @@ export function flowFacts(root: Node, uri: string, locate: Locate, active?: Set<
     if (!present(node)) return;
     if (node.type === 'function_definition') {
       const name = declarator(node.childForFieldName('declarator')!).name, body=node.childForFieldName('body'); if(!name||!body)return;
-      const id=`${uri}#${locate(name).start}`, locals:FlowLocal[]=[], ranges=new Map<string,{start:number;end:number; declaration:number}>(), params:string[]=[];
+      const id=`${locationKey(locate(name))}#${locate(name).start}`, locals:FlowLocal[]=[], ranges=new Map<string,{start:number;end:number; declaration:number}>(), params:string[]=[];
       const outerParams=ancestor(name,'function_declarator')?.childForFieldName('parameters');
       const functionConditions=context?.(name)??[];
       const persistentNames=new Map<string,number>();
@@ -95,7 +95,7 @@ export function flowFacts(root: Node, uri: string, locate: Locate, active?: Set<
           if(persistent)persistentNames.set(key,ordinal+1);
           const localId=persistent?`${id}:static:${key}:${ordinal}`:`${id}${namespace}:local:${info.name.startIndex}:${info.name.text}`;
           const type=declaredType(current,target,uri);
-          if(type?.id){const typeNode=current.childForFieldName('type')!,typeName=typeNode.childForFieldName('name');type.id=typeName?`${uri}#${locate(typeName).start}`:`${uri}#${locate(typeNode).start}:aggregate`;}
+          if(type?.id){const typeNode=current.childForFieldName('type')!,typeName=typeNode.childForFieldName('name');type.id=typeName?`${locationKey(locate(typeName))}#${locate(typeName).start}`:`${locationKey(locate(typeNode))}#${locate(typeNode).start}:aggregate`;}
           locals.push({id:localId,name:info.name.text,location,type,scope:{start:locate(scope).start,end:locate(scope).end},parameter,persistent,
             conditions:parameter!==undefined?[]:(context?.(info.name)??[]).filter(condition=>!functionConditions.includes(condition))});
           ranges.set(localId,{start:scope.startIndex,end:scope.endIndex,declaration:info.name.startIndex});if(parameter!==undefined)params.push(localId);
@@ -175,7 +175,7 @@ export function flowFacts(root: Node, uri: string, locate: Locate, active?: Set<
     }
     if(node.type==='declaration' && !ancestor(node,'function_definition'))for(const child of node.childrenForFieldName('declarator')){
       const value=child.childForFieldName('value'),target=child.childForFieldName('declarator'),name=target&&declarator(target).name;
-      if(value&&name)initializers.push({id:`${uri}#${locate(name).start}`,value:expression(value,[],new Map(),'global'),location:locate(value)});
+      if(value&&name)initializers.push({id:`${locationKey(locate(name))}#${locate(name).start}`,value:expression(value,[],new Map(),'global'),location:locate(value)});
     }
     for(const child of node.namedChildren)collect(child);
   }

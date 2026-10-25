@@ -1,4 +1,4 @@
-import { CallbackAnalysisOptions, CallbackProgress, CallbackDiagnostic, FileAnalysis, FlowExpression as Expr, FlowLocal, FlowProgram, FlowStatement, Location, ReferenceRecord, SymbolRecord } from './model';
+import { CallbackAnalysisOptions, CallbackProgress, CallbackDiagnostic, FileAnalysis, FlowExpression as Expr, FlowLocal, FlowProgram, FlowStatement, Location, ReferenceRecord, SymbolRecord, fileKey, locationKey } from './model';
 import { RelationIndex } from './relations';
 import { FunctionArguments } from './function-arguments';
 
@@ -165,7 +165,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
   if (!fileCache) fileCaches.set(owner, fileCache = new WeakMap());
   const index = new RelationIndex(); files.forEach(file => index.update(file));
   const functionArguments = new FunctionArguments(files, index);
-  const outsideScope = new Set(files.filter(file => file.analysisPolicy?.propagateCallbacks === false).map(file => file.uri));
+  const outsideScope = new Set(files.filter(file => file.analysisPolicy?.propagateCallbacks === false).map(file => fileKey(file)));
   const programs = analyzeCallbacks ? files.flatMap(file => file.analysisPolicy?.propagateCallbacks === false ? [] : file.programs ?? []) : [], byFunction = new Map<string, FlowProgram[]>();
   for (const program of programs) { const list = byFunction.get(program.id) ?? []; list.push(program); byFunction.set(program.id, list); }
   const references = analyzeCallbacks ? files.flatMap(file => file.references.filter(ref => ref.kind === 'call' && ref.flowKey)) : [];
@@ -173,7 +173,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
   const memoryLimited = analyzeCallbacks && memoryPressure?.() === true;
   if (!analyzeCallbacks || memoryLimited || (!options.shouldCancel?.() && !references.some(ref => ref.indirect || localNames.has(ref.name) || index.resolveReference(ref).some(s => s.kind === 'variable')))) {
     const results = files.map(file => {
-      const references = uniqueCalls(file.references), argumentsFound = functionArguments.forFile(file.uri);
+      const references = uniqueCalls(file.references), argumentsFound = functionArguments.forFile(fileKey(file));
       const warnings = memoryLimited && file === files[0] ? [callbackMemoryLimit] : [];
       if (references === file.references && !argumentsFound.length && !warnings.length) return file;
       const fingerprint = JSON.stringify(['direct-sites', argumentsFound, warnings]);
@@ -941,8 +941,9 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
       const values: Value[] = expr.localId ? [expr.localId, ...(expr.alternatives ?? [])].map(id => read(id, state)) : [];
       for (const symbol of !expr.localId || expr.globalFallback ? globalSymbols(expr) : []) {
         if (symbol.kind === 'function') {
-          values.push({ ...blank(), targets: new Map([[symbol.id, [{ location: expr.location, reason: 'Function address: ' + symbol.name }]]]) });
-        } else if (symbol.kind === 'variable') values.push(read(symbol.id, state));
+          const partial=index.linkageUncertain(expr.location,symbol);
+          values.push({ ...blank(), targets: new Map([[symbol.id, [{ location: expr.location, reason: 'Function address: ' + symbol.name }]]]),unknown:partial,reasons:partial?['Build link membership is not verified across translation units']:[] });
+        } else if (symbol.kind === 'variable') values.push(index.linkageUncertain(expr.location,symbol)?union(read(symbol.id,state),unknown('Build link membership is not verified across translation units')):read(symbol.id, state));
       }
       return storedValue(expr, values.length ? union(...values) : unknown('Unknown value: ' + expr.name), state, ctx);
     }
@@ -1008,7 +1009,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
       if (layouts.length && layouts.every(layout => !layout.layers.length && layout.scalar)) value = scalar(value);
       const pointer = layouts[0]?.layers[0] === 'pointer' && layouts[0].layers[1] !== 'function';
       if (expr.operator === '=' && pointer && value.unknown && !value.objects.size)
-        value = { ...value, objects: new Set(['$object:' + expr.right.location.uri + '#' + expr.right.location.start]) };
+        value = { ...value, objects: new Set(['$object:' + locationKey(expr.right.location) + '#' + expr.right.location.start]) };
       value = evidence(value, { location: expr.location, reason: 'Assignment or initialization' });
       if (expr.operator === '=' && layouts[0] && !layouts[0].layers.length && layouts[0].fields.length) {
         for (const target of targets) copyStorage(target, objects(value), layouts[0], state, ctx, 0, record);
@@ -1046,7 +1047,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
         depend(fn);
         const target = summaries.get(fn);
         if (!target) { opaque = true; const symbol=index.symbol(fn); returns.push(unknown('Return value unavailable: ' + (symbol?.name ?? expressionText(expr.callee)) +
-          (symbol?.definition && outsideScope.has(symbol.location.uri) ? ' is outside Smart Analysis Include/Exclude' : ' has no indexed body'))); continue; }
+          (symbol?.definition && outsideScope.has(locationKey(symbol.location)) ? ' is outside Smart Analysis Include/Exclude' : ' has no indexed body'))); continue; }
         // Budgeted omissions are represented by their affected regions. An
         // indexed helper's unused arguments are not opaque mutation roots.
         args.forEach((arg, n) => {
@@ -1301,7 +1302,8 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     functionArguments.add(observation.call, n, new Map([...value.targets].map(([id, chain]) => [id, frames([...chain, ...value.evidence])])),
       true, value.unknown || value.nil || !converged || projectIncomplete, [...new Set([...value.reasons, ...(projectIncomplete ? notices : [])])]);
   }
-  const warningFile = files.find(file => file.references.some(ref => ref.kind === 'call'))?.uri ?? files[0]?.uri;
+  const warningSource = files.find(file => file.references.some(ref => ref.kind === 'call')) ?? files[0];
+  const warningFile = warningSource && fileKey(warningSource);
   const results = files.map(file => {
     let modified = false; const refs: ReferenceRecord[] = [];
     for (const ref of file.references) {
@@ -1326,10 +1328,10 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
       if (incomplete) refs.push({ ...ref, id: ref.id + ':unknown', targetId: undefined, indirect: true, callKind: 'indirect', unresolvedKind: observation.kind, inference });
     }
     const unique = uniqueCalls(refs);
-    const diagnostics = [...details.values()].filter(detail => detail.location ? detail.location.uri === file.uri : file.uri === warningFile);
-    const warnings = [...new Set([...diagnostics.map(detail => detail.message), ...(file.uri === warningFile ? [...omitted].map(message => message + ' (additional locations omitted; 64 diagnostic records retained)') : [])])];
+    const diagnostics = [...details.values()].filter(detail => detail.location ? locationKey(detail.location) === fileKey(file) : fileKey(file) === warningFile);
+    const warnings = [...new Set([...diagnostics.map(detail => detail.message), ...(fileKey(file) === warningFile ? [...omitted].map(message => message + ' (additional locations omitted; 64 diagnostic records retained)') : [])])];
     modified ||= unique.length !== refs.length;
-    const argumentsFound = functionArguments.forFile(file.uri);
+    const argumentsFound = functionArguments.forFile(fileKey(file));
     if (!modified && !warnings.length && !argumentsFound.length) return file;
     const fingerprint = JSON.stringify([unique.filter(ref => ref.inference).map(ref => [ref.id, ref.name, ref.targetId, ref.callKind, ref.inference]), warnings, argumentsFound, diagnostics]);
     const previous = fileCache!.get(file);

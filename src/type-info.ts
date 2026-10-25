@@ -1,5 +1,5 @@
 import { Node } from 'web-tree-sitter';
-import { CType, Location, TypedExpression } from './model';
+import { CType, Location, TypedExpression, locationKey } from './model';
 
 export function declarator(node: Node): { name?: Node; functionLike: boolean; pointer: boolean } {
   const chain: Node[] = [];
@@ -44,7 +44,7 @@ export function declaredType(declaration: Node, declarator: Node, uri: string): 
 }
 
 function writtenType(declaration: Node, target: Node, location: (node: Node) => Location): TypedExpression | undefined {
-  const at = location(declaration), type = declaredType(declaration, target, at.uri);
+  const at = location(declaration), type = declaredType(declaration, target, locationKey(at));
   if (!type) return undefined;
   let block = declaration.parent;
   while (block && !['compound_statement', 'for_statement'].includes(block.type)) block = block.parent;

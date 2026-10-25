@@ -1,18 +1,18 @@
 import { ResolvedOverride } from './callback-overrides';
 import type { CallbackHint } from './copilot-callbacks';
 import { RelationIndex } from './relations';
-import { ReferenceRecord } from './model';
+import { ReferenceRecord, fileKey, locationKey } from './model';
 
 export function applyCallbackHints(index: RelationIndex, hints: readonly CallbackHint[], overrides: readonly ResolvedOverride[] = []) {
   const byFile = new Map<string, CallbackHint[]>();
   for (const hint of hints) {
     if (!hint.candidates.length) continue;
-    const values = byFile.get(hint.callsite.uri) ?? [];
-    values.push(hint); byFile.set(hint.callsite.uri, values);
+    const values = byFile.get(locationKey(hint.callsite)) ?? [];
+    values.push(hint); byFile.set(locationKey(hint.callsite), values);
   }
   for (const file of index.files.values()) {
-    const manual = overrides.filter(value=>value.status==='active'&&value.site?.location.uri===file.uri);
-    const fileHints = byFile.get(file.uri) ?? [];
+    const manual = overrides.filter(value=>value.status==='active'&&!!value.site&&locationKey(value.site.location)===fileKey(file));
+    const fileHints = byFile.get(fileKey(file)) ?? [];
     const hasPrevious = file.references.some(ref => ['ai-candidate','user-confirmed'].includes(ref.callKind??''));
     if (!hasPrevious && !fileHints.length && !manual.length) continue;
     const references = hasPrevious ? file.references.filter(ref => !['ai-candidate','user-confirmed'].includes(ref.callKind??'')) : file.references;

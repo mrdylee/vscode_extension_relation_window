@@ -1,4 +1,4 @@
-import { FileAnalysis } from './model';
+import { FileAnalysis, fileKey } from './model';
 import { createHash, randomUUID } from 'node:crypto';
 import { copyFile, link, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -7,7 +7,7 @@ export interface CachedAnalysis { raw: FileAnalysis; derived: FileAnalysis; skip
 interface Entry { uri: string; name: string; digest: string; source: string; skip: boolean; expandMacros: boolean }
 // Bump only when parsing, macro expansion, callback derivation or stored analysis
 // semantics change. UI, packaging and other compatible releases keep this value.
-export const ANALYSIS_CACHE_VERSION = 12;
+export const ANALYSIS_CACHE_VERSION = 13;
 export type CacheIncompatibility = 'analysis-version' | 'workspace-settings' | 'legacy-format';
 interface Manifest { legacyRoots?: string[]; schema: 2; analysisVersion: number; key: string; generation: string; previous?: string; entries: Entry[]; callbackPolicy?: string; retryable?: boolean }
 const workerFields = new Set(['text', 'programs', 'initializers', 'argumentPrograms', 'registrationPrograms', 'registrationInitializers', 'statementConditions']);
@@ -23,7 +23,7 @@ async function boundedRead(filename: string, limit: number) {
   return data;
 }
 function validFile(value: FileAnalysis, uri: string) {
-  return value?.uri === uri && typeof value.text === 'string' && Array.isArray(value.symbols) &&
+  return !!value && fileKey(value) === uri && typeof value.text === 'string' && Array.isArray(value.symbols) &&
     Array.isArray(value.references) && Array.isArray(value.includes) && Array.isArray(value.issues);
 }
 export class AnalysisCache {
@@ -63,6 +63,7 @@ export class AnalysisCache {
       const data = await boundedRead(path.join(this.directory, this.manifest.generation, entry.name), maxRecordBytes);
       if (hash(data) !== entry.digest) throw new Error('Analysis cache checksum mismatch');
       const record = JSON.parse(data) as CachedAnalysis & { removed?: (keyof FileAnalysis)[] };
+      if (record.raw?.context) { record.raw.text = text; record.raw.context.prepared.text = text; }
       record.derived = { ...record.raw, ...record.derived, text: record.raw?.text,
         programs: undefined, initializers: undefined, argumentPrograms: undefined, registrationPrograms: undefined, registrationInitializers: undefined, statementConditions: undefined };
       for (const key of record.removed ?? []) delete record.derived[key];
@@ -86,14 +87,14 @@ export class AnalysisCache {
       await mkdir(directory, { recursive: true });
       const entries: Entry[] = [], seen = new Set<string>(); let bytes = 0, retryable = false;
       for (const record of records) {
-        if (seen.has(record.raw.uri) || seen.size >= maxFiles || record.derived.uri !== record.raw.uri || record.derived.text !== record.raw.text)
+        if (seen.has(fileKey(record.raw)) || seen.size >= maxFiles || fileKey(record.derived) !== fileKey(record.raw) || record.derived.text !== record.raw.text)
           throw new Error('Invalid analysis cache generation');
-        seen.add(record.raw.uri);
+        seen.add(fileKey(record.raw));
         retryable ||= record.derived.callbackDiagnostics?.some(detail => ['cancelled', 'time', 'memory', 'work'].includes(detail.kind)) ?? false;
         retryable ||= record.derived.issues.some(issue => /analysis cancelled|memory budget|analysis (?:time )?budget|work limit/i.test(issue));
-        const cached = this.entries.get(record.raw.uri);
+        const cached = this.entries.get(fileKey(record.raw));
         // The Worker proves both raw input and derived identity unchanged.
-        if (reuseUris.has(record.raw.uri) && previous && cached && cached.skip === record.skip && cached.expandMacros === record.expandMacros) {
+        if (reuseUris.has(fileKey(record.raw)) && previous && cached && cached.skip === record.skip && cached.expandMacros === record.expandMacros) {
           const source = path.join(this.directory, previous, cached.name), destination = path.join(directory, cached.name);
           const size = (await stat(source)).size; bytes += size;
           if (size > maxRecordBytes || bytes > maxGenerationBytes) throw new Error('Analysis cache size limit');
@@ -107,12 +108,13 @@ export class AnalysisCache {
           if (record.derived[key] === undefined) removed.push(key);
           else (derived as Record<string, unknown>)[key] = record.derived[key];
         }
-        const data = JSON.stringify({ ...record, derived, removed });
+        const raw = record.raw.context ? {...record.raw, text:undefined, context:{...record.raw.context, prepared:{...record.raw.context.prepared, text:undefined}}} : record.raw;
+        const data = JSON.stringify({ ...record, raw, derived, removed });
         const size = Buffer.byteLength(data); bytes += size;
         if (size > maxRecordBytes || bytes > maxGenerationBytes) throw new Error('Analysis cache size limit');
-        const name = hash(record.raw.uri) + '.json';
+        const name = hash(fileKey(record.raw)) + '.json';
         await writeFile(path.join(directory, name), data);
-        entries.push({ uri: record.raw.uri, name, digest: hash(data), source: hash(record.raw.text), skip: record.skip, expandMacros: record.expandMacros });
+        entries.push({ uri: fileKey(record.raw), name, digest: hash(data), source: hash(record.raw.text), skip: record.skip, expandMacros: record.expandMacros });
       }
       const manifest: Manifest = { legacyRoots: this.legacyRoots, schema: 2, analysisVersion: this.analysisVersion, key: this.key, generation, previous, entries, callbackPolicy: 'manual-stop', retryable };
       const serialized = JSON.stringify(manifest);

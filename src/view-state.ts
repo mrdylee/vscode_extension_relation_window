@@ -16,6 +16,7 @@ export interface ViewState {
   graph?: GraphData; context?: Preview; candidates: SymbolRecord[];
   callback?: CallbackTargets;
   callbackDiagnostics?: CallbackDiagnostic[];
+  buildStatus?: {label:string;state:'discovering'|'ready'|'partial'|'error';candidates:number;resolved:number;unresolved:number};
   status: string; fileCount: number; issues: string[];
   mode: RelationMode; accessFilter: AccessFilter; depth: number; locked: boolean; skipInactive: boolean;
   calleeSort: CalleeSort; contextLayout: ContextLayout;

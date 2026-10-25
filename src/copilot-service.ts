@@ -7,7 +7,7 @@ import { CopilotCallbackController, CallbackHint, CopilotSnapshot, CopilotProgre
 import { prepareCallbackContexts, CallbackSite } from './copilot-context';
 import { applyCallbackHints } from './copilot-relations';
 import { CallbackOverrideStore, makeCallbackOverride } from './callback-overrides';
-import { Location, SymbolRecord } from './model';
+import { Location, SymbolRecord, locationKey } from './model';
 import { analysisConfiguration, configured, smartAnalysisScope } from './analysis-policy';
 
 export interface CallbackActionHandle { siteKey: string; targetId?: string; overrideKey?: string }
@@ -140,7 +140,7 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
       }
       if (epoch !== revision || disposed || automaticPaused || !canAnalyze()) return;
       setup(); if (!controller) throw new Error('Copilot storage is unavailable.');
-      value.excludedCallsiteKeys = new Set(overrides.resolve(workspace.index).filter(item => item.status === 'active').map(item => `${item.site!.location.uri}:${item.site!.location.start}:${item.site!.location.end}`));
+      value.excludedCallsiteKeys = new Set(overrides.resolve(workspace.index).filter(item => item.status === 'active').map(item => `${locationKey(item.site!.location)}:${item.site!.location.start}:${item.site!.location.end}`));
       const result = await controller.analyzeUnresolved(value, {reason: 'enabled', automatic: true});
       if (result.stale || epoch !== revision || confirmedRevision !== manualRevision) return;
       for (const hint of result.hints) hints.set(hint.key, hint);
@@ -160,7 +160,7 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
   async function siteFor(action: CallbackActionHandle) {
     if (!canAnalyze()) throw new Error('Save source changes and wait for basic navigation to be ready.');
     const confirmed=action.overrideKey&&overrides.resolve(workspace.index).find(value=>value.record.key===action.overrideKey&&value.status==='active'&&
-      `${value.site!.location.uri}:${value.site!.location.start}:${value.site!.location.end}`===action.siteKey);
+      `${locationKey(value.site!.location)}:${value.site!.location.start}:${value.site!.location.end}`===action.siteKey);
     const value = snapshot();
     if(confirmed)value.preferredTargetId=confirmed.target!.id;
     const builder = await prepareCallbackContexts(value.files, () => !disposed && value.generation === workspace.generation,confirmed?new Set([action.siteKey]):undefined);

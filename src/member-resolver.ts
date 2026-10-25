@@ -1,4 +1,4 @@
-import { CType, Location, SymbolRecord, TypedExpression } from './model';
+import { CType, Location, SymbolRecord, TypedExpression, locationKey } from './model';
 
 interface ResolvedType { id: string; name?: string; tag?: CType['tag']; layers: CType['layers']; conditions: string[]; scalar?: boolean }
 type TypeContext = Pick<SymbolRecord, 'location' | 'scope'>;
@@ -18,7 +18,7 @@ export class MemberResolver {
   private namedTypes(type: CType, declaration: TypeContext, unitUri: string): SymbolRecord[] {
     const at = declaration.location;
     const all = this.lookup.symbols(type.name).filter(s => s.kind === 'type' && s.aggregate === type.tag && !s.memberOf);
-    const scoped = all.filter(s => s.location.uri === at.uri && s.scope && s.scope.start <= at.start && s.scope.end > at.start);
+    const scoped = all.filter(s => locationKey(s.location) === locationKey(at) && s.scope && s.scope.start <= at.start && s.scope.end > at.start);
     const locals = scoped.filter(s => s.location.start <= at.start);
     const selected: SymbolRecord[] = [];
     const widths = [...new Set(locals.map(s => s.scope!.end - s.scope!.start))].sort((a, b) => a - b);
@@ -28,15 +28,15 @@ export class MemberResolver {
       selected.push(...level);
       if (level.some(s => s.conditions.length === 0)) return selected;
     }
-    const sameFile = all.filter(s => !s.scope && s.location.uri === at.uri && (type.tag || s.location.start <= at.start));
+    const sameFile = all.filter(s => !s.scope && locationKey(s.location) === locationKey(at) && (type.tag || s.location.start <= at.start));
     // A header's opaque tag can be completed by the consuming C file. Only
     // global tags participate here; local typedef shadows keep declaration scope.
-    const visible = this.lookup.visibleFiles(type.tag ? unitUri : at.uri);
-    const outer = all.filter(s => !s.scope && visible.has(s.location.uri) && (s.location.uri !== at.uri || type.tag || s.location.start <= at.start));
+    const visible = this.lookup.visibleFiles(type.tag ? unitUri : locationKey(at));
+    const outer = all.filter(s => !s.scope && visible.has(locationKey(s.location)) && (locationKey(s.location) !== locationKey(at) || type.tag || s.location.start <= at.start));
     if (type.tag && !locals.length) {
       // `struct T *p` introduces a local tag only if no outer T is visible.
       // A later definition in that same block completes it, not a later global T.
-      const earlier = outer.filter(s => s.location.uri !== at.uri || s.location.start <= at.start);
+      const earlier = outer.filter(s => locationKey(s.location) !== locationKey(at) || s.location.start <= at.start);
       const later = scoped.filter(s => s.definition && s.location.start > at.start &&
         s.scope!.start === declaration.scope?.start && s.scope!.end === declaration.scope?.end);
       if (later.length && !earlier.some(s => s.conditions.length === 0)) {
@@ -116,7 +116,7 @@ export class MemberResolver {
     if (depth >= 32) return [];
     let base: TypedExpression = expression;
     while (base.kind !== 'identifier' && base.kind !== 'type') base = base.object;
-    unitUri ??= base.location.uri;
+    unitUri ??= locationKey(base.location);
     const result = new Map<string, SymbolRecord>();
     for (const type of this.expressionTypes(expression.object, depth + 1, unitUri)) {
       const valid = expression.arrow
@@ -131,7 +131,7 @@ export class MemberResolver {
   }
   layout(symbol: SymbolRecord) {
     const seen = new Set<string>();
-    return this.normalize(symbol.type, symbol, symbol.location.uri).filter(type => {
+    return this.normalize(symbol.type, symbol, locationKey(symbol.location)).filter(type => {
       const key = type.id + '/' + type.layers.join(',') + '/' + type.scalar;
       if (seen.has(key)) return false; seen.add(key); return true;
     }).map(type => ({ ...type, fields: this.lookup.fields(type.id) }));

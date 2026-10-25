@@ -1,12 +1,13 @@
 import { createHash } from 'node:crypto';
 import { RelationIndex } from './relations';
-import { Location, ReferenceRecord, SymbolRecord } from './model';
+import { Location, ReferenceRecord, SymbolRecord, fileKey, locationKey } from './model';
 import { locationIn, tokenizeC } from './c-tokens';
 
-interface TargetAnchor { uri: string; name: string; digest: string }
+interface TargetAnchor { context?: string; uri: string; name: string; digest: string }
 export interface CallbackOverride {
+  buildFingerprint?: string;
   version: 1; key: string; uri: string; owner: TargetAnchor; expression: string; ordinal: number; count: number;
-  original: TargetAnchor; target: TargetAnchor; dependencies: { uri: string; digest: string }[];
+  original: TargetAnchor; target: TargetAnchor; dependencies: { context?: string; uri: string; digest: string }[];
 }
 export interface ResolvedOverride {
   record: CallbackOverride; status: 'active' | 'needs-review' | 'inactive'; site?: ReferenceRecord;
@@ -14,14 +15,14 @@ export interface ResolvedOverride {
 }
 const digest = (text: string) => createHash('sha256').update(tokenizeC(text, locationIn(text, '')).map(token=>token.text).join('\0')).digest('hex');
 function anchor(index: RelationIndex, symbol: SymbolRecord): TargetAnchor {
-  const file=index.files.get(symbol.location.uri)!;
-  return {uri:file.uri,name:symbol.name,digest:digest(file.text.slice(symbol.extent.start,symbol.extent.end))};
+  const file=index.fileAt(symbol.location.uri,symbol.location.context)!;
+  return {...(symbol.location.context?{context:symbol.location.context}:{}),uri:file.uri,name:symbol.name,digest:digest(file.text.slice(symbol.extent.start,symbol.extent.end))};
 }
 function find(index: RelationIndex, target: TargetAnchor) {
-  return index.symbols().filter(symbol=>symbol.kind==='function'&&symbol.definition&&symbol.name===target.name&&symbol.location.uri===target.uri&&anchor(index,symbol).digest===target.digest);
+  return index.symbols().filter(symbol=>symbol.kind==='function'&&symbol.definition&&symbol.name===target.name&&symbol.location.uri===target.uri&&(!target.context||symbol.location.context===target.context)&&anchor(index,symbol).digest===target.digest);
 }
 function calls(index: RelationIndex, owner: SymbolRecord, expression: string) {
-  const file=index.files.get(owner.location.uri)!;
+  const file=index.fileAt(owner.location.uri,owner.location.context)!;
   const seen=new Set<string>();
   return file.references.filter(ref=> {
     if(ref.kind!=='call'||!ref.access||ref.functionId!==owner.id||['ai-candidate','user-confirmed'].includes(ref.callKind??''))return false;
@@ -31,7 +32,7 @@ function calls(index: RelationIndex, owner: SymbolRecord, expression: string) {
   });
 }
 export function makeCallbackOverride(index: RelationIndex, location: Location, originalId: string, targetId: string, dependencyUris: string[] = []): CallbackOverride {
-  const file=index.files.get(location.uri),target=index.symbol(targetId),original=index.symbol(originalId);
+  const file=index.fileAt(location.uri,location.context),target=index.symbol(targetId),original=index.symbol(originalId);
   const site=file?.references.find(ref=>ref.kind==='call'&&ref.access&&ref.location.start===location.start&&ref.location.end===location.end&&ref.functionId);
   const owner=site?.functionId&&index.symbol(site.functionId);
   if(!file||!site||!owner||!target?.definition||target.kind!=='function'||!original||original.kind!=='function')throw new Error('The call or target changed. Choose an indexed function again.');
@@ -40,8 +41,8 @@ export function makeCallbackOverride(index: RelationIndex, location: Location, o
   if(ordinal<0)throw new Error('The callback is no longer available.');
   const ownerAnchor=anchor(index,owner),originalAnchor=anchor(index,original);
   const key=createHash('sha256').update(JSON.stringify([file.uri,ownerAnchor,expression,ordinal,originalAnchor])).digest('hex');
-  return {version:1,key,uri:file.uri,owner:ownerAnchor,expression,ordinal,count:siblings.length,original:originalAnchor,target:anchor(index,target),
-    dependencies:[...new Set([file.uri,target.location.uri,original.location.uri,...dependencyUris])].filter(uri=>index.files.has(uri)).map(uri=>({uri,digest:digest(index.files.get(uri)!.text)}))};
+  return {buildFingerprint:file.context?.configurationFingerprint,version:1,key,uri:file.uri,owner:ownerAnchor,expression,ordinal,count:siblings.length,original:originalAnchor,target:anchor(index,target),
+    dependencies:[...new Set([fileKey(file),locationKey(target.location),locationKey(original.location),...dependencyUris])].flatMap(uri=>{const dependency=index.fileAt(uri);return dependency?[{uri:dependency.uri,context:dependency.context?.key,digest:digest(dependency.text)}]:[]})};
 }
 export class CallbackOverrideStore {
   private values=new Map<string,CallbackOverride>();
@@ -63,8 +64,10 @@ export class CallbackOverrideStore {
   remove(key: string) { this.values.delete(key);this.revisions.set(key,this.revision(key)+1); }
   resolve(index: RelationIndex): ResolvedOverride[] {
     return this.records().map(record=> {
-      if(record.dependencies.some(item=>!index.files.has(item.uri)))return{record,status:'inactive'};
-      if(record.dependencies.some(item=>digest(index.files.get(item.uri)!.text)!==item.digest))return{record,status:'needs-review'};
+      const build=[...index.files.values()].find(file=>file.context)?.context?.configurationFingerprint;
+      if(record.buildFingerprint!==build&&(record.buildFingerprint||build))return{record,status:'needs-review'};
+      if(record.dependencies.some(item=>!index.fileAt(item.uri,item.context)))return{record,status:'inactive'};
+      if(record.dependencies.some(item=>digest(index.fileAt(item.uri,item.context)!.text)!==item.digest))return{record,status:'needs-review'};
       const owners=find(index,record.owner),targets=find(index,record.target),originals=find(index,record.original);
       if(owners.length!==1||targets.length!==1||originals.length!==1)return{record,status:'needs-review'};
       const sites=calls(index,owners[0],record.expression);

@@ -1,4 +1,4 @@
-import { CallbackAnalysisOptions, FileAnalysis, FlowExpression as Expr, FlowStatement, ReferenceRecord, SymbolRecord } from './model';
+import { CallbackAnalysisOptions, FileAnalysis, FlowExpression as Expr, FlowStatement, ReferenceRecord, SymbolRecord, fileKey, locationKey } from './model';
 import { RelationIndex } from './relations';
 
 type Evidence = NonNullable<ReferenceRecord['inference']>['evidence'];
@@ -43,7 +43,7 @@ export function suggestExplicitCallbacks(raw: FileAnalysis[], derived: FileAnaly
   }
   const callsites = new Map<string, ReferenceRecord>();
   const existing = new Set<string>(), complete = new Set<string>();
-  const siteKey = (ref: ReferenceRecord) => `${ref.location.uri}:${ref.location.start}:${ref.location.end}`;
+  const siteKey = (ref: ReferenceRecord) => `${locationKey(ref.location)}:${ref.location.start}:${ref.location.end}`;
   for (const file of derived) for (const ref of file.references) { check(); if (ref.kind === 'call' && ref.access) {
     const key = siteKey(ref);
     if (ref.targetId) existing.add(`${key}:${ref.targetId}`);
@@ -67,7 +67,7 @@ export function suggestExplicitCallbacks(raw: FileAnalysis[], derived: FileAnaly
   }
   const functionNames = new Set(index.symbols().filter(symbol => symbol.kind === 'function').map(symbol => symbol.name));
   const sourceConditions = new Map(raw.flatMap(file => file.references.filter(ref => { check(); return ref.kind === 'reference' && functionNames.has(ref.name); })
-    .map(ref => [`${file.uri}:${ref.location.start}`, ref.conditions] as const)));
+    .map(ref => [`${fileKey(file)}:${ref.location.start}`, ref.conditions] as const)));
   function register(value: Expr, ownerId: string, functionId: string | undefined, expression: string) {
     check();
     if (value.kind === 'choice') {
@@ -82,22 +82,22 @@ export function suggestExplicitCallbacks(raw: FileAnalysis[], derived: FileAnaly
     }
     for (const registration of direct(value)) {
       const target = index.symbol(registration.targetId)!;
-      const file = index.files.get(value.location.uri)!;
-      const conditions = sourceConditions.get(`${file.uri}:${registration.evidence[0].location.start}`) ?? [];
-      const refs = registrations.get(file.uri) ?? new Map<string, ReferenceRecord>();
-      const id = `${file.uri}@${value.location.start}:registration:${target.id}`;
+      const file = index.files.get(locationKey(value.location))!;
+      const conditions = sourceConditions.get(`${fileKey(file)}:${registration.evidence[0].location.start}`) ?? [];
+      const refs = registrations.get(fileKey(file)) ?? new Map<string, ReferenceRecord>();
+      const id = `${fileKey(file)}@${value.location.start}:registration:${target.id}`;
       refs.set(id, { id, name: target.name, kind: 'reference', callKind: 'registered', targetId: target.id,
         ownerId, functionId, location: value.location, conditions,
         inference: { expression, evidence: registration.evidence, incomplete: false,
           reasons: ['Explicit function registration; not proof of invocation.'] } });
-      registrations.set(file.uri, refs);
+      registrations.set(fileKey(file), refs);
     }
   }
   function collect(value: Expr, functionId: string) {
     check();
     if (value.kind === 'assign') {
       if (value.operator === '=') register(value.right, functionId, functionId,
-        index.files.get(value.left.location.uri)!.text.slice(value.left.location.start, value.left.location.end));
+        index.files.get(locationKey(value.left.location))!.text.slice(value.left.location.start, value.left.location.end));
       collect(value.left, functionId); collect(value.right, functionId);
     } else if (value.kind === 'call') { collect(value.callee, functionId); value.args.forEach(arg => collect(arg, functionId)); }
     else if (value.kind === 'initializer') value.entries.forEach(entry => collect(entry.value, functionId));
@@ -227,13 +227,13 @@ export function suggestExplicitCallbacks(raw: FileAnalysis[], derived: FileAnaly
           const target = index.symbol(registration.targetId), key = `${siteKey(source)}:${registration.targetId}`;
           if (!target || existing.has(key)) continue;
           existing.add(key);
-          const refs = added.get(file.uri) ?? [];
+          const refs = added.get(fileKey(file)) ?? [];
           refs.push({ ...source, id: `${source.id}:registered:${target.id}`, name: target.name, targetId: target.id,
             indirect: false, member: undefined, callKind: 'registered',
             inference: { expression: file.text.slice(source.location.start, source.location.end), incomplete: true,
               reasons: ['Explicit registration candidate; not proof of invocation. Only direct registrations and straight-line local aliases were examined.'],
               evidence: [...registration.evidence, ...object.evidence] } });
-          added.set(file.uri, refs);
+          added.set(fileKey(file), refs);
         }
         for (const arg of value.args) {
           visit(arg);
@@ -250,7 +250,7 @@ export function suggestExplicitCallbacks(raw: FileAnalysis[], derived: FileAnaly
         const localId = value.object.localId;
         aliases.delete(localId);
         const local = program.locals.find(local => local.id === localId);
-        const symbol = local && index.symbol(`${local.location.uri}#${local.location.start}`);
+        const symbol = local && index.symbol(`${locationKey(local.location)}#${local.location.start}`);
         if (symbol && index.layout(symbol).some(layout => layout.layers[0] === 'pointer'))
           discardObject({ root: value.object.localId, path: [], evidence: [], address: false });
       }
@@ -274,8 +274,8 @@ export function suggestExplicitCallbacks(raw: FileAnalysis[], derived: FileAnaly
   }
   let result = derived.map(file => {
     stopped ||= options.shouldCancel?.() === true;
-    const refs = added.get(file.uri);
-    const written = [...(registrations.get(file.uri)?.values() ?? [])];
+    const refs = added.get(fileKey(file));
+    const written = [...(registrations.get(fileKey(file))?.values() ?? [])];
     if (stopped) {
       if (!refs?.length && !written.length) return file;
       const retained = new Map((file.callbackRegistrations ?? []).map(ref => [ref.id, ref]));
@@ -294,7 +294,7 @@ export function suggestExplicitCallbacks(raw: FileAnalysis[], derived: FileAnaly
   });
   stopped ||= options.shouldCancel?.() === true;
   if (stopped && !result.some(file => file.callbackDiagnostics?.some(detail => detail.kind === 'cancelled')) && result.length) {
-    const target = result.find(file => file.uri === symbol?.location.uri) ?? result[0];
+    const target = result.find(file => fileKey(file) === (symbol && locationKey(symbol.location))) ?? result[0];
     const message = 'Callback registration analysis cancelled; targets may be incomplete. Resume local analysis to retry.';
     let remaining = 63;
     result = result.map(file => {

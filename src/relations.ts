@@ -1,7 +1,7 @@
-import { AccessFilter, CallbackTargets, CalleeSort, FileAnalysis, GraphData, GraphNode, ReferenceRecord, RelationGroup, RelationMode, SymbolRecord } from './model';
+import { AccessFilter, CallbackTargets, CalleeSort, FileAnalysis, GraphData, GraphNode, ReferenceRecord, RelationGroup, RelationMode, SymbolRecord, fileKey, locationKey } from './model';
 import { MemberResolver } from './member-resolver';
 
-const callsiteKey = (ref: ReferenceRecord) => `${ref.location.uri}:${ref.location.start}:${ref.location.end}`;
+const callsiteKey = (ref: ReferenceRecord) => `${locationKey(ref.location)}:${ref.location.start}:${ref.location.end}`;
 const callbackTargetKey = (ref: ReferenceRecord) => `${callsiteKey(ref)}:${ref.targetId}`;
 
 // Keep each file's contribution separate so edits never rebuild unrelated files.
@@ -73,16 +73,16 @@ export class RelationIndex {
     this.layouts.clear();
   }
   update(file: FileAnalysis) {
-    const previous = this.files.get(file.uri);
+    const previous = this.files.get(fileKey(file));
     if (previous) this.unindex(previous);
-    else this.fileOrder.set(file.uri, this.nextOrder++);
-    this.files.set(file.uri, file);
+    else this.fileOrder.set(fileKey(file), this.nextOrder++);
+    this.files.set(fileKey(file), file);
     this.layouts.clear();
     this.visibility.clear();
     const basename = file.uri.split('/').pop()!;
     let paths = this.filesByName.get(basename);
     if (!paths) this.filesByName.set(basename, paths = new Set());
-    paths.add(file.uri);
+    paths.add(fileKey(file));
     for (const symbol of file.symbols) {
       this.byId.set(symbol.id, symbol); this.targets.delete(symbol.name);
       if (symbol.anonymousMemberOf) {
@@ -96,10 +96,10 @@ export class RelationIndex {
         named.push(symbol); fields.set(symbol.name, named);
       }
     }
-    this.byName.add(file.uri, file.symbols);
-    this.references.add(file.uri, file.references);
-    this.functionArguments.add(file.uri, file.functionArguments ?? []);
-    this.callbackRegistrations.add(file.uri, file.callbackRegistrations ?? []);
+    this.byName.add(fileKey(file), file.symbols);
+    this.references.add(fileKey(file), file.references);
+    this.functionArguments.add(fileKey(file), file.functionArguments ?? []);
+    this.callbackRegistrations.add(fileKey(file), file.callbackRegistrations ?? []);
     for (const ref of file.functionArguments ?? []) {
       if (!ref.functionId) continue;
       let argumentsFound = this.outgoingArguments.get(ref.functionId);
@@ -124,16 +124,20 @@ export class RelationIndex {
     this.visibility.clear();
     const basename = file.uri.split('/').pop()!;
     const paths = this.filesByName.get(basename);
-    paths?.delete(file.uri);
+    paths?.delete(fileKey(file));
     if (!paths?.size) this.filesByName.delete(basename);
     for (const symbol of file.symbols) { this.byId.delete(symbol.id); this.targets.delete(symbol.name); this.outgoing.delete(symbol.id); this.outgoingArguments.delete(symbol.id); this.members.delete(symbol.id); this.anonymousMembers.delete(symbol.id); }
-    this.byName.remove(file.uri, file.symbols);
-    this.references.remove(file.uri, file.references);
-    this.functionArguments.remove(file.uri, file.functionArguments ?? []);
-    this.callbackRegistrations.remove(file.uri, file.callbackRegistrations ?? []);
+    this.byName.remove(fileKey(file), file.symbols);
+    this.references.remove(fileKey(file), file.references);
+    this.functionArguments.remove(fileKey(file), file.functionArguments ?? []);
+    this.callbackRegistrations.remove(fileKey(file), file.callbackRegistrations ?? []);
   }
   symbols(): SymbolRecord[] { return [...this.byId.values()]; }
   symbol(id: string) { return this.byId.get(id); }
+  linkageUncertain(location: import('./model').Location, target: SymbolRecord) {
+    const source=this.files.get(locationKey(location))?.context,other=this.files.get(locationKey(target.location))?.context;
+    return !!source&&!!other&&source.unitId!==other.unitId;
+  }
   resolveReference(ref: ReferenceRecord) { return this.resolve(ref); }
   layout(symbol: SymbolRecord) {
     const previous = this.layouts.get(symbol.id);
@@ -146,6 +150,8 @@ export class RelationIndex {
     if (cached) return cached;
     const visible = new Set([uri]), queue = [uri];
     for (let i = 0; i < queue.length; i++) {
+      const context = this.files.get(queue[i])?.context;
+      if (context) { for (const include of context.prepared.resolvedIncludes) if (include.key && !visible.has(include.key)) { visible.add(include.key); queue.push(include.key); } continue; }
       for (const include of this.files.get(queue[i])?.includes ?? []) {
         const relative = new URL(include, queue[i]).href;
         const quoted = !this.files.get(queue[i])?.systemIncludes?.includes(include);
@@ -179,9 +185,9 @@ export class RelationIndex {
     }
     if (ref.macroIds?.length) return [...ref.macroIds.map(id => this.byId.get(id)).filter((symbol): symbol is SymbolRecord => !!symbol),
       ...(ref.macroUncertain ? this.resolve({ ...ref, macroIds: [], macroUncertain: false }) : [])];
-    const macroIds = ref.macroIds ?? (this.files.get(ref.location.uri)?.projectScoped ? [] : undefined);
+    const macroIds = ref.macroIds ?? (this.files.get(locationKey(ref.location))?.projectScoped ? [] : undefined);
     const active = (symbol: SymbolRecord) => symbol.kind !== 'macro' || !macroIds || macroIds.includes(symbol.id);
-    const here = this.byName.inFile(ref.name, ref.location.uri).filter(s => !s.memberOf && s.kind !== 'type' && active(s));
+    const here = this.byName.inFile(ref.name, locationKey(ref.location)).filter(s => !s.memberOf && s.kind !== 'type' && active(s));
     const locals = here.filter(s => s.scope && s.scope.start <= ref.location.start && s.scope.end > ref.location.start && s.location.start <= ref.location.start);
     let localTargets: SymbolRecord[] = [], externDeclarations: SymbolRecord[] = [];
     const widths = [...new Set(locals.map(s => s.scope!.end - s.scope!.start))].sort((a, b) => a - b);
@@ -205,12 +211,15 @@ export class RelationIndex {
     const targets = this.targetsFor(ref.name);
     const definitions = targets.definitions.filter(active), { headerStatics, declarations } = targets;
     // A header-local static is only a candidate in files that include that header.
-    const included = headerStatics.filter(s => this.visibleFiles(ref.location.uri).has(s.location.uri));
+    const included = headerStatics.filter(s => this.visibleFiles(locationKey(ref.location)).has(locationKey(s.location)));
     if (definitions.length || included.length) return [...localTargets, ...statics, ...definitions, ...included];
     return [...localTargets, ...externDeclarations, ...statics, ...declarations.filter(s =>
       (s.storage !== 'static' || s.location.uri === ref.location.uri))];
   }
+  fileAt(uri: string, context?: string) { return this.files.get(context ?? uri) ?? [...this.files.values()].find(file => file.uri === uri && (!context || file.context?.unitId === context)); }
+  contextsAt(uri: string) { return [...this.files.values()].filter(file => file.uri === uri); }
   resolveAt(uri: string, offset: number): SymbolRecord[] {
+    if (!this.files.has(uri)) return this.contextsAt(uri).flatMap(file => this.resolveAt(fileKey(file), offset));
     const file = this.files.get(uri);
     if (!file) return [];
     const contains = (s: { location: { start: number; end: number } }) => s.location.start <= offset && offset < s.location.end;
@@ -220,6 +229,11 @@ export class RelationIndex {
     return ref ? this.resolve(ref) : symbol ? [symbol] : [];
   }
   callbackAt(uri: string, offset: number): CallbackTargets | undefined {
+    if (!this.files.has(uri)) {
+      const choices = this.contextsAt(uri).flatMap(file => {const value = this.callbackAt(fileKey(file), offset); return value ? [value] : [];});
+      if (!choices.length) return;
+      return {...choices[0], targets:[...new Map(choices.flatMap(value => value.targets).map(target => [target.id,target])).values()], incomplete:choices.some(value => value.incomplete), reasons:[...new Set(choices.flatMap(value => value.reasons))]};
+    }
     const file = this.files.get(uri);
     if (!file) return;
     const calls = file.references.filter(ref => ref.kind === 'call' && ref.access && !ref.expansion &&
@@ -272,11 +286,13 @@ export class RelationIndex {
       const replaced = !ref.argument && ref.kind === 'call' && ai.sites.has(callsiteKey(ref));
       if (replaced && !candidates.length) continue;
       const candidateIds = candidates.map(s => s.id);
-      const ambiguous = ref.callKind === 'inferred' || !!ref.argument?.inferred || !!ref.inference?.incomplete || !!ref.macroUncertain || candidates.length > 1 || candidates.some(s => s.conditions.length > 0) || ref.conditions.length > 0;
+      const linkage=candidates.some(symbol=>this.linkageUncertain(ref.location,symbol));
+      const site=linkage?{...ref,inference:{expression:ref.inference?.expression??ref.name,evidence:ref.inference?.evidence??[],incomplete:true,reasons:[...new Set([...(ref.inference?.reasons??[]),'Build link membership is not verified across translation units'])]}}:ref;
+      const ambiguous = linkage || ref.callKind === 'inferred' || !!ref.argument?.inferred || !!ref.inference?.incomplete || !!ref.macroUncertain || candidates.length > 1 || candidates.some(s => s.conditions.length > 0) || ref.conditions.length > 0;
       if (candidates.length > 1 && candidates.every(symbol => symbol.kind === 'macro')) {
         const key = `macro:${ref.name}:${[...candidateIds].sort().join('|')}`;
         const group = groups.get(key) ?? { key, name: ref.name, kind: 'macro' as const, callKind: 'macro' as const, sites: [], definitionCandidates: candidates };
-        group.sites.push({ ...ref, access: undefined, candidates: candidateIds, ambiguous }); groups.set(key, group); continue;
+        group.sites.push({ ...site, access: undefined, candidates: candidateIds, ambiguous }); groups.set(key, group); continue;
       }
       for (const symbol of candidates.length ? candidates : [undefined]) {
         if (replaced && symbol?.kind === 'variable') continue;
@@ -287,7 +303,7 @@ export class RelationIndex {
           kind: symbol?.kind ?? ref.unresolvedKind ?? 'unknown', sites: [], callKind };
         group.callKind ??= callKind;
         if (group.callKind === 'registered' && ref.kind === 'call') group.callKind = callKind;
-        group.sites.push({ ...ref, access: undefined, candidates: candidateIds, ambiguous });
+        group.sites.push({ ...site, access: undefined, candidates: candidateIds, ambiguous });
         groups.set(key, group);
       }
     }
@@ -322,8 +338,10 @@ export class RelationIndex {
       const group = groups.get(key) ?? { key, symbol: owner, name: owner?.name ?? `${ref.name} (${ref.kind})`, kind: owner?.kind ?? target.kind, sites: [] };
       const conditional = candidates.some(s => s.conditions.length > 0);
       const headerStatic = candidates.some(s => s.storage === 'static' && s.location.uri !== ref.location.uri);
-      group.sites.push({ ...ref, access: variable ? ref.access : undefined,
-          ambiguous: ref.callKind === 'inferred' || !!ref.argument?.inferred || !!ref.inference?.incomplete || !!ref.macroUncertain || (!!ref.argument && ref.conditions.length > 0) || candidates.length > 1 || conditional || headerStatic, candidates: candidates.map(s => s.id) });
+      const linkage=this.linkageUncertain(ref.location,target);
+      const site=linkage?{...ref,inference:{expression:ref.inference?.expression??ref.name,evidence:ref.inference?.evidence??[],incomplete:true,reasons:[...new Set([...(ref.inference?.reasons??[]),'Build link membership is not verified across translation units'])]}}:ref;
+      group.sites.push({ ...site, access: variable ? ref.access : undefined,
+          ambiguous: linkage || ref.callKind === 'inferred' || !!ref.argument?.inferred || !!ref.inference?.incomplete || !!ref.macroUncertain || (!!ref.argument && ref.conditions.length > 0) || candidates.length > 1 || conditional || headerStatic, candidates: candidates.map(s => s.id) });
       groups.set(key, group);
     }
     return [...groups.values()].sort((a, b) => a.name.localeCompare(b.name));

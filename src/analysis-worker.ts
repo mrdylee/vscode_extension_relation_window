@@ -6,9 +6,13 @@ import { FileAnalysis, ReferenceRecord } from './model';
 import { AnalysisPhase, WorkerDiagnostics } from './diagnostics';
 import { AnalysisCache, CachedAnalysis } from './analysis-cache';
 import { IncrementalAnalysis } from './incremental-analysis';
+import { BuildAnalysis } from './build-analysis';
+import { BuildEpoch, BuildProfile, BuildSourceScope, fingerprintBuildInput, canonicalBuildUri } from './build-context';
+import { AnalysisWorkBudget } from './analysis-budget';
+import { Minimatch } from 'minimatch';
 const analyzer = createAnalyzer(path.join(workerData.assets, 'web-tree-sitter.wasm'), path.join(workerData.assets, 'tree-sitter-c.wasm'));
 type Request = { id: number; uri: string; text: string; skip: boolean; expandMacros?: boolean; propagateCallbacks?: boolean; type?: 'analyze' }
-  | { type: 'derive'; id: number; analyzeCallbacks?: boolean; cancellation?: SharedArrayBuffer; versions: [string, number, number][] }
+  | { type: 'derive'; id: number; analyzeCallbacks?: boolean; cancellation?: SharedArrayBuffer; versions: [string, number, number][]; buildProfile?: BuildProfile; buildScope?: BuildSourceScope; buildEpoch?: BuildEpoch; buildPending?: boolean }
   | { type: 'cache-init'; id: number; directory: string; key: string; legacyRoots?: string[] }
   | { type: 'cache-restore'; id: number; uri: string; text: string; skip: boolean; expandMacros?: boolean; propagateCallbacks?: boolean }
   | { type: 'cache-validate'; id: number; versions: [string, number, number][]; analyzeCallbacks?: boolean }
@@ -23,6 +27,8 @@ function retainFacts(current: ReferenceRecord[]|undefined, basic: ReferenceRecor
 }
 let cache: AnalysisCache | undefined;
 const incremental = new IncrementalAnalysis();
+const buildAnalysis = new BuildAnalysis(), buildIncremental = new IncrementalAnalysis();
+let activeBuildEpoch: BuildEpoch | undefined;
 let savedVersions = new Map<string, { id: number; stamp: number }>();
 type Snapshot = Map<string, { id: number; stamp: number; file: FileAnalysis }>;
 const restored: Snapshot = new Map();
@@ -49,7 +55,7 @@ function report(force = false) {
   diagnostics.peakHeap = Math.max(diagnostics.peakHeap, sample.heapUsed);
   if (force || sample.at - lastReport >= 500) {
     lastReport = sample.at;
-    parentPort!.postMessage({ type: 'diagnostics', diagnostics });
+    parentPort!.postMessage({ type: 'diagnostics', diagnostics, buildEpoch: activeBuildEpoch });
   }
 }
 function phase(value: AnalysisPhase | 'idle') {
@@ -87,9 +93,10 @@ parentPort!.on('message', (request: Request) => {
     if (request.type === 'diagnostics') { report(true); return; }
     try {
       const parser = await analyzer;
-      if (request.type === 'reset') { raw.clear(); restored.clear(); savedVersions.clear(); derivedSnapshot = undefined; basicSnapshot = undefined; incremental.clear(); parser.reset(); diagnostics = freshDiagnostics(); report(true); return; }
+      if (request.type === 'reset') { raw.clear(); restored.clear(); savedVersions.clear(); derivedSnapshot = undefined; basicSnapshot = undefined; incremental.clear(); buildAnalysis.clear(); buildIncremental.clear(); parser.reset(); diagnostics = freshDiagnostics(); report(true); return; }
       if (request.type === 'cache-init') {
         cache = await AnalysisCache.open(request.directory, request.key); cache.legacyRoots = request.legacyRoots ?? []; restored.clear(); savedVersions.clear(); derivedSnapshot = undefined;
+        await buildAnalysis.setCache(path.join(request.directory, 'build-facts'), request.key);
         parentPort!.postMessage({ id: request.id, result: { state: cache.state,
           ...(cache.reason ? { reason: cache.reason } : {}), ...(cache.savedVersion === undefined ? {} : { savedVersion: cache.savedVersion }) } }); return;
       }
@@ -128,6 +135,7 @@ parentPort!.on('message', (request: Request) => {
         parentPort!.postMessage({ id: request.id, result }); return;
       }
       if (request.type === 'derive') {
+        activeBuildEpoch = request.buildEpoch;
         if (request.versions.some(([uri, id]) => raw.get(uri)?.id !== id)) {
           parentPort!.postMessage({ id: request.id, result: { stale: true, files: [] } }); return;
         }
@@ -141,18 +149,36 @@ parentPort!.on('message', (request: Request) => {
           shouldCancel: cancellation ? () => Atomics.load(cancellation, 0) !== 0 : undefined,
           onProgress: (progress: NonNullable<WorkerDiagnostics['callbacks']>) => {
             diagnostics.callbacks = progress;
-            parentPort!.postMessage({ type: 'callback-progress', requestId: request.id, progress });
+            parentPort!.postMessage({ type: 'callback-progress', requestId: request.id, progress, buildEpoch: request.buildEpoch });
             report();
           }
         };
         const basic = basicSnapshot?.inputs.length===files.length && files.every((file,n)=>basicSnapshot!.inputs[n]===file) ? basicSnapshot.files : parser.basic(files,control,memoryPressure);
         if(!control.shouldCancel?.())basicSnapshot={inputs:files,files:basic};
-        parentPort!.postMessage({type:'basic-result',requestId:request.id,inputs:request.versions.map(([uri,id])=>[uri,id]),
+        parentPort!.postMessage({type:'basic-result',requestId:request.id,buildEpoch:request.buildEpoch,inputs:request.versions.map(([uri,id])=>[uri,id]),
           files:basic.filter((file,n)=>file!==files[n]&&request.versions[n][2]<0).map(file=>({uri:file.uri,projectScoped:file.projectScoped,
             references:file.references.filter(ref=>ref.callKind==='registered'||ref.macroIds!==undefined),functionArguments:file.functionArguments,
             callbackRegistrations:file.callbackRegistrations,callbackDiagnostics:file.callbackDiagnostics,issues:file.issues}))});
         diagnostics.callbacks=undefined;
-        let derived = incremental.derive(files, dirty => parser.derive(dirty, memoryPressure, phase, request.analyzeCallbacks, control), request.analyzeCallbacks);
+        let buildFiles: FileAnalysis[] | undefined;
+        if (request.buildProfile) {
+          const scope = request.buildScope ?? { rootUri: request.buildProfile.entry.rootUri, include: [], exclude: [] };
+          const match = (pattern: string) => new Minimatch(pattern, { dot: true, nonegate: true, nocomment: true, noext: true, nocase: scope.nocase });
+          const includes = scope.include.map(match), excludes = scope.exclude.map(match), root = canonicalBuildUri(scope.rootUri,scope.nocase).replace(/\/$/, '') + '/';
+          const eligibleHeader = (uri: string) => {
+            uri=canonicalBuildUri(uri,scope.nocase);
+            if (!uri.startsWith(root)) return false;
+            const relative = decodeURIComponent(uri.slice(root.length));
+            return (!includes.length || includes.some(m => m.match(relative))) && !excludes.some(m => m.match(relative));
+          };
+          const budget = new AnalysisWorkBudget(undefined, true);
+          const prepared = await buildAnalysis.prepare(parser, files, request.buildProfile, budget, control.shouldCancel, eligibleHeader, fingerprintBuildInput(scope), memoryPressure);
+          const cached = buildAnalysis.cachedDerived(prepared);
+          if (cached) { buildFiles = cached; buildIncremental.seed(prepared, cached, request.analyzeCallbacks); }
+          else buildFiles = buildIncremental.derive(prepared, dirty => parser.derive(dirty, memoryPressure, phase, request.analyzeCallbacks, { ...control, workBudget: budget }), request.analyzeCallbacks);
+          if (!control.shouldCancel?.() && !memoryPressure()) await buildAnalysis.save(prepared, buildFiles);
+        }
+        let derived = request.buildProfile || request.buildPending ? basic : incremental.derive(files, dirty => parser.derive(dirty, memoryPressure, phase, request.analyzeCallbacks, control), request.analyzeCallbacks);
         if(control.shouldCancel?.()||derived.some(file=>file.issues.some(issue=>/memory budget/i.test(issue)))){
           let remaining=64-basic.reduce((total,file)=>total+(file.callbackDiagnostics?.filter(detail=>detail.kind==='cancelled').length??0),0);
           derived=derived.map((file,n)=>{
@@ -180,7 +206,7 @@ parentPort!.on('message', (request: Request) => {
           if (stamp !== request.versions[i][2]) { changed.push(forIndex(file)); versions.push([file.uri, stamp]); }
         });
         restored.clear(); derivedSnapshot = snapshot;
-        parentPort!.postMessage({ id: request.id, result: { stale: false, files: changed, versions } });
+        parentPort!.postMessage({ id: request.id, result: { stale: false, files: changed, versions, buildFiles: buildFiles?.map(forIndex), buildEpoch: request.buildEpoch } });
         phase('idle');
       } else {
         restored.clear(); derivedSnapshot = undefined;

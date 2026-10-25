@@ -503,6 +503,10 @@ function render(state: ViewState) {
   indexStatus.title = indexStatus.textContent ?? '';
   footer.replaceChildren(indexStatus);
   footer.append(localProgress); renderLocal(state.diagnostics);
+  if (state.buildStatus && (state.buildStatus.candidates || state.buildStatus.state === 'error' || state.buildStatus.state === 'partial')) {
+    const build = button('Build', () => send('selectBuildConfiguration'), `${state.buildStatus.label} · ${state.buildStatus.state}\nCommands: ${state.buildStatus.resolved} resolved · ${state.buildStatus.unresolved} unresolved`);
+    footer.append(build);
+  }
   footer.append(copilotProgress); renderCopilot(state.diagnostics?.copilot);
   diagnostics?.update(state.diagnostics, state);
   if (state.issues.length) {

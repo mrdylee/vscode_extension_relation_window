@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { FileAnalysis, Location, ReferenceRecord, SymbolRecord } from './model';
+import { FileAnalysis, Location, ReferenceRecord, SymbolRecord, fileKey, locationKey } from './model';
 import { RelationIndex } from './relations';
 
 export interface CallbackContext {
@@ -8,6 +8,7 @@ export interface CallbackContext {
   snippets: {id: string; location: Location; text: string}[];
   targets: {id: string; name: string; evidenceIds: string[]; trace?: {evidenceId: string; reason: string}[]}[];
   truncated: boolean; preferredTargetId?: string;
+  build?: {profileId:string;unitId:string;fingerprint?:string;linkage:'unverified';macros:{name:string;body:string}[];macrosTruncated:boolean};
 }
 export interface CallbackSite { key: string; file: FileAnalysis; call: ReferenceRecord; expression: string }
 export const callbackDigest = (text: string) => createHash('sha256').update(text).digest('hex');
@@ -28,7 +29,7 @@ export class CallbackContextBuilder {
   private localCandidates = new Map<string, ReferenceRecord[]>();
   private bindings = new RelationIndex();
   addFile(file: FileAnalysis) {
-    this.fileByUri.set(file.uri, file);
+    this.fileByUri.set(fileKey(file), file);
     // Binding needs declarations/includes, not another index of every reference.
     this.bindings.update({...file,references:[],functionArguments:undefined});
     const names = new Set<string>();
@@ -47,7 +48,7 @@ export class CallbackContextBuilder {
     for (const call of file.references) {
       // Non-evaluated expressions (sizeof, _Generic controls) have no access.
       if (call.kind !== 'call' || !call.access) continue;
-      const key = `${file.uri}:${call.location.start}:${call.location.end}`, requested=requestedSites?.has(key);
+      const key = `${locationKey(call.location)}:${call.location.start}:${call.location.end}`, requested=requestedSites?.has(key);
       if (call.inference && !call.inference.incomplete && !requested) continue;
       if (file.inactive?.some(range => call.location.start >= range.start && call.location.start < range.end)) continue;
       if (!requested && !call.indirect && call.callKind !== 'indirect' && !call.inference?.incomplete &&
@@ -66,8 +67,8 @@ export class CallbackContextBuilder {
   private snippet(file: FileAnalysis, start: number, end: number): CallbackContext['snippets'][number] {
     const prefix = file.text.slice(0, start), text = file.text.slice(start, end);
     const line = (prefix.match(/\n/g) ?? []).length, column = start - prefix.lastIndexOf('\n') - 1, newline = text.lastIndexOf('\n');
-    return {id: `${file.uri}:${start}:${end}`, text,
-      location: {uri: file.uri, start, end, line, column, endLine: line + (text.match(/\n/g) ?? []).length,
+    return {id: `${fileKey(file)}:${start}:${end}`, text,
+      location: {uri: file.uri, ...(file.context ? {context:fileKey(file)} : {}), start, end, line, column, endLine: line + (text.match(/\n/g) ?? []).length,
         endColumn: newline < 0 ? column + text.length : text.length - newline - 1}};
   }
   // Reuse the existing object/parameter/getter analysis, rather than joining
@@ -76,12 +77,12 @@ export class CallbackContextBuilder {
     const candidates = this.localCandidates.get(site.key);
     if (!candidates?.length) return;
     const snippets: CallbackContext['snippets'] = [], targets: CallbackContext['targets'] = [];
-    const dependencies = new Set([site.file.uri]);
+    const dependencies = new Set([fileKey(site.file)]);
     let chars = 0;
     const add = (at: Location) => {
-      const file = this.fileByUri.get(at.uri);
+      const file = this.fileByUri.get(locationKey(at));
       if (!file || at.start < 0 || at.end <= at.start || at.end > file.text.length) return;
-      dependencies.add(file.uri);
+      dependencies.add(fileKey(file));
       const previous = snippets.find(item => item.location.uri === at.uri && item.location.start <= at.start && item.location.end >= at.end);
       if (previous) return previous;
       const owner = file.symbols.find(symbol => symbol.kind === 'function' && symbol.definition &&
@@ -97,7 +98,7 @@ export class CallbackContextBuilder {
     for (const candidate of candidates) {
       const symbol = this.symbols.get(candidate.targetId!);
       if (!symbol || symbol.kind !== 'function' || !symbol.definition || targets.some(target => target.id === symbol.id)) continue;
-      dependencies.add(symbol.location.uri);
+      dependencies.add(locationKey(symbol.location));
       const trace: NonNullable<CallbackContext['targets'][number]['trace']> = [];
       for (const evidence of candidate.inference!.evidence) {
         const snippet = add(evidence.location);
@@ -149,14 +150,20 @@ export class CallbackContextBuilder {
       return [uri, digest];
     });
     // A local shortlist is intentionally incomplete, even if no size cap was hit.
-    const fingerprint = callbackDigest(JSON.stringify({selection: 'local-candidates', callsite: site.call.location,
+    const fingerprint = callbackDigest(JSON.stringify({build:this.buildContext(site.file),selection: 'local-candidates', callsite: site.call.location,
       expression: site.expression, targets, snippets: snippets.map(item => item.id), sources}));
-    return {key: site.key, callsite: site.call.location, expression: site.expression, fingerprint,
+    return {build:this.buildContext(site.file),key: site.key, callsite: site.call.location, expression: site.expression, fingerprint,
       selection: 'local-candidates', targets, snippets, truncated: true};
   }
+  private buildContext(file:FileAnalysis):CallbackContext['build'] {
+    const context=file.context;if(!context)return;
+    const all=context.prepared.timeline.filter(event=>event.inherited&&event.value.kind==='define').flatMap(event=>event.value.kind==='define'?[{name:event.value.macro.name,body:event.value.macro.body}]:[]);
+    const macros=all.filter(macro=>macro.name.length<=64&&macro.body.length<=128).slice(0,16);
+    return{profileId:context.profileId,unitId:context.unitId,fingerprint:context.configurationFingerprint,linkage:'unverified',macros,macrosTruncated:macros.length!==all.length};
+  }
   private range(file: FileAnalysis, start: number, end: number) {
-    let ordered = this.ordered.get(file.uri);
-    if (!ordered) { ordered = [...file.references].sort((a,b)=>a.location.start-b.location.start); this.ordered.set(file.uri,ordered); }
+    let ordered = this.ordered.get(fileKey(file));
+    if (!ordered) { ordered = [...file.references].sort((a,b)=>a.location.start-b.location.start); this.ordered.set(fileKey(file),ordered); }
     let low=0, high=ordered.length;
     while (low<high) { const middle=(low+high)>>>1; if(ordered[middle].location.start<start)low=middle+1;else high=middle; }
     const result: ReferenceRecord[]=[];
@@ -167,19 +174,20 @@ export class CallbackContextBuilder {
     const local = this.localContext(site);
     if (local && !preferredTargetId) return local;
     const {file,call,expression,key}=site;
+    const availableChars=maxChars-(file.context?4096:0);
     const identifiers=expression.match(/[A-Za-z_]\w*/g)??[];
     const keywords=new Set(identifiers.filter((name,n)=>n===identifiers.length-1||name.length>=4));
     const preferred=preferredTargetId&&this.symbols.get(preferredTargetId);if(preferred)keywords.add(preferred.name);
     const snippets: CallbackContext['snippets']=[], dependencies=new Set<string>(), visited=new Set<string>(), added=new Set<string>();
     let chars=0,truncated=false;
     const add=(file:FileAnalysis,at:Location,owner?:SymbolRecord)=>{
-      dependencies.add(file.uri);
+      dependencies.add(fileKey(file));
       const extent=owner?.extent;
       const start=extent && extent.end-extent.start<=1800?extent.start:Math.max(0,at.start-400);
       const end=extent && extent.end-extent.start<=1800?extent.end:Math.min(file.text.length,at.end+700);
-      const id=`${file.uri}:${start}:${end}`;
+      const id=`${fileKey(file)}:${start}:${end}`;
       if(added.has(id))return;
-      if(snippets.length>=maxSnippets||chars+end-start>maxChars){truncated=true;return;}
+      if(snippets.length>=maxSnippets||chars+end-start>availableChars){truncated=true;return;}
       added.add(id);chars+=end-start;
       snippets.push(this.snippet(file,start,end));
       if(owner && keywords.size<maxKeywords)keywords.add(owner.name);
@@ -191,7 +199,8 @@ export class CallbackContextBuilder {
     for(let round=0;round<3;round++)for(const name of [...keywords].filter(name=>!visited.has(name))){
       visited.add(name);let hits=0;
       for(const match of this.filesByName.get(name)??[]){
-        dependencies.add(match.uri);
+        if(file.context && match.context && /\.h$/i.test(match.uri) && match.context.unitId!==file.context.unitId)continue;
+        dependencies.add(fileKey(match));
         if(hits>=maxHits){truncated=true;continue;}
         for(const ref of match.references)if(ref.name===name){
           if(++hits>maxHits){truncated=true;break;}
@@ -205,24 +214,24 @@ export class CallbackContextBuilder {
     if([...keywords].some(name=>!visited.has(name)))truncated=true;
     const targets=new Map<string,CallbackContext['targets'][number]>();
     for(const snippet of snippets){
-      const owner=this.fileByUri.get(snippet.location.uri)!;
+      const owner=this.fileByUri.get(locationKey(snippet.location))!;
       for(const ref of this.range(owner,snippet.location.start,snippet.location.end)){
         if(ref.kind!=='reference'||ref.access==='write'||!ref.access)continue;
         const symbol=ref.targetId?this.symbols.get(ref.targetId):undefined;
         if(symbol && symbol.kind!=='function')continue;
-        const options=symbol?.definition?[symbol]:(this.definitions.get(ref.name)??[]).filter(target=>target.storage!=='static'||target.location.uri===owner.uri);
+        const options=symbol?.definition?[symbol]:owner.context?this.bindings.resolveReference({...ref,indirect:false}).filter(target=>target.kind==='function'&&target.definition):(this.definitions.get(ref.name)??[]).filter(target=>target.storage!=='static'||target.location.uri===owner.uri);
         for(const target of options){
           const record=targets.get(target.id)??{id:target.id,name:target.name,evidenceIds:[]};
           if(!record.evidenceIds.includes(snippet.id))record.evidenceIds.push(snippet.id);
-          targets.set(target.id,record);dependencies.add(target.location.uri);
+          targets.set(target.id,record);dependencies.add(locationKey(target.location));
         }
       }
     }
-    const fingerprint=callbackDigest(JSON.stringify({preferredTargetId,expression,callsite:call.location,keywords:[...visited].sort(),
+    const fingerprint=callbackDigest(JSON.stringify({build:this.buildContext(file),preferredTargetId,expression,callsite:call.location,keywords:[...visited].sort(),
       sources:[...dependencies].sort().map(uri=>{
         let digest=this.digests.get(uri);if(!digest){digest=callbackDigest(this.fileByUri.get(uri)!.text);this.digests.set(uri,digest);}return[uri,digest];
       }),snippets:snippets.map(item=>item.id),targets:[...targets.keys()].sort(),truncated}));
-    return{key,callsite:call.location,expression,fingerprint,preferredTargetId,selection:'source-search',snippets,targets:[...targets.values()].slice(0,32),truncated:truncated||targets.size>32};
+    return{build:this.buildContext(file),key,callsite:call.location,expression,fingerprint,preferredTargetId,selection:'source-search',snippets,targets:[...targets.values()].slice(0,32),truncated:truncated||targets.size>32};
   }
 }
 

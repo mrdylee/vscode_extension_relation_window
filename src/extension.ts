@@ -7,6 +7,7 @@ import { registerIssueReporting } from './issue-report-service';
 import { migrateSettings, prepareUpgrade } from './branding-migration';
 import { registerCopilotCallbacks } from './copilot-service';
 import { registerScopeFolders } from './scope-folders';
+import { registerBuildConfigurations } from './build-service';
 
 export async function activate(context: vscode.ExtensionContext) {
   if (!await prepareUpgrade()) return;
@@ -18,6 +19,7 @@ export async function activate(context: vscode.ExtensionContext) {
   registerUpdates(context);
   registerScopeFolders(context);
   const workspace = new WorkspaceIndex(context.extensionPath, context.storageUri?.fsPath);
+  registerBuildConfigurations(context, workspace);
   const copilot = registerCopilotCallbacks(context, workspace);
   const view = new RelationView(workspace, context.extensionUri, copilot.actions);
   registerIssueReporting(context, workspace, view);

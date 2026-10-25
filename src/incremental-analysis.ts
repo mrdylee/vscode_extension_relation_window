@@ -1,4 +1,4 @@
-import { FileAnalysis } from './model';
+import { FileAnalysis, fileKey } from './model';
 
 interface Facts { uses: Set<string>; provides: Set<string>; paste: boolean }
 interface Component { inputs: FileAnalysis[]; results: FileAnalysis[]; analyzeCallbacks: boolean }
@@ -16,32 +16,32 @@ export class IncrementalAnalysis {
       const previous = this.cached.get(key);
       if (previous?.analyzeCallbacks === analyzeCallbacks && inputs.every((file, n) => previous.inputs[n] === file)) {
         next.set(key, previous);
-        previous.results.forEach(file => results.set(file.uri, file));
+        previous.results.forEach(file => results.set(fileKey(file), file));
       } else inputs.forEach(file => dirty.add(file));
     }
     // Keep dirty components in one batch so project work/convergence limits
     // are not multiplied by the number of components.
     if (dirty.size || !files.length) {
       const fresh = derive(files.filter(file => dirty.has(file)));
-      fresh.forEach(file => results.set(file.uri, file));
+      fresh.forEach(file => results.set(fileKey(file), file));
       // Time and memory pressure are transient, not stable source properties.
       // A limited batch can affect any component in it, so retry the whole batch.
       if (!this.limited(fresh)) for (const [key, inputs] of groups) if (!next.has(key)) {
-        next.set(key, { inputs, results: inputs.map(file => results.get(file.uri)!), analyzeCallbacks });
+        next.set(key, { inputs, results: inputs.map(file => results.get(fileKey(file))!), analyzeCallbacks });
       }
     }
     this.cached = next;
-    return files.map(file => results.get(file.uri)!);
+    return files.map(file => results.get(fileKey(file))!);
   }
 
   // Only call after the disk cache has validated the complete source/settings
   // snapshot. Raw IR identities become the inputs for the first subsequent edit.
   seed(rawFiles: FileAnalysis[], derivedFiles: FileAnalysis[], analyzeCallbacks = true): void {
     this.clear();
-    if (rawFiles.length !== derivedFiles.length || rawFiles.some((file, n) => file.uri !== derivedFiles[n].uri) || this.limited(derivedFiles)) return;
-    const results = new Map(derivedFiles.map(file => [file.uri, file]));
+    if (rawFiles.length !== derivedFiles.length || rawFiles.some((file, n) => fileKey(file) !== fileKey(derivedFiles[n])) || this.limited(derivedFiles)) return;
+    const results = new Map(derivedFiles.map(file => [fileKey(file), file]));
     for (const [key, inputs] of this.components(rawFiles)) {
-      this.cached.set(key, { inputs, results: inputs.map(file => results.get(file.uri)!), analyzeCallbacks });
+      this.cached.set(key, { inputs, results: inputs.map(file => results.get(fileKey(file))!), analyzeCallbacks });
     }
   }
 
@@ -57,7 +57,7 @@ export class IncrementalAnalysis {
     // Retaining identifier sets is much smaller than a second token/AST graph.
     // Comments and strings may over-connect files, which is safe for reuse.
     const uses = new Set<string>();
-    for (const match of file.text.matchAll(/[\p{ID_Start}_][\p{ID_Continue}]*/gu)) uses.add(match[0]);
+    for (const match of (file.context?.prepared.maskedText ?? file.text).matchAll(/[\p{ID_Start}_][\p{ID_Continue}]*/gu)) uses.add(match[0]);
     const provides = new Set<string>();
     for (const symbol of file.symbols) {
       if (symbol.storage !== 'local' || symbol.kind === 'type' || symbol.memberOf) provides.add(symbol.name);
@@ -81,7 +81,7 @@ export class IncrementalAnalysis {
 
   private components(files: FileAnalysis[]): Map<string, FileAnalysis[]> {
     const facts = files.map(file => this.dependencies(file));
-    if (facts.some(fact => fact.paste)) return files.length ? new Map([[JSON.stringify(files.map(file => file.uri)), files]]) : new Map();
+    if (facts.some(fact => fact.paste)) return files.length ? new Map([[JSON.stringify(files.map(file => fileKey(file))), files]]) : new Map();
     const parents = files.map((_, i) => i);
     const root = (i: number): number => {
       while (parents[i] !== i) { parents[i] = parents[parents[i]]; i = parents[i]; }
@@ -90,7 +90,7 @@ export class IncrementalAnalysis {
     const join = (a: number, b: number) => { parents[root(a)] = root(b); };
     const providers = new Map<string, number>(), uris = new Map<string, number>(), names = new Map<string, number[]>();
     files.forEach((file, i) => {
-      uris.set(file.uri, i);
+      uris.set(fileKey(file), i);
       const name = file.uri.split('/').pop()!, matches = names.get(name) ?? [];
       matches.push(i); names.set(name, matches);
       for (const name of facts[i].provides) {
@@ -100,6 +100,7 @@ export class IncrementalAnalysis {
     });
     files.forEach((file, i) => {
       for (const name of facts[i].uses) { const owner = providers.get(name); if (owner !== undefined) join(i, owner); }
+      if (file.context) { for (const include of file.context.prepared.resolvedIncludes) { const target = include.key ? uris.get(include.key) : undefined; if (target !== undefined) join(i, target); } return; }
       for (const include of file.includes) {
         const relative = uris.get(new URL(include, file.uri).href);
         if (!file.systemIncludes?.includes(include) && relative !== undefined) { join(i, relative); continue; }
@@ -110,6 +111,6 @@ export class IncrementalAnalysis {
     });
     const groups = new Map<number, FileAnalysis[]>();
     files.forEach((file, i) => { const key = root(i), group = groups.get(key) ?? []; group.push(file); groups.set(key, group); });
-    return new Map([...groups.values()].map(group => [JSON.stringify(group.map(file => file.uri)), group]));
+    return new Map([...groups.values()].map(group => [JSON.stringify(group.map(file => fileKey(file))), group]));
   }
 }

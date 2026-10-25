@@ -13,11 +13,11 @@
 ## 0. 문서 상태와 최신 결정
 
 - 작성 기준: 2026-10-25의 현재 작업 트리. HEAD `ddef1367a7e2bd967c674757912dd0f9b457260a` 이후 미커밋 변경을 포함한다.
-- **구현 계획이며 제품 구현·테스트 통과 기록이 아니다.** 이번 작업은 이 문서와 선행 설계의 결정 요약만 갱신한다.
+- 이 문서 본문은 구현 전에 작성한 계획이다. 이후 `main`의 `c736aeb`에서 만든 `codex/build-context`에서 구현을 진행했으며, 실제 구현 범위·검증·제약은 [구현 검증 보고서](/Users/james_black/work/project/vscode_extension/docs/reviews/2026-10-25-build-context-validation.md)를 기준으로 한다. 아래 미체크 항목을 모두 구현한 것으로 해석하지 않는다.
 - 저장소 루트: `/Users/james_black/work/project/vscode_extension`. 아래 경로와 명령은 이 루트를 기준으로 한다.
 - 선행 설계: [build-context-discovery-design.md](/Users/james_black/work/project/vscode_extension/docs/superpowers/specs/2026-10-25-build-context-discovery-design.md).
 - 최신 사용자 합의가 선행 설계의 넓은 자동 탐색·기록 import 우선 제안보다 우선한다. `compile_commands.json`은 실제 프로젝트에 없고, 생성·로그 수집을 전제하지 않는다.
-- 구현 계획을 요청한 세션이다. 이 문서를 작성한 것만으로 제품 코드 변경·설치·배포가 수행되었다고 보고하지 않는다.
+- 계획 작성 이후 사용자의 구현 진행 지시에 따라 제품 코드를 변경했다. 설치·게시·실제 펌웨어 검증 여부는 위 검증 보고서에서 별도로 구분한다.
 
 ### 채택한 기본안
 

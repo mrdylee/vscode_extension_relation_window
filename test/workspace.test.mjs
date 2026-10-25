@@ -136,6 +136,38 @@ test('cache startup validates content, additions and removals made while the edi
 });
 
 const latest = 'typedef void(*CB)(void);void new_target(void){}void task(void){CB cb=new_target;cb();}';
+test('build profile changes discard a delayed previous result and preserve basic source navigation', async t => {
+  const file = uri('build-main.c'), source = 'typedef void(*CB)(void);void first(void){}void second(void){}\n#if MODE==1\nCB saved=first;\n#else\nCB saved=second;\n#endif\nvoid run(void){saved();}';
+  const { workspace } = fixture(t, [file], { sources: new Map([[file.toString(), source]]) });
+  await workspace.ready; await bounded(workspace.whenIdle());
+  const profile = mode => ({ id: 'build-A', fingerprint: 'mode-' + mode, entry: { id: 'build-A', rootUri: 'file:///review', entryUri: 'file:///review/Makefile', cwdUri: 'file:///review', dialect: 'make', args: [], evidence: [] },
+    units: [{ id: 'unit', fingerprint: String(mode), profileId: 'build-A', sourceUri: file.toString(), cwdUri: 'file:///review', argv: ['gcc', '-c', 'build-main.c'], dialect: 'posix', evidence: [], compiler: 'gcc', status: 'resolved', membership: 'included', builtins: 'unknown', macroActions: [{ kind: 'define', name: 'MODE', replacement: String(mode) }], includeSearch: [], forcedInputs: [], dependencies: [], issues: [] }], coverage: 'partial', dependencies: [], relevantEnvironment: [], issues: [] });
+  const request = workspace.request.bind(workspace); let release, held = false;
+  workspace.request = input => {
+    const result = request(input);
+    if (input.type === 'derive' && input.buildProfile?.fingerprint === 'mode-1' && !held) {
+      result.promise = result.promise.then(value => new Promise(resolve => { held = true; release = () => resolve(value); }));
+    }
+    return result;
+  };
+  const old = workspace.setBuildProfile(profile(1));
+  await bounded((async () => { while (!held) await new Promise(resolve => setTimeout(resolve, 10)); })());
+  const next = workspace.setBuildProfile(profile(2)); release(); await bounded(Promise.all([old, next])); await bounded(workspace.whenIdle());
+  assert.equal(workspace.sourceFiles.size, 1);
+  const run = workspace.index.symbols().find(s => s.name === 'run');
+  assert.deepEqual(Array.from(workspace.index.relations(run.id, 'callees').filter(group => group.callKind === 'inferred'), group => group.name), ['second']);
+  await workspace.setBuildProfile(undefined); await bounded(workspace.whenIdle());
+  assert.ok(workspace.index.files.has(file.toString()));
+});
+test('clearing an unresolved pending build resumes ordinary detailed analysis',async t=>{
+  const file=uri('pending-build.c'),source='typedef void(*CB)(void);void target(void){}CB get(void){return target;}void run(void){get()();}';
+  const {workspace}=fixture(t,[file],{sources:new Map([[file.toString(),source]])});await workspace.ready;await bounded(workspace.whenIdle());
+  workspace.buildPending=true;await workspace.reindex();await bounded(workspace.whenIdle());
+  assert.equal(workspace.copilotSnapshotReady,false);
+  await workspace.setBuildProfile(undefined);await bounded(workspace.whenIdle());
+  assert.equal(workspace.copilotSnapshotReady,true);
+  assert.ok(workspace.index.files.get(file.toString()).references.some(ref=>ref.callKind==='inferred'&&ref.name==='target'));
+});
 test('Stop reaches a busy Worker, keeps partial targets, and Retry reuses parsed sources', async t => {
   const file = uri('stop.c');
   const source = 'typedef void(*CB)(void);void target(void){}static CB cb=target;void run(void){cb();}void busy(void){int i=0;' + 'i++;'.repeat(20000) + '}';

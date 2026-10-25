@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { randomBytes } from 'node:crypto';
 import { WorkspaceIndex } from './workspace';
-import { FileAnalysis, GraphData, GraphNode, Location, SymbolRecord } from './model';
+import { FileAnalysis, GraphData, GraphNode, Location, SymbolRecord, fileKey, locationKey } from './model';
 import { ViewState, nodePreviewId, canExpandNode } from './view-state';
 import { analysisNotices } from './analysis-notices';
 import type { CallbackActions } from './copilot-service';
@@ -28,6 +28,8 @@ export class RelationView implements vscode.Disposable {
   private selection?: string;
   private selectedNodeKey?: string;
   private callbackFocus?: { uri: string; offset: number; text: string };
+  private contextChoices = new Map<string, string>();
+  private choosingContext = false;
   private listener: vscode.Disposable;
   private preferences: vscode.Disposable;
   private diagnosticsListener: vscode.Disposable;
@@ -106,6 +108,19 @@ export class RelationView implements vscode.Disposable {
     });
     if (!contextOnly) { this.publish(); void this.applyPanelLayout(); }
   }
+  private get index() { const uri = this.state.locked && this.root ? this.root.uri : this.lastEditor?.document.uri.toString() ?? this.root?.uri; return uri ? this.workspace.indexFor(uri) : this.workspace.index; }
+  private contextKey(uri: string) { const key = this.contextChoices.get(uri); return key && this.index.files.has(key) ? key : uri; }
+  private async chooseContext(editor: vscode.TextEditor, files: FileAnalysis[]) {
+    if (this.choosingContext) return;
+    this.choosingContext = true;
+    try {
+      const selected = await vscode.window.showQuickPick(files.map((file, n) => {
+        const unit = this.workspace.buildProfile?.units.find(unit => unit.id === file.context?.unitId);
+        return {label:unit ? vscode.workspace.asRelativePath(vscode.Uri.parse(unit.sourceUri)) : `Source context ${n+1}`, description:`Header variant ${n+1}`, key:fileKey(file)};
+      }), {title:'Select the source file that includes this header'});
+      if (selected && this.lastEditor === editor) { this.contextChoices.set(editor.document.uri.toString(), selected.key); this.track(editor, true); }
+    } finally { this.choosingContext = false; }
+  }
   track(editor: vscode.TextEditor | undefined, explicit = false) {
     if (!editor || !/\.[ch]$/i.test(editor.document.uri.path)) return false;
     this.lastEditor = editor;
@@ -115,16 +130,18 @@ export class RelationView implements vscode.Disposable {
     const word = editor.document.getWordRangeAtPosition(position, /[A-Za-z_][A-Za-z0-9_]*/);
     if (!word) return false;
     const uri = editor.document.uri.toString(), offset = editor.document.offsetAt(word.start);
-    const foundCallback = this.workspace.index.callbackAt(uri, offset);
+    const contexts = this.index.contextsAt(uri);
+    if (contexts.length > 1 && this.contextKey(uri) === uri) { void this.chooseContext(editor, contexts); return false; }
+    const foundCallback = this.index.callbackAt(this.contextKey(uri), offset);
     const callback = this.state.analyzeCallbacks || foundCallback?.targets.length ? foundCallback : undefined;
     if (callback) {
       if (this.callbackFocus?.uri === uri && this.callbackFocus.offset === offset && this.state.callback) return false;
       this.activity.fire('callback-selection');
-      this.callbackFocus = { uri, offset, text: this.workspace.index.files.get(uri)!.text.slice(callback.location.start, callback.location.end) };
+      this.callbackFocus = { uri, offset, text: this.index.fileAt(uri)!.text.slice(callback.location.start, callback.location.end) };
       this.root = undefined; this.selection = undefined; this.selectedNodeKey = undefined; this.expanded = {};
       this.state.graph = undefined; this.state.candidates = []; this.refresh(); return true;
     }
-    const candidates = this.workspace.index.resolveAt(uri, offset);
+    const candidates = this.index.resolveAt(this.contextKey(uri), offset);
     if (!candidates.length) { this.pendingTrack = true; return false; }
     if (candidates.length > 1) {
       this.root = undefined; this.selection = undefined; this.selectedNodeKey = undefined; this.expanded = {};
@@ -149,25 +166,32 @@ export class RelationView implements vscode.Disposable {
     this.state.diagnostics = this.workspace.diagnostics;
     this.state.skipInactive = this.workspace.skipInactive;
     this.state.status = this.workspace.status;
-    this.state.fileCount = this.workspace.index.files.size;
-    this.state.callbackDiagnostics = [...this.workspace.index.files.values()].flatMap(file => file.callbackDiagnostics ?? []).slice(0, 64);
+    const activeUri=this.lastEditor?.document.uri.toString();
+    if(activeUri&&this.workspace.buildProfile){
+      const membership=this.workspace.buildMembership(activeUri);
+      if(membership==='unknown'||membership==='excluded')this.state.status+=' · Basic navigation: build membership '+membership;
+      else if(!this.workspace.skipInactive)this.state.status+=' · All preprocessing branches shown';
+    }
+    this.state.buildStatus = this.workspace.buildStatus;
+    this.state.fileCount = new Set([...this.index.files.values()].map(file=>file.uri)).size;
+    this.state.callbackDiagnostics = [...this.index.files.values()].flatMap(file => file.callbackDiagnostics ?? []).slice(0, 64);
     this.state.issues = [
       ...[...this.workspace.failures].map(([uri, error]) => `${vscode.workspace.asRelativePath(vscode.Uri.parse(uri))}: ${error}`),
-      ...analysisNotices([...this.workspace.index.files.values()], uri => vscode.workspace.asRelativePath(vscode.Uri.parse(uri)))
+      ...analysisNotices([...this.index.files.values()], uri => vscode.workspace.asRelativePath(vscode.Uri.parse(uri)))
     ];
     if (this.root) {
-      let symbol = this.workspace.index.symbol(this.root.id);
+      let symbol = this.index.symbol(this.root.id);
       if (!symbol || symbol.name !== this.root.name) {
-        const matches = this.workspace.index.symbols().filter(s => s.name === this.root!.name && s.location.uri === this.root!.uri && s.definition);
+        const matches = this.index.symbols().filter(s => s.name === this.root!.name && s.location.uri === this.root!.uri && s.definition);
         symbol = matches.length === 1 ? matches[0] : undefined;
         if (symbol) { this.root.id = symbol.id; this.expanded = {}; this.selection = symbol.id; }
       }
       if (symbol) {
         const key = JSON.stringify([symbol.id, this.state.mode, this.state.depth, this.expanded, this.state.accessFilter, this.state.calleeSort, this.state.includeFunctionArguments]);
-        const files = [...this.workspace.index.files.values()], previous = this.graphSnapshot;
+        const files = [...this.index.files.values()], previous = this.graphSnapshot;
         if (previous?.key === key && files.length === previous.files.length && files.every((file, n) => file === previous.files[n])) this.state.graph = previous.graph;
         else {
-          this.state.graph = this.workspace.index.graph(symbol.id, this.state.mode, this.state.depth, this.expanded, this.state.accessFilter, this.state.calleeSort, this.state.includeFunctionArguments);
+          this.state.graph = this.index.graph(symbol.id, this.state.mode, this.state.depth, this.expanded, this.state.accessFilter, this.state.calleeSort, this.state.includeFunctionArguments);
           this.graphSnapshot = { key, files, graph: this.state.graph };
         }
       } else { this.state.graph = undefined; this.graphSnapshot = undefined; }
@@ -175,8 +199,8 @@ export class RelationView implements vscode.Disposable {
     } else this.graphSnapshot = undefined;
     this.locations.clear(); this.nodes.clear();
     if (this.callbackFocus) {
-      const focus = this.callbackFocus, callback = this.workspace.index.callbackAt(focus.uri, focus.offset);
-      this.state.callback = callback && this.workspace.index.files.get(focus.uri)?.text.slice(callback.location.start, callback.location.end) === focus.text ? callback : undefined;
+      const focus = this.callbackFocus, callback = this.index.callbackAt(this.contextKey(focus.uri), focus.offset);
+      this.state.callback = callback && this.index.fileAt(focus.uri)?.text.slice(callback.location.start, callback.location.end) === focus.text ? callback : undefined;
       if (this.state.callback) {
         this.selection = `callback:${focus.uri}@${this.state.callback.location.start}`;
         this.locations.set(this.selection, { location: this.state.callback.location, label: `Callback · ${this.state.callback.expression}` });
@@ -202,7 +226,7 @@ export class RelationView implements vscode.Disposable {
   }
   private preview(id: string) {
     const selected = this.locations.get(id);
-    const file = selected && this.workspace.index.files.get(selected.location.uri);
+    const file = selected && this.index.fileAt(selected.location.uri, selected.location.context);
     if (!selected || !file) { this.state.context = undefined; return; }
     const lines = file.text.split('\n');
     const firstLine = Math.max(0, selected.location.line - 80);
@@ -218,7 +242,7 @@ export class RelationView implements vscode.Disposable {
   }
   private pinNode(key: string | undefined) {
     const id = key ? this.nodes.get(key)?.symbolId : undefined;
-    const symbol = id ? this.workspace.index.symbol(id) : undefined;
+    const symbol = id ? this.index.symbol(id) : undefined;
     if (!symbol) return;
     this.state.locked = true;
     this.pendingTrack = false;
@@ -229,6 +253,7 @@ export class RelationView implements vscode.Disposable {
   async handleMessage(message: unknown) {
     if (!message || typeof message !== 'object') return;
     const m = message as Record<string, unknown>;
+    if (m.type === 'selectBuildConfiguration') { await vscode.commands.executeCommand('dynsight.selectBuildConfiguration'); return; }
     if(m.type === 'copyFunctionName') {
       if(typeof m.requestId !== 'string'||!m.requestId.length||m.requestId.length>128)return;
       let ok=false;if(typeof m.name==='string'&&m.name.length>0&&m.name.length<=4096)try{await vscode.env.clipboard.writeText(m.name);ok=true;}catch{/* UI keeps selectable text on clipboard failure. */}
@@ -240,7 +265,7 @@ export class RelationView implements vscode.Disposable {
         if(!this.callbackActions)throw new Error('Callback actions are unavailable.');
         const site=[...this.nodes.values()].flatMap(node=>node.sites).find(site=>site.id===m.actionId&&site.kind==='call'&&site.access);
         if(!site)throw new Error('The callback changed. Open its popup again.');
-        const handle={siteKey:`${site.location.uri}:${site.location.start}:${site.location.end}`,targetId:site.targetId,overrideKey:site.manual?.overrideKey};
+        const handle={siteKey:`${locationKey(site.location)}:${site.location.start}:${site.location.end}`,targetId:site.targetId,overrideKey:site.manual?.overrideKey};
         let data:Record<string,unknown>={};
         if(m.type==='callbackSearch') {if(typeof m.query!=='string'||m.query.length>512)return;data={choices:await this.callbackActions.search(handle,m.query)};}
         if(m.type==='callbackSetTarget') {if(typeof m.targetId!=='string')return;await this.callbackActions.setTarget(handle,m.targetId);data={saved:true};this.refresh();}
@@ -291,6 +316,7 @@ export class RelationView implements vscode.Disposable {
         // A preview may lag behind an unsaved edit. Never jump using stale coordinates.
         if (line >= document.lineCount || document.lineAt(line).text !== text) return;
         const position = new vscode.Position(line, column);
+        if(preview.location.context)this.contextChoices.set(preview.location.uri,preview.location.context);
         const range = new vscode.Range(position, position);
         const editor = await vscode.window.showTextDocument(document, {
           viewColumn: this.lastEditor?.viewColumn ?? vscode.ViewColumn.One, selection: range, preview: true
@@ -302,8 +328,8 @@ export class RelationView implements vscode.Disposable {
       case 'choose': if (typeof m.id === 'string') {
         let choices = this.state.candidates;
         if (this.callbackFocus) {
-          const focus = this.callbackFocus, current = this.workspace.index.callbackAt(focus.uri, focus.offset);
-          choices = current && this.workspace.index.files.get(focus.uri)?.text.slice(current.location.start, current.location.end) === focus.text ? current.targets : [];
+          const focus = this.callbackFocus, current = this.index.callbackAt(this.contextKey(focus.uri), focus.offset);
+          choices = current && this.index.fileAt(focus.uri)?.text.slice(current.location.start, current.location.end) === focus.text ? current.targets : [];
         }
         const symbol = choices.find(s => s.id === m.id);
         if (symbol) this.setRoot(symbol); else if (this.callbackFocus) this.refresh();
@@ -337,6 +363,7 @@ export class RelationView implements vscode.Disposable {
         this.openingSource = true;
         try {
           const loc = target.location;
+          if(loc.context)this.contextChoices.set(loc.uri,loc.context);
           await vscode.window.showTextDocument(vscode.Uri.parse(loc.uri), { viewColumn: this.lastEditor?.viewColumn ?? vscode.ViewColumn.One,
             selection: new vscode.Range(loc.line, loc.column, loc.endLine, loc.endColumn), preview: true });
         } finally { setTimeout(() => { this.openingSource = false; }, 150); }

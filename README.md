@@ -489,3 +489,11 @@ npm run package
 F5로 Extension Development Host를 실행할 수 있습니다. 예제는 `examples/demo`입니다. 자동 검증 범위는 분석 단위 테스트, 실제 Extension Host의 선택·옵션·편집·파일 변경, 브라우저의 그래프·Context·키보드 연결입니다. 사용자 실제 프로젝트 전체의 정확도를 보증하는 결과는 아닙니다.
 
 설계와 실행 계획은 `docs/superpowers/`에 있습니다. 종속 컴포넌트 라이선스는 `THIRD_PARTY_NOTICES.txt`에 포함했습니다.
+
+### Make 빌드 구성 적용
+
+**Dynsight: Select Build Configuration**에서 기존 Makefile 또는 `.sh`·`.bat`·`.cmd` 진입점을 선택할 수 있습니다. 일반 Include/Exclude로 발견한 C/H의 폴더와 상위 경로에서 후보를 찾고, 선택한 진입점의 실제 Make include·하위 Make·스크립트 호출을 따라 파일별 옵션과 출처를 확인합니다. 모듈 안의 여러 `.mk`와 공유 설정을 지원하며 `compile_commands.json`은 필요하지 않습니다. 스크립트와 compiler를 실행하지 않습니다.
+
+지원되는 정적 GCC 옵션은 조건·헤더 검색·매크로 확장에 적용됩니다. 같은 헤더의 TU별 정적 변수와 함수는 분리하며, 필요한 경우 해당 헤더를 포함한 소스 문맥을 선택합니다. 일반/Smart Include·Exclude는 유지하고 소스 편집 시 빌드 설정 캐시를 재사용합니다. 설정 파일을 수정한 뒤에는 자동 갱신하거나 **Dynsight: Refresh Build Configuration**으로 근거를 다시 확인할 수 있습니다.
+
+동적 shell/Make 표현식, 미확인 compiler 옵션, 제외된 필수 헤더는 미확정으로 표시합니다. 현재 Diab 전용 옵션·compiler 기본 환경·최종 링크 소속은 검증하지 않으므로 전체 빌드 완전성을 보증하지 않습니다. 활성 코드 자체의 callback 한도와 전파 비용은 그대로 남습니다. `skipInactive=false`는 모든 분기 보기이며 빌드 조건으로 분기를 제거하지 않습니다.

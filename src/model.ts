@@ -18,6 +18,7 @@ export type TypedExpression =
   | { kind: 'index'; object: TypedExpression; initializer?: boolean }
   | { kind: 'dereference' | 'address'; object: TypedExpression };
 export interface Location {
+  context?: string;
   uri: string; start: number; end: number; line: number; column: number;
   endLine: number; endColumn: number;
 }
@@ -68,6 +69,7 @@ export interface FlowProgram { id: string; locals: FlowLocal[]; params: string[]
 export interface GlobalInitializer { id: string; value: FlowExpression; location: Location }
 export interface MacroBranch { key: string; value: boolean; condition: string }
 export interface MacroDefinition {
+  opaque?: boolean;
   name: string; parameters?: string[]; variadic?: string; body: string;
   location: Location; conditions: string[]; branches?: MacroBranch[];
 }
@@ -104,6 +106,7 @@ export interface CallbackDiagnostic {
   costs?: { symbol: string; location?: Location; runs: number; cacheHits: number; evaluations: number; elapsedMs: number; invalidations?: Partial<Record<'first-run' | 'parameters' | 'heap' | 'callees' | 'regions' | 'shapes', number>> }[];
 }
 export interface FileAnalysis {
+  context?: { profileId: string; unitId: string; key: string; configurationFingerprint?: string; prepared: import('./preprocessor-context').PreparedOccurrence };
   analysisPolicy?: FileAnalysisPolicy;
   uri: string; text: string; symbols: SymbolRecord[]; references: ReferenceRecord[];
   includes: string[]; issues: string[]; systemIncludes?: string[];
@@ -122,6 +125,8 @@ export interface FileAnalysis {
   callbackDiagnostics?: CallbackDiagnostic[];
   statementConditions?: { start: number; conditions: string[] }[];
 }
+export const fileKey = (file: FileAnalysis) => file.context?.key ?? file.uri;
+export const locationKey = (location: Location) => location.context ?? location.uri;
 export interface RelationSite extends ReferenceRecord { ambiguous: boolean; candidates: string[] }
 export interface RelationGroup {
   key: string; symbol?: SymbolRecord; name: string; kind: Kind; sites: RelationSite[]; callKind?: CallKind;

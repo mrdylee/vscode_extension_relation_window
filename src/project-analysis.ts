@@ -1,5 +1,5 @@
 import { AnalysisWorkBudget } from './analysis-budget';
-import { FileAnalysis, FlowExpression, FlowProgram, GlobalInitializer, Location, MacroBranch, PreprocessorEvent, ReferenceRecord } from './model';
+import { FileAnalysis, FlowExpression, FlowProgram, GlobalInitializer, Location, MacroBranch, PreprocessorEvent, ReferenceRecord, fileKey, locationKey } from './model';
 import { identifier, joinTokens, locationIn, tokenizeC } from './c-tokens';
 import { MacroChoice, MacroExpander, macroMemoryLimit } from './macro-expansion';
 import { combineBranches, outsideBranches } from './preprocessor-branches';
@@ -16,6 +16,7 @@ const macroCancelled = 'Macro analysis cancelled; call relationships may be inco
 const macroWorkLimit = 'Macro analysis work limit reached; some calls remain unexpanded';
 const unknownInclude = 'Macro definition lookup includes unavailable or opaque headers';
 function timeline(file: FileAnalysis, files: Map<string, FileAnalysis>, issues: Set<string>, dependencies: Set<FileAnalysis>, memoryPressure?: () => boolean, shouldCancel?: () => boolean, referenceNames?: Set<string>, summaries?: Map<string, IncludeSummary>): Event[] {
+  if (file.context) { dependencies.add(file); return file.context.prepared.timeline; }
   const result: Event[] = [];
   const defined = new Set<string>();
   const uncertainGuards = new Set<string>();
@@ -214,21 +215,21 @@ function environment(events: Event[], issues: Set<string>, bindingsOnly = false)
   };
 }
 export function bindMacroReferences(raw: FileAnalysis[], owner: Analyze, shouldCancel?: () => boolean, memoryPressure?: () => boolean): FileAnalysis[] {
-  const files = new Map(raw.map(file => [file.uri, file])), definitions = new Map<string, string[]>();
+  const files = new Map(raw.map(file => [fileKey(file), file])), definitions = new Map<string, string[]>();
   for (const file of raw) for (const symbol of file.symbols) if (symbol.kind === 'macro') {
     const ids=definitions.get(symbol.name)??[];ids.push(symbol.id);definitions.set(symbol.name,ids);
   }
   const names = new Set(definitions.keys());
-  const nameKey = [...names].sort().join('\n'), paths = raw.map(file => file.uri).join('\n');
+  const nameKey = [...names].sort().join('\n'), paths = raw.map(file => fileKey(file)).join('\n');
   const summaries = new Map<string, IncludeSummary>();
   let cache = bindingCaches.get(owner); if (!cache) bindingCaches.set(owner, cache = new Map());
   for (const uri of cache.keys()) if (!files.has(uri)) cache.delete(uri);
   return raw.map(file => {
-    const previous = cache!.get(file.uri);
-    if (previous && previous.raw.symbols !== file.symbols) cache!.delete(file.uri);
+    const previous = cache!.get(fileKey(file));
+    if (previous && previous.raw.symbols !== file.symbols) cache!.delete(fileKey(file));
     if (file.projectScoped || shouldCancel?.() || memoryPressure?.()) return file;
-    if (!file.references.some(ref => ref.kind !== 'declaration' && !ref.indirect && !ref.member && !ref.targetId)) { cache!.delete(file.uri); return file; }
-    if (previous?.raw === file && previous.names === nameKey && previous.paths === paths && [...previous.dependencies].every(dep => files.get(dep.uri) === dep)) return previous.result;
+    if (!file.references.some(ref => ref.kind !== 'declaration' && !ref.indirect && !ref.member && !ref.targetId)) { cache!.delete(fileKey(file)); return file; }
+    if (previous?.raw === file && previous.names === nameKey && previous.paths === paths && [...previous.dependencies].every(dep => files.get(fileKey(dep)) === dep)) return previous.result;
     const wanted = new Set(file.references.filter(ref => ref.kind !== 'declaration' && !ref.indirect && !ref.member && !ref.targetId && names.has(ref.name)).map(ref => ref.name));
     const issues = new Set<string>(), dependencies = new Set<FileAnalysis>([file]);
     const events = wanted.size ? timeline(file, files, issues, dependencies, memoryPressure, shouldCancel, wanted, summaries) : [];
@@ -237,16 +238,16 @@ export function bindMacroReferences(raw: FileAnalysis[], owner: Analyze, shouldC
     const references = file.references.map(ref => {
       if (!wanted.has(ref.name) || ref.kind === 'declaration' || ref.indirect || ref.member || ref.targetId) return ref;
       const choices = lookup(ref.name, ref.location.start), incomplete = issues.size > 0 || choices.some(choice=>choice.branches.some(branch=>branch.condition.includes('Unknown header:')));
-      const macroIds = incomplete ? definitions.get(ref.name)! : [...new Set(choices.flatMap(choice => choice.macro ? [`${choice.macro.location.uri}#${choice.macro.location.start}`] : []))];
+      const macroIds = incomplete && !file.context ? definitions.get(ref.name)! : [...new Set(choices.flatMap(choice => choice.macro ? [`${locationKey(choice.macro.location)}#${choice.macro.location.start}`] : []))];
       return { ...ref, macroIds, macroUncertain: incomplete || (macroIds.length > 0 && choices.some(choice => !choice.macro)) };
     });
     const result = { ...file, references, projectScoped: true, issues: [...file.issues, ...[...issues].filter(issue => issue !== unknownInclude)
       .map(issue => issue.replace(/^Macro include/, 'Macro definition lookup'))] };
-    cache!.set(file.uri, { raw: file, names: nameKey, paths, dependencies, result }); return result;
+    cache!.set(fileKey(file), { raw: file, names: nameKey, paths, dependencies, result }); return result;
   });
 }
 function activeText(file: FileAnalysis, start: number, end: number) {
-  let text = file.text.slice(start, end);
+  let text = (file.context?.prepared.maskedText ?? file.text).slice(start, end);
   const directives = file.splitStatements?.length ? file.directives?.filter(range => !file.splitStatements!.some(group => range.start >= group.start && range.start < group.end)) : file.directives;
   for (const range of [...(file.inactive ?? []), ...(directives ?? [])]) {
     const a = Math.max(0, range.start - start), b = Math.min(text.length, range.end - start);
@@ -280,15 +281,15 @@ function sharedFlowStructure() {
 // The analyzer callback uses the already initialized C parser, in the Worker.
 export function deriveMacroCalls(raw: FileAnalysis[], analyze: Analyze, parseCalls: (uri: string, text: string, original?: (start: number, end: number) => Location, namespace?: string, context?: (location: Location) => string[]) => { references: ReferenceRecord[]; issues: string[]; programs: FlowProgram[]; initializers: GlobalInitializer[] },
   parseInitializer: (uri: string, text: string, original: (start: number, end: number) => Location, context?: (location: Location) => string[]) => { value: FlowExpression; issues: string[] }, memoryPressure?: () => boolean, analyzeCallbacks = true, shouldCancel?: () => boolean, budget?: AnalysisWorkBudget): FileAnalysis[] {
-  const files = new Map(raw.map(file => [file.uri, file]));
+  const files = new Map(raw.map(file => [fileKey(file), file]));
   let cache = caches.get(analyze); if (!cache) caches.set(analyze, cache = new Map());
   for (const uri of cache.keys()) if (!files.has(uri)) cache.delete(uri);
-  const paths = raw.map(file => file.uri).join('\n');
+  const paths = raw.map(file => fileKey(file)).join('\n');
   return raw.map(file => {
-    if (file.expandMacros === false) { cache!.delete(file.uri); return file; }
-    if (!file.functions?.length && !file.initializers?.length) { cache!.delete(file.uri); return file; }
-    const previous = cache!.get(file.uri);
-    if (!shouldCancel?.() && previous?.raw === file && !previous.result.issues.some(issue=>/work limit|cancelled/i.test(issue)) && previous.analyzeCallbacks === analyzeCallbacks && previous.paths === paths && [...previous.dependencies].every(dep => files.get(dep.uri) === dep) &&
+    if (file.expandMacros === false) { cache!.delete(fileKey(file)); return file; }
+    if (!file.functions?.length && !file.initializers?.length) { cache!.delete(fileKey(file)); return file; }
+    const previous = cache!.get(fileKey(file));
+    if (!shouldCancel?.() && previous?.raw === file && !previous.result.issues.some(issue=>/work limit|cancelled/i.test(issue)) && previous.analyzeCallbacks === analyzeCallbacks && previous.paths === paths && [...previous.dependencies].every(dep => files.get(fileKey(dep)) === dep) &&
       (!previous.result.issues.includes(macroMemoryLimit) || memoryPressure?.())) return previous.result;
     const dependencies = new Set<FileAnalysis>();
     const issues = new Set<string>();
@@ -300,8 +301,8 @@ export function deriveMacroCalls(raw: FileAnalysis[], analyze: Analyze, parseCal
         references: file.references.map(ref => ref.kind === 'call' ? { ...ref,
           inference: { expression: ref.name, evidence: [], incomplete: true, reasons: [reason] } } : ref),
         issues: [...file.issues, ...issues] };
-      if (reason === macroCancelled) cache!.delete(file.uri);
-      else cache!.set(file.uri, { raw: file, paths, dependencies, result, analyzeCallbacks });
+      if (reason === macroCancelled) cache!.delete(fileKey(file));
+      else cache!.set(fileKey(file), { raw: file, paths, dependencies, result, analyzeCallbacks });
       return result;
     };
     if (shouldCancel?.()) return partial(macroCancelled);
@@ -312,15 +313,16 @@ export function deriveMacroCalls(raw: FileAnalysis[], analyze: Analyze, parseCal
     if (issues.has(macroMemoryLimit)) return partial(macroMemoryLimit);
     if (issues.has(includeLimit)) return partial(includeLimit);
     const lookup = environment(events, issues);
-    const sourceLocation = locationIn(file.text, file.uri);
-    const macroIds = (name: string, offset: number) => [...new Set(lookup(name, offset).flatMap(choice => choice.macro ? [`${choice.macro.location.uri}#${choice.macro.location.start}`] : []))];
+    const originalLocation = locationIn(file.text, file.uri);
+    const sourceLocation: ReturnType<typeof locationIn> = (start, end) => ({...originalLocation(start, end), ...(file.context ? {context:fileKey(file)} : {})});
+    const macroIds = (name: string, offset: number) => [...new Set(lookup(name, offset).flatMap(choice => choice.macro ? [`${locationKey(choice.macro.location)}#${choice.macro.location.start}`] : []))];
     let references = file.references.map(ref => {
       const ids = macroIds(ref.name, ref.location.start);
       return ids.length ? { ...ref, macroIds: ids } : ref;
     });
     if (!events.some(event => event.value.kind === 'define')) {
       const result = { ...file, projectScoped: true };
-      cache!.set(file.uri, { raw: file, paths, dependencies, result, analyzeCallbacks }); return result;
+      cache!.set(fileKey(file), { raw: file, paths, dependencies, result, analyzeCallbacks }); return result;
     }
     // Initializer values feed callback propagation, not ordinary references or
     // literal function arguments. Keep raw facts intact for later re-enabling.
@@ -434,6 +436,6 @@ export function deriveMacroCalls(raw: FileAnalysis[], analyze: Analyze, parseCal
         ? replaced.has(`${ref.name}:${ref.location.start}`) && !ref.macroIds?.length ? [] : [{ ...ref, kind: 'reference' as const }] : [ref]).concat(calls);
     }
     const result = { ...file, programs, initializers, projectScoped: true, references, issues: [...file.issues, ...issues] };
-    cache!.set(file.uri, { raw: file, paths, dependencies, result, analyzeCallbacks }); return result;
+    cache!.set(fileKey(file), { raw: file, paths, dependencies, result, analyzeCallbacks }); return result;
   });
 }

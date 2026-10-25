@@ -1,4 +1,4 @@
-import { FileAnalysis, FlowExpression, Location, ReferenceRecord } from './model';
+import { FileAnalysis, FlowExpression, Location, ReferenceRecord, locationKey } from './model';
 import { RelationIndex } from './relations';
 
 type Call = Extract<FlowExpression, { kind: 'call' }>;
@@ -52,8 +52,8 @@ export class FunctionArguments {
     incomplete ||= !!source.inference?.incomplete;
     reasons = [...reasons, ...(source.inference?.reasons ?? [])];
     const location = call.args[n].location, callee = expression(call.callee);
-    let rows = this.records.get(source.location.uri);
-    if (!rows) this.records.set(source.location.uri, rows = new Map());
+    let rows = this.records.get(locationKey(source.location));
+    if (!rows) this.records.set(locationKey(source.location), rows = new Map());
     for (const [targetId, chain] of targets) {
       const target = this.index.symbol(targetId);
       if (target?.kind !== 'function') continue;

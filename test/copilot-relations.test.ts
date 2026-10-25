@@ -39,7 +39,7 @@ for (const mode of ['callees', 'both']) test(`AI candidate navigation previews i
   const module = {exports:{} as any};
   runInNewContext(viewBundle, {module, exports:module.exports, process, Buffer, URL, setTimeout, clearTimeout,
     require:(name:string) => name === 'vscode' ? vscode : require(name)});
-  const view = new module.exports.RelationView({index, changed:new Emitter(), diagnosticsChanged:new Emitter(),
+  const view = new module.exports.RelationView({index,indexFor:()=>index, changed:new Emitter(), diagnosticsChanged:new Emitter(),
     failures:new Map(), skipInactive:true, status:'Index ready'}, {});
   try {
     view.state.mode = mode; view.setRoot(root);

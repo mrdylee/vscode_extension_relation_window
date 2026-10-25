@@ -27,7 +27,7 @@ function harness(layout = 'combined') {
   const module = { exports: {} as any };
   runInNewContext(bundle, { module, exports: module.exports, process, Buffer, URL, setTimeout, clearTimeout, require: (name: string) => name === 'vscode' ? vscode : require(name) });
   const index = new RelationIndex();
-  const view = new module.exports.RelationView({ index, changed: new Emitter(), diagnosticsChanged: new Emitter(), failures: new Map(), skipInactive: true, status: 'Index ready' }, {});
+  const view = new module.exports.RelationView({ index, indexFor: () => index, changed: new Emitter(), diagnosticsChanged: new Emitter(), failures: new Map(), skipInactive: true, status: 'Index ready' }, {});
   const update = (value: string) => { config.set('contextLayout', value); settings.fire({ affectsConfiguration: (key: string) => key === 'dynsight.contextLayout' }); return view.panelLayout; };
   return { view, index, commands, errors, copied, update, pause: (value?: () => Promise<void>) => { pause = value; } };
 }

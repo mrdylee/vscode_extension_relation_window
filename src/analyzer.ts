@@ -1,7 +1,8 @@
 import { AnalysisWorkBudget } from './analysis-budget';
 import { Parser, Language, Node } from 'web-tree-sitter';
 import { CallbackAnalysisOptions, CallbackProgress } from './model';
-import { Access, FileAnalysis, FlowExpression, Location, ReferenceRecord, SymbolRecord } from './model';
+import { Access, FileAnalysis, FlowExpression, Location, ReferenceRecord, SymbolRecord, fileKey, locationKey } from './model';
+import { contextualizeFacts } from './build-analysis';
 import { aggregateId, declaredType, declarator, initializerMember, typedExpression } from './type-info';
 import { bindMacroReferences, clearMacroCache, deriveMacroCalls } from './project-analysis';
 import { flowFacts } from './flow-parser';
@@ -101,13 +102,14 @@ export async function createAnalyzer(runtime: string, grammar: string) {
     tree.delete(); return recovered;
   }
   const statusCache = new WeakMap<FileAnalysis, FileAnalysis>();
-  const analyzer = { analyze(uri: string, text: string, skipInactive = true, policy?: import('./model').FileAnalysisPolicy): FileAnalysis {
+  const analyzer = { analyze(uri: string, text: string, skipInactive = true, policy?: import('./model').FileAnalysisPolicy, context?: FileAnalysis['context']): FileAnalysis {
     const recovery: InitializerRecovery = { directives: [], inactive: [], contexts: [], separators: [] };
-    const tree = parseSource(text, recovery, skipInactive);
+    const tree = parseSource(skipInactive && context ? context.prepared.maskedText : text, recovery, skipInactive);
     if (!tree) throw new Error('C parser returned no tree');
     const file: FileAnalysis = { uri, text, analysisPolicy: policy, expandMacros: policy?.expandMacros, symbols: [], references: [], includes: [], issues: [] };
     if (recovery.directives.length) file.directives = recovery.directives;
     if (recovery.inactive.length) file.inactive = recovery.inactive;
+    if (context && skipInactive) file.inactive = [...(file.inactive ?? []), ...context.prepared.inactive];
     const nodes: Node[] = [];
     const conditions = new Map<number, string[]>();
     const branches = new Map<number, import('./model').MacroBranch[]>();
@@ -350,7 +352,7 @@ export async function createAnalyzer(runtime: string, grammar: string) {
     if(policy?.propagateCallbacks === false) { file.registrationPrograms = facts.programs; file.registrationInitializers = facts.initializers; }
     else Object.assign(file, facts);
     tree.delete();
-    return file;
+    return context ? contextualizeFacts(file, context) : file;
   }, calls(uri: string, text: string, original?: (start: number, end: number) => Location, namespace = '', context?: (location: Location) => string[]) {
     const tree = parseSource(text);
     if (!tree) throw new Error('C parser returned no expanded tree');
@@ -361,7 +363,7 @@ export async function createAnalyzer(runtime: string, grammar: string) {
     function visit(node: Node, owner?: string) {
       if (node.type === 'function_definition') {
         const body = node.childForFieldName('body'), name = declarator(node.childForFieldName('declarator')!).name;
-        if (body && name) visit(body, `${uri}#${locate(name).start}`); return;
+        if (body && name) visit(body, `${locationKey(locate(name))}#${locate(name).start}`); return;
       }
       if (['sizeof_expression', 'alignof_expression', 'attribute_specifier', 'attribute_declaration'].includes(node.type)) return;
       if (owner && node.type === 'call_expression') {
@@ -392,7 +394,7 @@ export async function createAnalyzer(runtime: string, grammar: string) {
     files = bindMacroReferences(files, analyzer.analyze, options.shouldCancel, memoryPressure);
     const index = new RelationIndex(); files.forEach(file=>index.update(file));
     const argumentsFound = new FunctionArguments(files,index);
-    const facts=files.map(file=>{const values=argumentsFound.forFile(file.uri);return values.length?{...file,functionArguments:values}:file;});
+    const facts=files.map(file=>{const values=argumentsFound.forFile(fileKey(file));return values.length?{...file,functionArguments:values}:file;});
     return suggestExplicitCallbacks(files,facts,options);
   }, reset() {
     clearMacroCache(analyzer.analyze); clearPointerCache(analyzer.analyze);
@@ -414,7 +416,9 @@ export async function createAnalyzer(runtime: string, grammar: string) {
     const partial = !memoryLimited && analyzeCallbacks && !options.shouldCancel?.() ? suggestPartialCallbacks(expanded, derived, memoryPressure, options.shouldCancel) : derived;
     return (memoryLimited ? partial : suggestExplicitCallbacks(files, partial, control, expanded)).map(file => {
       const cached = statusCache.get(file); if(cached && !options.shouldCancel?.())return cached;
+      const buildReasons=file.context?file.issues.filter(issue=>/^(?:Build preprocessing:|Build options are incomplete)/.test(issue)):[];
       const references = file.references.map((ref): ReferenceRecord => {
+      if(buildReasons.length&&ref.kind==='call'&&ref.access)return{...ref,inference:{expression:ref.inference?.expression??ref.name,evidence:ref.inference?.evidence??[],incomplete:true,reasons:[...new Set([...(ref.inference?.reasons??[]),...buildReasons])]},analysis:{status:'unresolved',reasons:buildReasons}};
       if(ref.kind !== 'call' || !ref.access || (!ref.indirect && !ref.inference?.incomplete))return ref;
       const reasons = ref.inference?.reasons ?? [];
       const status = options.shouldCancel?.() ? 'cancelled' : memoryLimited || reasons.some(reason=>/memory/i.test(reason)) ? 'memory-limit' :
