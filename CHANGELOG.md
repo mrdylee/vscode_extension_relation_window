@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.1.77 — 2026-10-25
+
+- Discover existing Make build configurations from indexed source directories and
+  their ancestors. Follow selected script, Make include and sub-make connections,
+  including multiple modules and nested `.mk` files, without running build tools.
+- Apply supported file-specific GCC defines, undefines and header search options
+  to local macro/callback analysis. Keep separate translation-unit header facts,
+  source navigation, Relation/Context views and existing AI callback context.
+- Reuse build metadata on source edits, refresh changed dependencies, persist
+  contextual analysis and reject stale configuration results. General and Smart
+  Analysis scopes and existing work/memory/callback limits remain in force.
+- Include folder pickers, conservative firmware output/test exclusions, callback
+  registration/precision fixes and the compact progress footer since 0.1.76.
+- Advance analysis cache compatibility to 13. Rebuild incompatible saved indexes;
+  user-confirmed callbacks remain stored separately and may require review when
+  the source or build configuration changes.
+- Dynamic Make/shell expressions, Diab-specific options, compiler defaults and
+  final link membership remain unverified. Real firmware performance and complete
+  callback coverage are not guaranteed; partial reasons remain visible.
+
+## 0.1.76 — 2026-10-23
+
+- Avoid treating ordinary numeric conditions and data-only array reads as callback
+  dependency roots, while retaining actual callback selectors, aliases and side effects.
+- Deduplicate identical cached member layouts and reuse bounded, analysis-local
+  storage paths. Skip empty region queries and redundant region registration;
+  preserve callback candidates, wildcard writes, byte ranges and existing limits.
+- Distinguish blocked source preparation from active analysis, and show current
+  partial results for source failures, file-count limits and stopped Workers.
+- Raise analysis cache compatibility from 8 to 9 for the dependency corrections.
+  Older saved analysis is rebuilt; user-confirmed callbacks remain separate.
+- Publish Windows, macOS and WSL downloads with universal and legacy updater aliases.
+  Large-project analysis can still be slow or Partial. Project-strategy AI and
+  ELF integration remain designs and are not included as runtime features.
+
 ## 0.1.75 — 2026-10-23
 
 - Consolidate paths into Include, Exclude, Smart Analysis Include and Exclude.
