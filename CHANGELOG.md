@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.79 — 2026-10-25
+
+- Ship the Windows batch/Make and GCC/Diab context fixes listed in 0.1.78. The immutable 0.1.78 tag did not publish because the existing native diagnostic test failed on Windows.
+- Synchronize that test with actual file indexing and View diagnostics rather than a fixed delay. Keep its mutation-limit and deletion assertions unchanged.
+
 ## 0.1.78 — 2026-10-25
 
 - Repair Windows batch build discovery: case-insensitive environment and metadata names, PATH assignments, direct batch transfers, and read-only generated cfg/mk overlays.

@@ -711,15 +711,26 @@ export async function run() {
   await vscode.workspace.fs.writeFile(limitUri, Buffer.from('typedef void(*LimitCB)(void);void limit_target(void){}LimitCB data[300];void limit_update(void){\n' +
     Array.from({length:270},(_,n)=>`data[${n}]=limit_target;`).join('\n') +
     '\n}void limit_run(void){LimitCB cb=limit_target;cb();}'));
-  await new Promise(resolve=>setTimeout(resolve,500)); await api.workspace.whenIdle();
-  const limit = api.view.state.callbackDiagnostics.find((detail:any)=>detail.symbol==='limit_update');
+  const waitForLimit = async (expected:boolean) => {
+    const deadline=Date.now()+10_000;
+    do {
+      await api.workspace.whenIdle();
+      // Worker idle does not include the file watcher or the View's 70ms refresh timer.
+      api.view.refresh();
+      const detail=api.view.state.callbackDiagnostics.find((item:any)=>item.symbol==='limit_update');
+      if(api.workspace.sourceFiles.has(limitUri.toString())===expected&&!!detail===expected)return detail;
+      await new Promise(resolve=>setTimeout(resolve,50));
+    } while(Date.now()<deadline);
+    assert.fail(`limit_update diagnostic did not become ${expected?'present':'absent'}: ${api.workspace.status}`);
+  };
+  const limit = await waitForLimit(true);
   assert.equal(limit.kind,'mutation');
   assert.equal(limit.location.uri,limitUri.toString());
   assert.ok(limit.scopeEvaluations>0);
   assert.ok(api.view.state.issues.some((issue:string)=>/callback-limits.c:\d+ · limit_update: Callback mutation limit/.test(issue)));
   assert.match(api.workspace.status,/Partial index: analysis limits/);
   await vscode.workspace.fs.delete(limitUri);
-  await new Promise(resolve=>setTimeout(resolve,500)); await api.workspace.whenIdle();
+  await waitForLimit(false);
   assert.equal(api.view.state.callbackDiagnostics.some((detail:any)=>detail.symbol==='limit_update'),false,'deleted limits must not persist in the view');
   const layoutUri = vscode.Uri.joinPath(root, 'layout-review.c');
   const layoutSource = 'void layout_leaf(void){} void layout_a(void){layout_leaf();} void layout_z(void){} void layout_pivot(void){layout_z();layout_a();layout_z();} void layout_entry(void){layout_pivot();}';
