@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.80 — 2026-10-26
+
+- Restore AI callback detection and displayed targets for basic-navigation files when a selected Build projection is empty or partial. Snapshot and project the same base/contextual indexes used by navigation.
+- Keep basic and translation-unit AI evidence searches isolated; suppress duplicate raw call sites covered by Build contexts.
+- Preserve cache restoration, manual target search/replacement and removal for fallback call sites. Existing candidate validation, request budgets, analysis cache compatibility and source-scope settings are unchanged.
+
 ## 0.1.79 — 2026-10-25
 
 - Ship the Windows batch/Make and GCC/Diab context fixes listed in 0.1.78. The immutable 0.1.78 tag did not publish because the existing native diagnostic test failed on Windows.

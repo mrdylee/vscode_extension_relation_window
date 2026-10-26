@@ -136,6 +136,14 @@ test('cache startup validates content, additions and removals made while the edi
 });
 
 const latest = 'typedef void(*CB)(void);void new_target(void){}void task(void){CB cb=new_target;cb();}';
+test('selected unresolved Build exposes the same basic callback index used by navigation',async t=>{
+  const file=uri('fallback.c'),{workspace}=fixture(t,[file],{sources:new Map([[file.toString(),latest]])});
+  await workspace.ready;await bounded(workspace.whenIdle());const basic=workspace.index;
+  await workspace.setBuildProfile({id:'unknown-build',fingerprint:'unknown',entry:{id:'unknown-build',rootUri:'file:///review',entryUri:'file:///review/build.bat',cwdUri:'file:///review',dialect:'cmd',args:[],evidence:[]},units:[],coverage:'partial',dependencies:[],relevantEnvironment:[],issues:[]});
+  await bounded(workspace.whenIdle());assert.equal(workspace.indexFor(file.toString()),basic);
+  assert.ok(workspace.callbackIndexes?.includes(basic),'AI must see the same basic index as fallback navigation');
+  assert.equal(workspace.buildMembership(file.toString()),'unknown');
+});
 test('build profile changes discard a delayed previous result and preserve basic source navigation', async t => {
   const file = uri('build-main.c'), source = 'typedef void(*CB)(void);void first(void){}void second(void){}\n#if MODE==1\nCB saved=first;\n#else\nCB saved=second;\n#endif\nvoid run(void){saved();}';
   const { workspace } = fixture(t, [file], { sources: new Map([[file.toString(), source]]) });

@@ -23,6 +23,7 @@ export class WorkspaceIndex implements vscode.Disposable {
   buildPending = false;
   buildStatus?: { label: string; state: 'discovering' | 'ready' | 'partial' | 'error'; candidates: number; resolved: number; unresolved: number };
   get index() { return this.skipInactive && this.buildIndex ? this.buildIndex : this.sourceIndex; }
+  get callbackIndexes() { return this.index===this.sourceIndex?[this.sourceIndex]:[this.sourceIndex,this.index]; }
   get sourceFiles(): ReadonlyMap<string, FileAnalysis> { return this.sourceIndex.files; }
   get buildProfile() { return this.selectedBuild; }
   buildMembership(uri:string) {

@@ -235,8 +235,22 @@ export class CallbackContextBuilder {
   }
 }
 
+// Keep basic fallback lookup independent from translation-unit bindings. Basic
+// copies of covered files are evidence for fallback sites, not duplicate sites.
+class CallbackContextCollection {
+  private basic=new CallbackContextBuilder();
+  private contextual=new CallbackContextBuilder();
+  private covered=new Set<string>();
+  addFile(file:FileAnalysis){if(file.context){this.covered.add(file.uri);this.contextual.addFile(file);}else this.basic.addFile(file);}
+  collectSites(file:FileAnalysis,requested?:ReadonlySet<string>){
+    if(file.context)this.contextual.collectSites(file,requested);
+    else if(!this.covered.has(file.uri))this.basic.collectSites(file,requested);
+  }
+  get sites(){return [...this.basic.sites,...this.contextual.sites];}
+  context(site:CallbackSite,preferred?:string){return(site.file.context?this.contextual:this.basic).context(site,preferred);}
+}
 export async function prepareCallbackContexts(files: readonly FileAnalysis[], current:()=>boolean, requestedSites?: ReadonlySet<string>) {
-  const builder=new CallbackContextBuilder();
+  const builder=new CallbackContextCollection();
   for(let n=0;n<files.length;n++){
     if(!current())break;builder.addFile(files[n]);
     if(n%8===7)await pause();
@@ -250,7 +264,7 @@ export async function prepareCallbackContexts(files: readonly FileAnalysis[], cu
 }
 /** Synchronous helper for small pure fixtures. Runtime uses the yielding builder. */
 export function callbackContexts(files:readonly FileAnalysis[]) {
-  const builder=new CallbackContextBuilder();for(const file of files)builder.addFile(file);
+  const builder=new CallbackContextCollection();for(const file of files)builder.addFile(file);
   for(const file of files)builder.collectSites(file);
   return builder.sites.map(site=>builder.context(site));
 }

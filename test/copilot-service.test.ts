@@ -76,6 +76,36 @@ async function harness(denied=false, timeoutMs?:number, siteCount=denied?2:1, re
 const settle=()=>new Promise(done=>setTimeout(done,50));
 async function until(check:()=>boolean){const deadline=Date.now()+3000;while(!check()&&Date.now()<deadline)await new Promise(done=>setTimeout(done,10));assert.ok(check(),'service did not reach the expected state');}
 const firstSite=(h:Awaited<ReturnType<typeof harness>>)=>({siteKey:callbackContexts([...h.workspace.index.files.values()])[0].key});
+for(const partial of [false,true])test(`selected ${partial?'partial':'empty'} Build preserves basic-index AI callback edges`,async t=>{
+  const h=await harness();t.after(h.dispose);
+  h.config.set('copilotCallbacks',true);h.config.set('copilotModel','model-a');
+  h.addFile('file:///registration.c','struct Ops{void(*cb_complete)(void);};void target(void){}void replacement(void){}void configure(struct Ops*p){p->cb_complete=target;}');
+  const basic=h.workspace.index,build=new RelationIndex();
+  if(partial){const parser=await createAnalyzer(path.resolve('node_modules/web-tree-sitter/web-tree-sitter.wasm'),path.resolve('node_modules/tree-sitter-c/tree-sitter-c.wasm'));build.update(parser.analyze('file:///covered.c','void covered(void){}'));}
+  h.workspace.index=build;(h.workspace as any).callbackIndexes=[basic,build];
+  h.setReply(prompt=>{const value=JSON.parse(prompt.split('CONTEXT_JSON\n')[1]),target=value.targets.find((item:any)=>item.name==='target');assert.ok(target);return JSON.stringify({status:'candidates',candidates:[{targetId:target.id,evidenceIds:target.evidenceIds,reason:'Registration chain'}]});});
+  const api=h.start();await api.ready;
+  assert.equal(h.calls.length,1);assert.equal(h.workspace.copilotDiagnostics.candidates,1);
+  assert.ok(basic.files.get('file:///example.c')!.references.some(ref=>ref.callKind==='ai-candidate'));
+  const call=basic.files.get('file:///example.c')!.references.find(ref=>ref.callKind==='ai-candidate')!;
+  assert.equal(basic.callbackAt('file:///example.c',call.location.end-1)?.targets[0].name,'target');
+  h.stop();const calls=h.calls.length;const restored=h.start();await restored.ready;
+  assert.equal(h.calls.length,calls,'restart restores the same basic-context AI cache');
+  assert.ok(basic.files.get('file:///example.c')!.references.some(ref=>ref.callKind==='ai-candidate'));
+  const action={siteKey:callbackContexts([...basic.files.values()])[0].key,targetId:call.targetId};
+  const choices=await restored.actions.search(action,'replacement');assert.equal(choices.length,1);
+  await restored.actions.setTarget(action,choices[0].id);
+  const manual=basic.files.get('file:///example.c')!.references.find(ref=>ref.callKind==='user-confirmed')!;
+  assert.equal(manual.targetId,choices[0].id);
+  await restored.actions.removeOverride({...action,overrideKey:manual.manual!.overrideKey});
+  assert.ok(basic.files.get('file:///example.c')!.references.some(ref=>ref.callKind==='ai-candidate'));
+  h.workspace.index=basic;(h.workspace as any).callbackIndexes=[basic];
+  h.workspace.analysisKey='cleared-build-key';
+  h.workspace.generation++;h.workspace.sourceChanged.fire('configuration');h.workspace.settled.fire();
+  await until(()=>h.workspace.copilotDiagnostics.state==='ready');
+  assert.equal(h.calls.length,calls+1,'changing Build settings revalidates the basic-context result');
+  assert.ok(basic.files.get('file:///example.c')!.references.some(ref=>ref.callKind==='ai-candidate'));
+});
 test('Smart Analysis shares include/exclude while Copilot runs independently of Macro',async t=>{
   const h=await harness();t.after(h.dispose);
   h.config.set('smartAnalysis.copilot',true);h.config.set('copilotModel','model-a');

@@ -900,6 +900,9 @@ export async function run() {
   await new Promise(resolve=>setTimeout(resolve,300));await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');await buildPicker;
   await api.workspace.whenIdle();
   assert.equal(api.workspace.buildProfile.units[0].sourceUri,buildSourceUri.toString(),'native build picker applies the Make source command');
+  assert.equal(api.workspace.callbackIndexes.length,2);
+  assert.ok(api.workspace.callbackIndexes.includes(api.workspace.indexFor(pointerUri.toString())),
+    'AI retains the basic callback index used by files outside the selected compile projection');
   const buildDocument=await vscode.workspace.openTextDocument(buildSourceUri),buildEditor=await vscode.window.showTextDocument(buildDocument);
   const buildPosition=buildDocument.positionAt(buildSource.lastIndexOf('native_cb();')+2);
   buildEditor.selection=new vscode.Selection(buildPosition,buildPosition);api.view.state.locked=false;api.view.track(buildEditor,true);

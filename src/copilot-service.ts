@@ -6,8 +6,8 @@ import { WorkspaceIndex } from './workspace';
 import { CopilotCallbackController, CallbackHint, CopilotSnapshot, CopilotProgress } from './copilot-callbacks';
 import { prepareCallbackContexts, CallbackSite } from './copilot-context';
 import { applyCallbackHints } from './copilot-relations';
-import { CallbackOverrideStore, makeCallbackOverride } from './callback-overrides';
-import { Location, SymbolRecord, locationKey } from './model';
+import { CallbackOverrideStore, makeCallbackOverride, ResolvedOverride } from './callback-overrides';
+import { Location, SymbolRecord, fileKey, locationKey } from './model';
 import { analysisConfiguration, configured, smartAnalysisScope } from './analysis-policy';
 
 export interface CallbackActionHandle { siteKey: string; targetId?: string; overrideKey?: string }
@@ -29,6 +29,13 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
     (configured<boolean>(config, 'smartAnalysis.copilot') ?? config.get('copilotCallbacks', false)); };
   const canAnalyze = () => !workspace.hasDirtySources && (workspace.copilotSnapshotReady ?? workspace.stable);
   const configuredModel = () => vscode.workspace.getConfiguration('dynsight').get<string>('copilotModel', '').trim();
+  const indexes=()=>workspace.callbackIndexes??[workspace.index];
+  const indexForSite=(site:CallbackSite)=>indexes().find(index=>index.files.has(fileKey(site.file)))??workspace.index;
+  function resolvedOverrides(){
+    const values=new Map<string,ResolvedOverride>(),rank={'inactive':0,'needs-review':1,'active':2};
+    for(const index of indexes())for(const value of overrides.resolve(index))if(!values.has(value.record.key)||rank[value.status]>rank[values.get(value.record.key)!.status])values.set(value.record.key,value);
+    return [...values.values()];
+  }
   function status(value: string) { activity.state = value; workspace.copilotDiagnostics = {...activity}; workspace.diagnosticsChanged.fire(); }
   function progress(value: CopilotProgress) {
     for (const key of ['total', 'completed', 'remaining', 'failures', 'candidates', 'notFound', 'contextLimited', 'excluded'] as const) activity[key] = value[key] ?? 0;
@@ -49,14 +56,15 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
   }
   function project() {
     if (disposed) return;
-    const resolved=overrides.resolve(workspace.index);
+    const resolved=resolvedOverrides();
     activity.manualReview=resolved.filter(value=>value.status==='needs-review').length;activity.manualInactive=resolved.filter(value=>value.status==='inactive').length;
     const manual = resolved.filter(value => value.status !== 'active' || detailed(value.record.uri));
-    applyCallbackHints(workspace.index, [...hints.values()].filter(hint => enabled() && eligible(hint.callsite.uri)), workspace.hasDirtySources ? [] : manual);
+    for(const index of indexes())applyCallbackHints(index, [...hints.values()].filter(hint => enabled() && eligible(hint.callsite.uri)), workspace.hasDirtySources ? [] : manual);
     workspace.copilotDiagnostics={...activity};workspace.diagnosticsChanged.fire();workspace.changed.fire();
   }
   function snapshot(): CopilotSnapshot {
-    const files = [...workspace.index.files.values()].map(file => file.references.some(ref => ['ai-candidate', 'user-confirmed'].includes(ref.callKind ?? '')) ?
+    const all=new Map(indexes().flatMap(index=>[...index.files.values()].map(file=>[fileKey(file),file] as const)));
+    const files = [...all.values()].map(file => file.references.some(ref => ['ai-candidate', 'user-confirmed'].includes(ref.callKind ?? '')) ?
       {...file, references: file.references.filter(ref => !['ai-candidate', 'user-confirmed'].includes(ref.callKind ?? ''))} : file);
     return {generation: workspace.generation, settingsKey: workspace.analysisKey, scopeRevision: revision, files, callsiteUris: new Set(files.filter(file => eligible(file.uri)).map(file => file.uri))};
   }
@@ -140,7 +148,7 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
       }
       if (epoch !== revision || disposed || automaticPaused || !canAnalyze()) return;
       setup(); if (!controller) throw new Error('Copilot storage is unavailable.');
-      value.excludedCallsiteKeys = new Set(overrides.resolve(workspace.index).filter(item => item.status === 'active').map(item => `${locationKey(item.site!.location)}:${item.site!.location.start}:${item.site!.location.end}`));
+      value.excludedCallsiteKeys = new Set(resolvedOverrides().filter(item => item.status === 'active').map(item => `${locationKey(item.site!.location)}:${item.site!.location.start}:${item.site!.location.end}`));
       const result = await controller.analyzeUnresolved(value, {reason: 'enabled', automatic: true});
       if (result.stale || epoch !== revision || confirmedRevision !== manualRevision) return;
       for (const hint of result.hints) hints.set(hint.key, hint);
@@ -159,7 +167,7 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
   function schedule() { clearTimeout(timer); timer = setTimeout(() => { void analyzeAutomatically().catch(() => status('request-failed')); }, 10); }
   async function siteFor(action: CallbackActionHandle) {
     if (!canAnalyze()) throw new Error('Save source changes and wait for basic navigation to be ready.');
-    const confirmed=action.overrideKey&&overrides.resolve(workspace.index).find(value=>value.record.key===action.overrideKey&&value.status==='active'&&
+    const confirmed=action.overrideKey&&resolvedOverrides().find(value=>value.record.key===action.overrideKey&&value.status==='active'&&
       `${locationKey(value.site!.location)}:${value.site!.location.start}:${value.site!.location.end}`===action.siteKey);
     const value = snapshot();
     if(confirmed)value.preferredTargetId=confirmed.target!.id;
@@ -169,9 +177,10 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
     return {site, snapshot: value};
   }
   function compatibility(site: CallbackSite, target: SymbolRecord): CallbackTargetChoice['compatibility'] {
+    const index=indexForSite(site);
     const members=site.file.references.filter(ref=>ref.member&&ref.location.start>=site.call.location.start&&ref.location.end<=site.call.location.end);
-    const bindings = members.length ? members.flatMap(ref=>workspace.index.resolveReference(ref)) : workspace.index.resolveReference(site.call);
-    const signatures = bindings.flatMap(symbol => symbol.signature ? [symbol.signature] : workspace.index.symbols().filter(type => type.kind === 'type' && type.name === symbol.type?.name && type.signature).map(type => type.signature!));
+    const bindings = members.length ? members.flatMap(ref=>index.resolveReference(ref)) : index.resolveReference(site.call);
+    const signatures = bindings.flatMap(symbol => symbol.signature ? [symbol.signature] : index.symbols().filter(type => type.kind === 'type' && type.name === symbol.type?.name && type.signature).map(type => type.signature!));
     const actual = target.signature;
     if (!actual?.parameters || !signatures.length) return 'unknown';
     const known = signatures.filter(value => value.parameters); if (!known.length) return 'unknown';
@@ -188,19 +197,19 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
   const actions = {
     async search(action: CallbackActionHandle, query: string): Promise<CallbackTargetChoice[]> {
       const {site} = await siteFor(action), text = query.trim().toLowerCase();
-      return workspace.index.symbols().filter(symbol => symbol.kind === 'function' && symbol.definition && symbol.name.toLowerCase().includes(text)).slice(0, 50)
+      return indexForSite(site).symbols().filter(symbol => symbol.kind === 'function' && symbol.definition && symbol.name.toLowerCase().includes(text)).slice(0, 50)
         .map(target => ({id: target.id, name: target.name, location: target.location, compatibility: compatibility(site, target), reason: compatibility(site, target) === 'incompatible' ? 'Function signature does not match the callback.' : undefined}));
     },
     async setTarget(action: CallbackActionHandle, targetId: string) {
-      const {site} = await siteFor(action), target = workspace.index.symbol(targetId);
+      const {site} = await siteFor(action), index=indexForSite(site),target = index.symbol(targetId);
       if (!target || compatibility(site, target) === 'incompatible') throw new Error('Choose a compatible indexed function.');
       const existing = action.overrideKey ? overrides.records().find(value => value.key === action.overrideKey) : undefined;
-      const original = existing ? overrides.resolve(workspace.index).find(value => value.record.key === existing.key)?.original?.id : action.targetId;
+      const original = existing ? resolvedOverrides().find(value => value.record.key === existing.key)?.original?.id : action.targetId;
       if (!original) throw new Error('Choose an AI candidate to replace.');
       const dependencies = [...(existing?.dependencies.map(value=>value.uri)??[]),
         ...(hints.get(action.siteKey)?.candidates.flatMap(value => value.evidence.map(at => at.uri)) ?? []),
         ...(suggestions.get(action.siteKey)?.result.candidates.filter(value=>value.targetId===targetId).flatMap(value=>value.evidence.map(at=>at.uri))??[])];
-      const record = makeCallbackOverride(workspace.index, site.call.location, original, targetId, dependencies), generation = workspace.generation;
+      const record = makeCallbackOverride(index, site.call.location, original, targetId, dependencies), generation = workspace.generation;
       await persist(next => { if (generation !== workspace.generation || !canAnalyze()) throw new Error('The source changed. Choose the target again.'); if (existing) next.remove(existing.key); next.set(record); });
     },
     async removeOverride(action: CallbackActionHandle) { if (!action.overrideKey) throw new Error('No manual override selected.'); await persist(next => next.remove(action.overrideKey!)); },
@@ -216,7 +225,7 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
       if (!await selectModel() || epoch !== revision) throw new Error('Copilot model selection cancelled.');
       setup(); if (!controller) throw new Error('Copilot storage is unavailable.');
       value.scopeRevision = revision;
-      if(action.overrideKey)value.preferredTargetId=overrides.resolve(workspace.index).find(value=>value.record.key===action.overrideKey)?.target?.id;
+      if(action.overrideKey)value.preferredTargetId=resolvedOverrides().find(value=>value.record.key===action.overrideKey)?.target?.id;
       const active = controller; status('analyzing');
       const task = (async () => {
         const result = await active.analyzeSite(value, action.siteKey, {recheck});
@@ -234,7 +243,7 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
         }
         activity.cacheHits += Number(hint.cached); status(result.stopped ? 'stopped' : 'ready');
         if (!action.overrideKey) return {hint};
-        const selected = overrides.resolve(workspace.index).find(value => value.record.key === action.overrideKey)?.target;
+        const selected = resolvedOverrides().find(value => value.record.key === action.overrideKey)?.target;
         const suggestionId = randomUUID(); suggestions.set(action.siteKey, {id: suggestionId, result: hint, manualRevision});
         return {hint, suggestionId, comparison: hint.candidates.some(value => value.targetId === selected?.id) ? 'agrees' as const : hint.candidates.length ? 'different' as const : 'insufficient' as const};
       })(); running = task;
