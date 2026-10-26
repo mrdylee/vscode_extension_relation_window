@@ -892,7 +892,7 @@ export async function run() {
   await vscode.workspace.getConfiguration('dynsight').update('skipInactive',true,vscode.ConfigurationTarget.Workspace);
   await vscode.workspace.getConfiguration('dynsight').update('smartAnalysis.include',['**'],vscode.ConfigurationTarget.Workspace);
   await vscode.workspace.fs.writeFile(buildSourceUri,Buffer.from(buildSource));
-  const makeText=(mode:number)=>`CC=${mode===1?'gcc':'dcc'}\nOBJS := $(addprefix objects/,native.o)\nall: $(OBJS)\n$(OBJS): CFLAGS := -DMODE=${mode}\nobjects/native.o: native-build-context.c\n\t$(CC) $(CFLAGS) -c $< -o $@\n`;
+  const makeText=(mode:number)=>`MODE=${mode}\nifeq "$(MODE)" "1"\nCC=gcc\nelse\nCC=dcc\nendif\ndefine FLAGS_${mode}\n$(foreach key,MODE,-D$(key)=${mode})\nendef\nOBJS := $(addprefix objects/,native.o)\nall: $(OBJS)\n$(OBJS): CFLAGS := $(FLAGS_$(MODE))\nobjects/native.o: native-build-context.c\n\t$(CC) $(CFLAGS) -c $< -o $@\n`;
   await vscode.workspace.fs.writeFile(makeUri,Buffer.from(makeText(1)));
   await new Promise(resolve=>setTimeout(resolve,500));await api.workspace.whenIdle();
   await vscode.commands.executeCommand('dynsight.refreshBuildConfiguration');

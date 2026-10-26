@@ -1,6 +1,7 @@
 import { BuildEntry, BuildEvidence, BuildFileSystem, BuildProfile, buildDirectory, canonicalBuildUri, fingerprintBuildInput, normalizeCompileContext, resolveBuildUri, splitBuildWords } from './build-context';
 
 import { expandMake, makePattern, MakeVariable } from './build-make-expression';
+import { MAKE_EXTRACTION_VERSION, MakeStatement, parseMakefile } from './build-make-parser';
 type Variable = MakeVariable;
 interface Rule { targets: string[]; prerequisites: string[]; recipes: { text: string; evidence: BuildEvidence }[] }
 const unknown = '\u0000';
@@ -78,73 +79,71 @@ export async function extractStaticBuildOptions(fs: BuildFileSystem, entry: Buil
     });
     async function assign(vs:Map<string,Variable>,name:string,operator:string,raw:string,evidence:BuildEvidence,exported=false,literal=false){
       const old=vs.get(name);if(old?.origin==='command'||operator==='?='&&old)return;
-      const simple=operator===':='||operator==='+='&&old?.simple===true;
+      const simple=(operator===':='||operator==='::=')||operator==='+='&&old?.simple===true;
       const next=simple&&!literal?await expand(raw,vs,evidence,{},cwd):raw;
       if(makeControls.has(name)&&next.trim())issue('unsupported-make-environment',`Make control variable is not interpreted: ${name}`,evidence);
       vs.set(name,{value:operator==='+='&&old?old.value+' '+next:next,simple,origin:'file',exported:exported||old?.exported||old?.origin==='environment'});
     }
-    async function parse(uri: string, nesting: number) {
-      if(nesting>32||reading.has(uri)){issue('include-cycle',`Make include cycle/depth at ${uri}`);return;}
-      const text=await read(uri);if(text===undefined)return;reading.add(uri);
-      let current:Rule|undefined,definition:{name:string;lines:string[];depth:number}|undefined;
-      const conditionals:{parent:boolean;value:boolean|undefined;otherwise:boolean}[]=[];let active=true;
-      for(const {text:original,line} of logicalLines(text)){
-        const evidence={uri,line,expression:original};
-        if(++operations>20_000){issue('extraction-limited','Build statement limit',evidence);break;}
-        const value=original.replace(/(?<!\\)#.*$/,'').trim();
-        if(definition){if(/^define\s/.test(value))definition.depth++;if(value==='endef'&&!--definition.depth){if(active)variables.set(definition.name,{value:definition.lines.join('\n'),simple:false,origin:'file'});definition=undefined;}else definition.lines.push(original);continue;}
-        const define=/^define\s+([A-Za-z_]\w*)$/.exec(value);if(define){definition={name:define[1],lines:[],depth:1};current=undefined;continue;}
-        if(/^\t/.test(original)){if(active&&current)current.recipes.push({text:original.trim(),evidence});continue;}
-        if(!value)continue;
-        const condition=/^(ifeq|ifneq|ifdef|ifndef)\s+(.+)$/.exec(value);
-        if(condition){let known:boolean|undefined;
-          if(active){
-            const expression=await expand(condition[2],variables,evidence,{},cwd);
-            if(!expression.includes(unknown)){
-              if(condition[1]==='ifdef'||condition[1]==='ifndef'){known=!!variables.get(expression.trim())?.value;if(condition[1]==='ifndef')known=!known;}
-              else {const pair=/^\(([^,]*),([^)]*)\)$/.exec(expression);if(pair)known=condition[1]==='ifeq'?pair[1].trim()===pair[2].trim():pair[1].trim()!==pair[2].trim();}
-            }
-            if(known===undefined)issue('unsupported-condition',`Unresolved Make condition: ${value}`,evidence);
+    async function evaluate(statements: MakeStatement[], nesting: number): Promise<void> {
+      for (const statement of statements) {
+        const evidence = statement.evidence;
+        if (++operations > 20_000) { issue('extraction-limited', 'Build statement limit', evidence); return; }
+        if (statement.kind === 'unsupported') { issue(statement.code, statement.message, evidence); continue; }
+        if (statement.kind === 'condition') {
+          for (const branch of statement.branches) {
+            if (!branch.operator) { await evaluate(branch.body, nesting); break; }
+            const left = await expand(branch.left ?? '', variables, evidence, {}, cwd);
+            const right = await expand(branch.right ?? '', variables, evidence, {}, cwd);
+            if ((left + right).includes(unknown)) { issue('unsupported-condition', 'Unresolved Make condition', evidence); break; }
+            let matches = branch.operator === 'ifdef' || branch.operator === 'ifndef'
+              ? !!variables.get(left.trim())?.value : left === right;
+            if (branch.operator === 'ifndef' || branch.operator === 'ifneq') matches = !matches;
+            if (matches) { await evaluate(branch.body, nesting); break; }
           }
-          conditionals.push({parent:active,value:known,otherwise:false});active=active&&known!==false;current=undefined;continue;
-        }
-        if(value==='else'){const c=conditionals.at(-1);if(!c||c.otherwise)issue('invalid-condition','Unexpected Make else',evidence);else{c.otherwise=true;active=c.parent&&c.value!==true;}current=undefined;continue;}
-        if(value==='endif'){const c=conditionals.pop();if(!c)issue('invalid-condition','Unexpected Make endif',evidence);active=c?.parent??true;current=undefined;continue;}
-        if(!active||conditionals.some(c=>c.value===undefined)){current=undefined;continue;}
-        const include=/^(include|-include|sinclude)\s+(.+)$/.exec(value);
-        if(include){for(const path of words(await expand(include[2],variables,evidence,{},cwd),'posix',evidence)){
-          if(/[\u0000*?]/.test(path)){issue('unsupported-include',`Unresolved Make include: ${path}`,evidence);continue;}
-          const next=resolveBuildUri(cwd,path);
-          if(include[1]!=='include'&&await read(next,evidence,true)===undefined)continue;
-          await parse(next,nesting+1);
-        }current=undefined;continue;}
-        const specific=/^([^:]+):\s*([A-Za-z_]\w*)\s*(:=|\?=|\+=|=)\s*(.*)$/.exec(value);
-        if(specific){
-          const targets=words(await expand(specific[1],variables,evidence,{},cwd),'posix',evidence);
-          for(const target of targets){
-            let raw=specific[4];const priorFailure=failed;
-            if(specific[3]===':='){
-              const vs=new Map(variables);
-              for(const prior of matchingVariables(target))await assign(vs,prior.name,prior.operator,prior.raw,prior.evidence,false,true);
-              raw=await expand(raw,vs,evidence,{},cwd);
-            }
-            failed=priorFailure;targetVariables.push({targets:[target],name:specific[2],operator:specific[3],raw,evidence});
+        } else if (statement.kind === 'include') {
+          for (const path of words(await expand(statement.value, variables, evidence, {}, cwd), 'posix', evidence)) {
+            if (/[\u0000*?]/.test(path)) { issue('unsupported-include', `Unresolved Make include: ${path}`, evidence); continue; }
+            const next = resolveBuildUri(cwd, path);
+            if (statement.optional && await read(next, evidence, true) === undefined) continue;
+            await parse(next, nesting + 1);
           }
-          current=undefined;continue;
+        } else if (statement.kind === 'assignment') {
+          if (statement.targets !== undefined) {
+            const targets = words(await expand(statement.targets, variables, evidence, {}, cwd), 'posix', evidence);
+            for (const target of targets) {
+              let raw = statement.value;
+              const priorFailure = failed;
+              if (statement.operator === ':=' || statement.operator === '::=') {
+                const vs = new Map(variables);
+                for (const prior of matchingVariables(target)) await assign(vs, prior.name, prior.operator, prior.raw, prior.evidence, false, true);
+                raw = await expand(raw, vs, evidence, {}, cwd);
+              }
+              failed = priorFailure;
+              targetVariables.push({ targets: [target], name: statement.name, operator: statement.operator, raw, evidence });
+            }
+          } else await assign(variables, statement.name, statement.operator, statement.value, evidence, statement.exported);
+        } else if (statement.kind === 'export') {
+          for (const name of words(await expand(statement.names, variables, evidence, {}, cwd), 'posix', evidence)) {
+            const old = variables.get(name);
+            variables.set(name, { value: old?.value ?? '', simple: old?.simple ?? true, origin: old?.origin ?? 'file', exported: true });
+          }
+        } else if (statement.kind === 'rule') {
+          const targets = words(await expand(statement.targets, variables, evidence, {}, cwd), 'posix', evidence);
+          if (targets.some(t => /[\u0000*?]/.test(t))) { issue('unsupported-target', 'Unresolved Make target', evidence); continue; }
+          const prerequisites = words(await expand(statement.prerequisites, variables, evidence, {}, cwd), 'posix', evidence);
+          if (statement.orderOnly) prerequisites.push('|', ...words(await expand(statement.orderOnly, variables, evidence, {}, cwd), 'posix', evidence));
+          rules.push({ targets, prerequisites, recipes: statement.recipes });
+          if (!defaultTarget && !targets[0]?.startsWith('.') && !targets[0]?.includes('%')) defaultTarget = targets[0];
         }
-        const assignment=/^(?:export\s+)?([A-Za-z_]\w*)\s*(:=|\?=|\+=|=)\s*(.*)$/.exec(value);
-        if(assignment){await assign(variables,assignment[1],assignment[2],assignment[3],evidence,/^export\s+/.test(value));current=undefined;continue;}
-        if(/^export\s+[A-Za-z_]\w*$/.test(value)){const name=value.split(/\s+/)[1],old=variables.get(name);variables.set(name,{value:old?.value??'',simple:old?.simple??true,origin:old?.origin??'file',exported:true});continue;}
-        const rule=/^([^:]+):([^=]*)$/.exec(value);
-        if(rule&&!/\b(?:override|define|eval)\b/.test(value)){
-          const targets=words(await expand(rule[1],variables,evidence,{},cwd),'posix',evidence);
-          if(targets.some(t=>/[\u0000*?]/.test(t))){issue('unsupported-target',`Unresolved target: ${value}`,evidence);continue;}
-          current={targets,prerequisites:words(await expand(rule[2],variables,evidence,{},cwd),'posix',evidence),recipes:[]};rules.push(current);
-          if(!defaultTarget&&!targets[0]?.startsWith('.')&&!targets[0]?.includes('%'))defaultTarget=targets[0];
-        }else {issue('unsupported-statement',`Unresolved Make statement: ${value}`,evidence);current=undefined;}
       }
-      if(definition)issue('unsupported-statement',`Unclosed Make define in ${uri}`);
-      if(conditionals.length)issue('invalid-condition',`Unclosed Make condition in ${uri}`);reading.delete(uri);
+    }
+    async function parse(uri: string, nesting: number) {
+      if (nesting > 32 || reading.has(uri)) { issue('include-cycle', `Make include cycle/depth at ${uri}`); return; }
+      const text = await read(uri);
+      if (text === undefined) return;
+      reading.add(uri);
+      try { await evaluate(await parseMakefile(text, uri), nesting); }
+      finally { reading.delete(uri); }
     }
     for(const filename of filenames)await parse(resolveBuildUri(cwd,filename),0);
     const visited=new Set<string>(),visiting=new Set<string>();
@@ -267,6 +266,6 @@ export async function extractStaticBuildOptions(fs: BuildFileSystem, entry: Buil
   profile.units.forEach(unit => unit.dependencies.forEach(d => { if (!dependencies.has(d.uri)) profile.dependencies.push(d); }));
   profile.relevantEnvironment = [...usedEnvironment].filter(name => environment[name] !== undefined).sort();
   profile.unresolvedArtifacts=[...new Set(profile.unresolvedArtifacts??[])];
-  profile.fingerprint = fingerprintBuildInput([entry, profile.units.map(u => u.fingerprint), profile.dependencies, profile.relevantEnvironment.map(name => [name, environment[name]]), profile.issues,profile.unresolvedArtifacts]);
+  profile.fingerprint = fingerprintBuildInput([MAKE_EXTRACTION_VERSION, entry, profile.units.map(u => u.fingerprint), profile.dependencies, profile.relevantEnvironment.map(name => [name, environment[name]]), profile.issues,profile.unresolvedArtifacts]);
   return profile;
 }

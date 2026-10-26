@@ -120,3 +120,13 @@ and repairs the four proven gaps while preserving bounded evaluation and C APIs.
 The design distinguishes syntax, evaluation and compiler options; has no automatic
 execution path; retains platform and scope boundaries; names unsupported behavior;
 and requires independent semantic expectations rather than old-output parity.
+
+## Verified grammar adjustment
+
+The published 1.1.1 grammar loads with the runtime but rejects the valid empty
+substitution replacement in `$(DIRS:/=)`. Keep upstream pinned and apply only
+`optional(field('replacement', $._primary))` during a reproducible development
+build. Commit the resulting WASM under `vendor/tree-sitter-make`; normal builds
+copy it to dist. The pinned CLI and regeneration script are development tools,
+and normal CI uses `npm ci --ignore-scripts`. Standalone bundle tests verify
+runtime module URL setup, sibling assets, and missing/corrupt grammar diagnostics.

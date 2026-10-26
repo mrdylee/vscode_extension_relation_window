@@ -23,6 +23,22 @@ export async function expandMake(text: string, variables: Map<string, MakeVariab
       for(let i=0;i<fn[2].length;i++){if(fn[2][i]==='('||fn[2][i]==='{')depth++;else if(fn[2][i]===')'||fn[2][i]==='}')depth--;else if(fn[2][i]===','&&!depth){parts.push(fn[2].slice(start,i));start=i+1;}}
       parts.push(fn[2].slice(start));
       if(fn[1]==='if'){const condition=await expand(parts[0]);if(condition.includes(unknownBuildValue))return unknownBuildValue;return expand(condition.trim()?parts[1]??'':parts[2]??'');}
+      if(fn[1]==='foreach'){
+        const name=(await expand(parts[0]??'')).trim(),list=await expand(parts[1]??'');
+        if((name+list).includes(unknownBuildValue))return unknownBuildValue;
+        if(!/^[A-Za-z_][\w.-]*$/.test(name)||parts.length<3)return fail('Unresolved Make foreach variable or body');
+        const scoped=new Map(variables),localSeen=new Set(seen);localSeen.delete(name);
+        let result='',first=true;
+        for(const word of words(list)){
+          if(!control.step())return fail('Make foreach evaluation limit');
+          scoped.set(name,{value:word,simple:true,origin:'file'});
+          const item=await expandMake(parts.slice(2).join(','),scoped,automatic,control,localSeen,nesting+1);
+          if(item.includes(unknownBuildValue))return unknownBuildValue;
+          if(result.length+item.length+1>65_536)return fail('Expanded build argument exceeds 64 KiB');
+          result+=(first?'':' ')+item;first=false;
+        }
+        return result;
+      }
       if(fn[1]==='shell')return shell(await expand(fn[2]));
       const args:string[]=[];for(const part of parts)args.push(await expand(part));
       if(args.some(a=>a.includes(unknownBuildValue)))return unknownBuildValue;
@@ -57,7 +73,8 @@ export async function expandMake(text: string, variables: Map<string, MakeVariab
         const stem=makePattern(from,v),next=from.includes('%')?stem===undefined?v:to.replace('%',stem):v.endsWith(from)?v.slice(0,v.length-from.length)+to:v;
         if(result.length+next.length+1>65_536)return fail('Expanded build argument exceeds 64 KiB');result+=(result?' ':'')+next;
       }return result;}
-    if(!/^[A-Za-z_]\w*$/.test(body)||seen.has(body))return fail(`Cannot statically evaluate ${body}`);
+    if(body.includes('$')){body=await expand(body);if(body.includes(unknownBuildValue))return unknownBuildValue;}
+    if(!/^[A-Za-z_][\w.-]*$/.test(body)||seen.has(body))return fail(`Cannot statically evaluate ${body}`);
     const variable=variables.get(body);if(variable?.origin==='environment')control.environment(body);
     return !variable?'':variable.simple?variable.value:expandMake(variable.value,variables,automatic,control,new Set([...seen,body]),nesting+1);
   }

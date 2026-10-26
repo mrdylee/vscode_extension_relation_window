@@ -7,7 +7,7 @@ import { buildFixture } from './build-fixtures';
 
 const require = createRequire(process.cwd() + '/package.json');
 test('build configuration discovery stays read-only and selection applies only a proven entry', async () => {
-  const bundle = buildSync({ entryPoints: ['src/build-service.ts'], bundle: true, write: false, platform: 'node', format: 'cjs', external: ['vscode'] }).outputFiles[0].text;
+  const bundle = buildSync({ entryPoints: ['src/build-service.ts'], bundle: true, write: false, platform: 'node', format: 'cjs', external: ['vscode', 'web-tree-sitter'] }).outputFiles[0].text;
   const f = buildFixture({ Makefile: 'CC=gcc\na.o: App/a.c\n\t$(CC) -DMODE=1 -c $<' }), commands = new Map<string, Function>(), saved = new Map();
   const disposable = { dispose() {} }, emitter = { event: () => disposable, fire() {} };
   const uri = (value: string) => ({ toString: () => value, path: new URL(value).pathname });
@@ -25,7 +25,7 @@ test('build configuration discovery stays read-only and selection applies only a
     window: { showQuickPick: async (choices: any[]) => choices.find(choice => choice.entry), showTextDocument: async () => {}, showErrorMessage: async () => {} },
     commands: { registerCommand: (name: string, handler: Function) => { commands.set(name, handler); return disposable; } } };
   const module = { exports: {} as any };
-  runInNewContext(bundle, { module, exports: module.exports, Buffer, URL, process, setTimeout, clearTimeout, require: (name: string) => name === 'vscode' ? vscode : require(name) });
+  runInNewContext(bundle, { module, exports: module.exports, Buffer, URL, process, performance, __dirname: process.cwd() + '/src', setTimeout, clearTimeout, require: Object.assign((name: string) => name === 'vscode' ? vscode : require(name), { resolve: require.resolve }) });
   const context = { subscriptions: [], workspaceState: { get: (key: string) => saved.get(key), update: async (key: string, value: unknown) => saved.set(key, value) } };
   const service = module.exports.registerBuildConfigurations(context, workspace);
   try {

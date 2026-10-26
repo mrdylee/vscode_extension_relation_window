@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.81 — 2026-10-26
+
+- Replace Make statement recognition with a bundled Tree-sitter Make grammar; preserve ordered includes, branch selection, target options and original source evidence.
+- Correct quoted conditions, command-line precedence of define blocks, computed variable references and bounded foreach expansion for GCC and Diab C commands.
+- Preserve BAT/SH traversal, read-only metadata, existing analysis limits and explicit uncertainty for unsupported operations. Advance cache compatibility to 15.
+- Bundle a pinned grammar with a minimal empty-substitution fix; no compiler or runtime download is required.
+
 ## 0.1.80 — 2026-10-26
 
 - Restore AI callback detection and displayed targets for basic-navigation files when a selected Build projection is empty or partial. Snapshot and project the same base/contextual indexes used by navigation.

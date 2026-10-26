@@ -2,7 +2,7 @@
   "name": "dynsight",
   "displayName": "Dynsight — C Code Explorer",
   "description": "Build-free C references, caller/callee graphs and a linked Context preview.",
-  "version": "0.1.80",
+  "version": "0.1.81",
   "publisher": "dylee",
   "author": "dylee",
   "license": "MIT",
@@ -418,7 +418,7 @@
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
     "test:analysis-performance": "tsx test/analysis-performance.ts",
-    "test": "tsx --test test/analysis-policy.test.ts test/analysis-budget.test.ts test/scoped-analysis.test.ts test/callback-overrides.test.ts test/copilot-single-site.test.ts test/core.test.ts test/analysis-notices.test.ts test/macros.test.ts test/pointer-calls.test.ts test/callback-effects.test.ts test/callback-uncertainty.test.ts test/callback-safety.test.ts test/callback-index-regressions.test.ts test/analysis-cache.test.ts test/incremental-analysis.test.ts test/copilot-callbacks.test.ts test/copilot-progress.test.ts test/explicit-callbacks.test.ts test/copilot-relations.test.ts test/copilot-service.test.ts test/panel-layout.test.ts test/function-arguments.test.ts test/members.test.ts test/syntax.test.ts test/updates.test.ts test/issue-report.test.ts test/issue-report-service.test.ts test/diagnostic-history.test.ts test/branding-migration.test.ts test/build-context.test.ts test/build-discovery.test.ts test/build-options.test.ts test/build-context-cache.test.ts test/preprocessor-context.test.ts test/build-context-analysis.test.ts test/build-service.test.ts test/build-context-copilot.test.ts",
+    "test": "tsx --test test/analysis-policy.test.ts test/analysis-budget.test.ts test/scoped-analysis.test.ts test/callback-overrides.test.ts test/copilot-single-site.test.ts test/core.test.ts test/analysis-notices.test.ts test/macros.test.ts test/pointer-calls.test.ts test/callback-effects.test.ts test/callback-uncertainty.test.ts test/callback-safety.test.ts test/callback-index-regressions.test.ts test/analysis-cache.test.ts test/incremental-analysis.test.ts test/copilot-callbacks.test.ts test/copilot-progress.test.ts test/explicit-callbacks.test.ts test/copilot-relations.test.ts test/copilot-service.test.ts test/panel-layout.test.ts test/function-arguments.test.ts test/members.test.ts test/syntax.test.ts test/updates.test.ts test/issue-report.test.ts test/issue-report-service.test.ts test/diagnostic-history.test.ts test/branding-migration.test.ts test/build-context.test.ts test/build-discovery.test.ts test/build-options.test.ts test/build-make-parser.test.ts test/build-context-cache.test.ts test/preprocessor-context.test.ts test/build-context-analysis.test.ts test/build-service.test.ts test/build-context-copilot.test.ts",
     "test:extension": "npm run build && node scripts/test-extension.mjs",
     "test:scope-folders:host": "npm run build && node scripts/test-scope-folders.mjs",
     "test:worker": "npm run build && node --test test/analysis-worker.test.mjs test/analysis-cache-worker.test.mjs test/workspace.test.mjs test/scope-folders.test.mjs test/build-context-workspace.test.mjs",
@@ -428,12 +428,13 @@
     "test:freertos": "npm run build && node scripts/test-freertos.mjs",
     "test:ui": "npm run build && tsx test/create-ui-fixture.ts && node test/ui.mjs && node test/scoped-ui.mjs",
     "vscode:prepublish": "npm run build",
-    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license --out artifacts/dynsight-0.1.80.vsix",
+    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license --out artifacts/dynsight-0.1.81.vsix",
     "test:build-context-performance": "tsx test/build-context-performance.ts"
   },
   "dependencies": {
     "minimatch": "10.2.6",
     "tree-sitter-c": "0.24.1",
+    "tree-sitter-make": "1.1.1",
     "web-tree-sitter": "0.27.1"
   },
   "devDependencies": {
@@ -443,6 +444,7 @@
     "@vscode/vsce": "^4.0.0",
     "esbuild": "^0.28.2",
     "playwright": "^1.64.1",
+    "tree-sitter-cli": "0.27.1",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3"
   },

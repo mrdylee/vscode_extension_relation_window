@@ -5,6 +5,30 @@ import { extractStaticBuildOptions } from '../src/build-options';
 import { buildFixture } from './build-fixtures';
 
 const makeEntry = { id: 'repair', rootUri: 'file:///p', entryUri: 'file:///p/Makefile', cwdUri: 'file:///p', dialect: 'make' as const, args: [], evidence: [] };
+for (const compiler of ['gcc', 'dcc']) {
+  test(`${compiler}: quoted Make conditions select the active compile options`, async () => {
+    const f = buildFixture({ Makefile: `CC=${compiler}\nMODE=A\nifeq "$(MODE)" "A"\nFLAGS=-DACTIVE\nelse\nFLAGS=-DWRONG\nendif\na.o: a.c\n\t$(CC) $(FLAGS) -c $<\n` });
+    const p = await extractStaticBuildOptions(f.fs, makeEntry, ['file:///p/a.c'], {});
+    assert.deepEqual(p.units.map(u => u.argv), [[compiler, '-DACTIVE', '-c', 'a.c']]);
+    assert.equal(p.units[0].status, 'resolved');
+  });
+  test(`${compiler}: define preserves command-line variable precedence`, async () => {
+    const f = buildFixture({ Makefile: `CC=${compiler}\ndefine FLAGS\n-DNEW\nendef\na.o: a.c\n\t$(CC) $(FLAGS) -c $<\n` });
+    const p = await extractStaticBuildOptions(f.fs, { ...makeEntry, args: ['FLAGS=-DCOMMAND'] }, ['file:///p/a.c'], {});
+    assert.deepEqual(p.units.map(u => u.argv), [[compiler, '-DCOMMAND', '-c', 'a.c']]);
+    assert.equal(p.units[0].status, 'resolved');
+  });
+  test(`${compiler}: computed Make variable names resolve selected options`, async () => {
+    const f = buildFixture({ Makefile: `CC=${compiler}\nMODE=A\nFLAGS_A=-DACTIVE\na.o: a.c\n\t$(CC) $(FLAGS_$(MODE)) -c $<\n` });
+    const p = await extractStaticBuildOptions(f.fs, makeEntry, ['file:///p/a.c'], {});
+    assert.deepEqual(p.units.map(u => u.argv), [[compiler, '-DACTIVE', '-c', 'a.c']]);
+  });
+  test(`${compiler}: foreach builds flags with a local loop variable`, async () => {
+    const f = buildFixture({ Makefile: `CC=${compiler}\nx=OUTER\nFEATURES=A B\nFLAGS=$(foreach x,$(FEATURES),-D$(x))\na.o: a.c\n\t$(CC) $(FLAGS) -D$(x) -c $<\n` });
+    const p = await extractStaticBuildOptions(f.fs, makeEntry, ['file:///p/a.c'], {});
+    assert.deepEqual(p.units.map(u => u.argv), [[compiler, '-DA', '-DB', '-DOUTER', '-c', 'a.c']]);
+  });
+}
 test('nested pure Make functions and per-target flags preserve module and inherited defines', async () => {
   const f = buildFixture({Makefile: 'CC=gcc\nNAMES=a.o b.o\nOBJECTS := $(filter-out out/unused.o,$(addprefix out/,$(NAMES)))\nall: $(OBJECTS)\nCFLAGS=-DBASE=1\nout/a.o: CFLAGS := $(CFLAGS) -DMODE=1\nout/b.o: CFLAGS += -DMODE=2\nout/%.o: %.c\n\t$(CC) $(CFLAGS) -c $< -o $@'});
   const p=await extractStaticBuildOptions(f.fs,makeEntry,['file:///p/a.c','file:///p/b.c'],{});
@@ -208,4 +232,28 @@ test('uninterpreted inherited Make control flags cannot silently establish sourc
   const profile=await extractStaticBuildOptions(f.fs,entry,['file:///p/a.c'],{MAKEFLAGS:'MODE=2'});
   assert.ok(profile.issues.some(issue=>issue.code==='unsupported-make-environment'));
   assert.equal(profile.units[0].membership,'unknown');
+});
+
+test('foreach preserves empty iteration separators used by quoted conditions', async () => {
+  const f = buildFixture({Makefile:'CC=gcc\nifeq "$(foreach x,A B,$(if $(filter B,$(x)),B))" " B"\nFLAGS=-DOK\nelse\nFLAGS=-DWRONG\nendif\na.o: a.c\n\t$(CC) $(FLAGS) -c $<'});
+  const p=await extractStaticBuildOptions(f.fs,makeEntry,['file:///p/a.c'],{});
+  assert.deepEqual(p.units[0].macroActions.map(a=>a.name),['OK']);
+});
+test('inactive unsupported statements do not poison the selected conditional branch', async () => {
+  const f=buildFixture({Makefile:'CC=gcc\nifeq (A,B)\noverride FLAGS=-DWRONG\nelse ifeq "A" "A"\nFLAGS=-DOK\nendif\na.o: a.c\n\t$(CC) $(FLAGS) -c $<'});
+  const p=await extractStaticBuildOptions(f.fs,makeEntry,['file:///p/a.c'],{});
+  assert.equal(p.units[0].status,'resolved');assert.deepEqual(p.units[0].macroActions.map(a=>a.name),['OK']);
+});
+test('computed variables retain cycles and foreach retains evaluation limits', async () => {
+  for(const expression of ['$(FLAGS_$(MODE))','$(foreach x,'+'a '.repeat(10_000)+',$(foreach y,A B C D E,-D$(x)$(y)))']) {
+    const f=buildFixture({Makefile:`CC=gcc\nMODE=A\nFLAGS_A=$(FLAGS_$(MODE))\nFLAGS=${expression}\na.o: a.c\n\t$(CC) $(FLAGS) -c $<`});
+    const p=await extractStaticBuildOptions(f.fs,makeEntry,['file:///p/a.c'],{});
+    assert.ok(p.issues.length);assert.equal(p.units.length,0);
+  }
+});
+
+test('computed assignment names cannot silently drop compile options', async () => {
+  const f=buildFixture({Makefile:'CC=gcc\nMODE=A\nFLAGS_$(MODE)=-DSELECTED\na.o: a.c\n\t$(CC) $(FLAGS_A) -c $<'});
+  const p=await extractStaticBuildOptions(f.fs,makeEntry,['file:///p/a.c'],{});
+  assert.ok(p.units[0]?.macroActions.some(a=>a.name==='SELECTED') || p.units[0]?.status!=='resolved');
 });
