@@ -75,10 +75,10 @@ Files: `package.json`, `package-lock.json`, `CHANGELOG.md`, `docs/releases/<next
 
 - [x] Read latest tags/releases and choose the next unused patch version. Update manifest/lock/package script and explain new support plus remaining static-analysis limits in release notes.
 - [x] Build and package; inspect VSIX entries, Make grammar, notices and exact bundled file equality. Run extracted-package Extension Host verification.
-- [ ] Apply finishing-a-development-branch and verification-before-completion. Integrate the authorized release through repository conventions, push the branch/main and immutable tag, and watch the existing release workflow.
-- [ ] If a tagged run fails because of source, keep the tag immutable and issue a new patch. Retry unchanged infrastructure flakes only with evidence.
-- [ ] Verify all public VSIX aliases and SHA256SUMS, compare extracted public files to validated local files, and exercise update-service download/checksum behavior for the prior installed version.
-- [ ] Record authoritative source/tag/CI/public asset evidence; push the validation record. Mark the goal complete only after all requirements are verified.
+- [x] Apply finishing-a-development-branch and verification-before-completion. Integrate the authorized release through repository conventions, push the branch/main and immutable tag, and watch the existing release workflow.
+- [x] If a tagged run fails because of source, keep the tag immutable and issue a new patch. Retry unchanged infrastructure flakes only with evidence.
+- [x] Verify all public VSIX aliases and SHA256SUMS, compare extracted public files to validated local files, and exercise update-service download/checksum behavior for the prior installed version.
+- [x] Record authoritative source/tag/CI/public asset evidence; push the validation record. Mark the goal complete only after all requirements are verified.
 
 ## Plan review
 

@@ -53,3 +53,22 @@ A fresh temporary source copy passed `npm ci --ignore-scripts` and all730unit
 tests before any dist build. The extracted final0.1.81VSIX passed the full native
 macOS host suite with exit0, including the new Make syntax and GCC/Diab callback
 context assertions. No node_modules directory exists in that extracted package.
+
+## Publication verification
+
+- Source `d75c1e8f56502c65c6ecc55e2955ac5f7b5dbdc1`, main, feature branch
+  `codex/tree-sitter-make` and annotated `v0.1.81` pushed atomically.
+- [Actions40341297017](https://github.com/mrdylee/vscode_extension_relation_window/actions/runs/40341297017)
+  passed on attempt1: Windows/macOS/Ubuntu typecheck, unit, memory, performance,
+  Worker, native extension and native large-workspace gates all succeeded.
+- [0.1.81](https://github.com/mrdylee/vscode_extension_relation_window/releases/tag/v0.1.81)
+  is public latest stable, published2026-10-26T14:41:27Z /23:41:27KST.
+- Downloaded all five platform/universal/legacy VSIX assets and SHA256SUMS.txt.
+  Every VSIX is731151bytes,SHA256
+  `1c58cac58efc94678087ab3a395743c97e82267e195be79de0eba1ebbebbe13c`.
+  API sizes/digests and the checksum file agree. Each of the17archive entries
+  matches the locally validated package byte for byte, including Make WASM.
+- The real updater public fetch selects0.1.81 from0.1.79/0.1.80, keeps0.1.81
+  current, and successfully downloads/verifies the public installer bytes.
+- Evidence retained under `artifacts/release-0.1.81/`. No installation into the
+  user's private firmware environment or WSL host was performed.
