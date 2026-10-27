@@ -472,3 +472,35 @@ test('mutation diagnostics in macro-containing functions retain original source 
   assert.equal(detail.location?.uri, file.uri);
   assert.ok(detail.location!.line>200 && detail.location!.line<280);
 });
+
+for (const statement of [
+  'flag && (cb=bar);',
+  'flag || (cb=bar);',
+  'flag && install(&cb);',
+  '!(flag ? (cb=foo):(cb=bar));',
+  '1 + (flag && (cb=bar));',
+  '1 + (flag ? (cb=foo):(cb=bar));',
+]) test(`conditional expression effects preserve both callback paths: ${statement}`, () => {
+  const index=project({'main.c':prelude+'int install(CB*p){*p=bar;return 1;}void run(int flag){CB cb=foo;'+statement+'cb();}'});
+  assert.deepEqual(inferred(index).map(group=>group.name).sort(),['bar','foo']);
+});
+
+test('short-circuit helper effects remain conditional when propagated to callers', () => {
+  const index=project({'main.c':prelude+'static void select(CB*p,int flag){flag && (*p=bar);}void run(int flag){CB cb=foo;select(&cb,flag);cb();}'});
+  assert.deepEqual(inferred(index).map(group=>group.name).sort(),['bar','foo']);
+});
+
+test('short-circuit results do not become function addresses and left operand effects always execute', () => {
+  const source=prelude+'void run(int flag){CB cb=foo;int value=(cb=bar) && flag;cb();CB bogus=(CB)(flag || foo);bogus();}';
+  const index=project({'main.c':source});
+  assert.deepEqual(index.callbackAt('file:///demo/main.c',source.indexOf('cb();'))?.targets.map(s=>s.name),['bar']);
+  assert.deepEqual(index.callbackAt('file:///demo/main.c',source.indexOf('bogus();'))?.targets,[]);
+});
+
+test('pure logical conditions do not exhaust callback work before a later call', () => {
+  const source=prelude+'void run(int a,int b){CB cb=foo;'+
+    'if(a && b && a && b && a && b && a && b){}'.repeat(3000)+'cb();}';
+  const index=project({'main.c':source});
+  assert.deepEqual(index.callbackAt('file:///demo/main.c',source.indexOf('cb();'))?.targets.map(s=>s.name),['foo']);
+  assert.ok([...index.files.values()].every(file=>!file.issues.some(issue=>/work limit/.test(issue))));
+});

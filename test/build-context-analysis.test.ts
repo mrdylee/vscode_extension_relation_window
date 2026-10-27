@@ -175,3 +175,22 @@ test('real contextual raw and derived facts restore after reopening and reject a
     assert.ok(parses>0);assert.equal(second.cachedDerived(updated),undefined);assert.ok(updated.some(file=>file.symbols.some(s=>s.name==='fresh')));
   }finally{parser.analyze=original;await rm(directory,{recursive:true,force:true});}
 });
+
+test('GCC and Diab build contexts preserve short-circuit callback alternatives across refreshes', async () => {
+  for(const compiler of ['gcc','dcc']) {
+    const make=(mode:number)=>`CC=${compiler}\na.o: a.c\n\t$(CC) -DMODE=${mode} -c $<`;
+    const source='typedef void(*CB)(void);void first(void){}void second(void){}void third(void){}\n#if MODE==1\n#define TARGET second\n#else\n#define TARGET third\n#endif\nvoid run(int enabled){CB cb=first;enabled && (cb=TARGET);cb();}';
+    const f=buildFixture({Makefile:make(1),'a.c':source});
+    const raw=[parser.analyze('file:///p/a.c',source,true,{expandMacros:true,propagateCallbacks:true})];
+    const entry={id:'short-circuit',rootUri:'file:///p',entryUri:'file:///p/Makefile',cwdUri:'file:///p',dialect:'make' as const,args:[],evidence:[]};
+    const build=new BuildAnalysis();
+    for(const mode of [1,1,2]) {
+      f.texts.set('file:///p/Makefile',make(mode));
+      const profile=await extractStaticBuildOptions(f.fs,entry,['file:///p/a.c'],{});
+      const prepared=await build.prepare(parser,raw,profile,new AnalysisWorkBudget()),index=new RelationIndex();
+      parser.derive(prepared).forEach(file=>index.update(file));
+      const run=index.symbols().find(s=>s.name==='run'&&s.definition)!;
+      assert.deepEqual(index.relations(run.id,'callees').filter(r=>r.callKind==='inferred').map(r=>r.name).sort(),['first',mode===1?'second':'third']);
+    }
+  }
+});

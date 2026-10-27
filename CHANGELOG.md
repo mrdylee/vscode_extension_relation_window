@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.82 — 2026-10-27
+
+- Preserve both callback paths for conditional assignments and helper calls in logical expressions, including nested ternary expressions.
+- Avoid expanding side-effect-free logical conditions into callback branches, preserving the function work budget for later calls.
+- Retain GCC/Diab build context refresh and persisted callback results; advance analysis cache compatibility to 16.
+- Existing propagation limits remain in force. Broad firmware analysis latency and reported private-project limit warnings are not claimed resolved.
+
 ## 0.1.81 — 2026-10-26
 
 - Replace Make statement recognition with a bundled Tree-sitter Make grammar; preserve ordered includes, branch selection, target options and original source evidence.

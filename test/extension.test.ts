@@ -659,6 +659,18 @@ export async function run() {
   await vscode.workspace.fs.delete(pointerUri);
   await new Promise(resolve=>setTimeout(resolve,500)); await api.workspace.whenIdle();
   assert.equal(api.workspace.index.symbols().some((symbol:any)=>symbol.name==='pointer_target'),false);
+  const shortCircuitUri=vscode.Uri.joinPath(root,'conditional-review.c');
+  const shortCircuitSource='typedef void(*CB)(void);void short_circuit_first(void){}void short_circuit_second(void){}void short_circuit_run(int flag){CB cb=short_circuit_first;flag && (cb=short_circuit_second);cb();}';
+  await vscode.workspace.fs.writeFile(shortCircuitUri,Buffer.from(shortCircuitSource));
+  const shortCircuitDocument=await vscode.workspace.openTextDocument(shortCircuitUri);
+  const shortCircuitEditor=await vscode.window.showTextDocument(shortCircuitDocument);
+  await new Promise(resolve=>setTimeout(resolve,500));await api.workspace.whenIdle();
+  const shortCircuitPosition=shortCircuitDocument.positionAt(shortCircuitSource.indexOf('cb();'));
+  shortCircuitEditor.selection=new vscode.Selection(shortCircuitPosition,shortCircuitPosition);
+  api.view.track(shortCircuitEditor,true);
+  assert.deepEqual(api.view.state.callback?.targets.map((symbol:any)=>symbol.name).sort(),['short_circuit_first','short_circuit_second'],'packaged callback selection preserves both short-circuit paths');
+  await vscode.workspace.fs.delete(shortCircuitUri);
+  await new Promise(resolve=>setTimeout(resolve,500));await api.workspace.whenIdle();
   const registeredUri = vscode.Uri.joinPath(root, 'registered-review.c');
   const registeredSource = 'void registered_target(void){}struct Registered{void(*cb_preprocess)(void);};' +
     'static const struct Registered bbb={.cb_preprocess=registered_target};' +

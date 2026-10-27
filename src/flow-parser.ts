@@ -10,6 +10,10 @@ function ancestor(node: Node, type: string): Node | undefined {
 export function flowFacts(root: Node, uri: string, locate: Locate, active?: Set<number>, skipInactive = true, namespace = '', context?: (node: Node) => string[], basic = false) {
   const programs: FlowProgram[] = [], initializers: GlobalInitializer[] = [];
   const present = (node: Node) => !active || active.has(node.id);
+  function hasSideEffects(node: Node | null): boolean {
+    if (!node || !present(node) || ['sizeof_expression','alignof_expression','attribute_specifier','attribute_declaration'].includes(node.type)) return false;
+    return ['call_expression','assignment_expression','update_expression'].includes(node.type) || node.namedChildren.some(hasSideEffects);
+  }
   function expression(node: Node | null | undefined, locals: FlowLocal[], ranges: Map<string, {start:number;end:number; declaration:number}>, fn: string, depth = 0): Expr {
     const location = node ? locate(node) : locate(root);
     const unknown = (): Expr => ({ kind: 'unknown', location });
@@ -40,6 +44,15 @@ export function flowFacts(root: Node, uri: string, locate: Locate, active?: Set<
     if (node.type === 'assignment_expression') return {kind:'assign',left:field('left'),right:field('right'),operator:node.childForFieldName('operator')?.text ?? '=',location};
     if (node.type === 'update_expression') return {kind:'assign',left:field('argument'),right:unknown(),operator:'update',location};
     if (node.type === 'conditional_expression') return {kind:'sequence',values:[field('condition'),{kind:'choice',values:[field('consequence'),field('alternative')],location}],location};
+    if (node.type === 'binary_expression' && ['&&','||'].includes(node.childForFieldName('operator')?.text ?? '')) {
+      if (!hasSideEffects(node.childForFieldName('right'))) return {
+        kind:'unknown',children:hasSideEffects(node.childForFieldName('left'))?[field('left')]:undefined,location
+      };
+      // The left operand always runs; the right operand may be skipped. The
+      // logical result is not the pointer value produced by either operand.
+      return {kind:'sequence',values:[field('left'),{kind:'choice',values:[unknown(),
+        {kind:'sequence',values:[field('right'),unknown()],location}],location}],location};
+    }
     if (node.type === 'comma_expression') return {kind:'sequence',values:node.namedChildren.map(expr),location};
     if (node.type === 'call_expression') return {kind:'call',callee:field('function'),args:node.childForFieldName('arguments')!.namedChildren.filter(n=>n.type!=='comment').map(expr),key:`${fn}${namespace}:call:${node.startIndex}`,location};
     if (node.type === 'initializer_list') {
@@ -65,7 +78,10 @@ export function flowFacts(root: Node, uri: string, locate: Locate, active?: Set<
     const effects:Node[]=[];
     function sideEffects(current:Node){
       if(['sizeof_expression','alignof_expression'].includes(current.type))return;
-      if(['call_expression','assignment_expression','update_expression'].includes(current.type)){effects.push(current);return;}
+      // Preserve conditional execution inside otherwise unmodeled arithmetic
+      // or unary expressions instead of flattening their writes and calls.
+      if(['call_expression','assignment_expression','update_expression'].includes(current.type) ||
+        (current.type==='conditional_expression' || current.type==='binary_expression' && ['&&','||'].includes(current.childForFieldName('operator')?.text ?? '')) && hasSideEffects(current)){effects.push(current);return;}
       for(const child of current.namedChildren)sideEffects(child);
     }
     for(const child of node.namedChildren)sideEffects(child);

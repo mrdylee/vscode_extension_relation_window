@@ -193,3 +193,24 @@ test('nested diagnostic callback leaves survive cold, warm, disk and saved targe
   const changed=await second.request({type:'derive',versions:[[input.uri,edit.id,-edit.id]],analyzeCallbacks:true}).promise;
   check(changed.files[0],'second');
 }));
+
+test('conditional callback effects survive disk restore and a saved branch edit',async()=>temporary(async(directory,spawn)=>{
+  const input={uri:'file:///conditional.c',text:'typedef void(*CB)(void);void first(void){}void second(void){}void third(void){}void run(int flag){CB cb=first;flag && (cb=second);cb();}',skip:true,expandMacros:true,propagateCallbacks:true};
+  const check=(file,target)=>assert.deepEqual(file.references.filter(ref=>ref.callKind==='inferred').map(ref=>ref.name).sort(),['first',target]);
+  const first=spawn();await first.request({type:'cache-init',directory,key:'conditional'}).promise;
+  const job=first.request(input);await job.promise;
+  const versions=[[input.uri,job.id,-job.id]];
+  const cold=await first.request({type:'derive',versions,analyzeCallbacks:true}).promise;
+  check(cold.files[0],'second');versions[0][2]=cold.versions[0][1];
+  const warm=await first.request({type:'derive',versions,analyzeCallbacks:true}).promise;
+  if(warm.files.length)check(warm.files[0],'second');
+  assert.equal((await first.request({type:'cache-save',versions}).promise).saved,true);
+  await first.worker.terminate();
+  const second=spawn();await second.request({type:'cache-init',directory,key:'conditional'}).promise;
+  const restoredJob=second.request({type:'cache-restore',...input}),restored=await restoredJob.promise;
+  assert.equal(restored.hit,true);check(restored.file,'second');
+  assert.equal((await second.request({type:'cache-validate',versions:[[input.uri,restoredJob.id,restored.stamp]],analyzeCallbacks:true}).promise).valid,true);
+  const edit=second.request({...input,text:input.text.replace('cb=second','cb=third')});await edit.promise;
+  const changed=await second.request({type:'derive',versions:[[input.uri,edit.id,-edit.id]],analyzeCallbacks:true}).promise;
+  check(changed.files[0],'third');
+}));
