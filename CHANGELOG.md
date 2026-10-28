@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.83 — 2026-10-28
+
+- Save five workspace-persistent function/variable views from a Relation symbol's context menu; restore tree options, expanded branches, Context and current source.
+- Show the saved symbol name on slot hover; independently lock slots against replacement or clearing while keeping recall available.
+- Use Backspace in Relation to undo expansions in reverse order, preserving the root, canvas position and repeated-key focus. Editable fields retain normal deletion.
+- Reject stale save targets and ambiguous or unavailable symbols; preserve including-source contexts and report partial branch restoration.
+- Fix obsolete Back snapshots surviving a source refresh during expansion. Analysis cache compatibility and existing analysis limits are unchanged.
+
 ## 0.1.82 — 2026-10-27
 
 - Preserve both callback paths for conditional assignments and helper calls in logical expressions, including nested ternary expressions.

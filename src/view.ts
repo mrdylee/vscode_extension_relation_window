@@ -282,9 +282,9 @@ export class RelationView implements vscode.Disposable {
   private clearHistory() { this.expansionHistory = []; this.state.canGoBack = false; }
   private changeExpansion(change: () => void) {
     const before = { expanded: { ...this.expanded }, selection: this.selection, selectedNodeKey: this.selectedNodeKey };
-    const keys = JSON.stringify([...this.nodes.keys()]);
+    const history = this.expansionHistory, keys = JSON.stringify([...this.nodes.keys()]);
     change(); this.refresh(false);
-    if (keys !== JSON.stringify([...this.nodes.keys()])) {
+    if (history === this.expansionHistory && keys !== JSON.stringify([...this.nodes.keys()])) {
       this.expansionHistory.push(before);
       if (this.expansionHistory.length > 100) this.expansionHistory.shift();
     }

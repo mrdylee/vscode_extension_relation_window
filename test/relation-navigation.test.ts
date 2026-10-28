@@ -53,6 +53,19 @@ function harness(saved = new Map<string, unknown>()) {
 }
 const graph = (view: any) => JSON.stringify(view.state.graph);
 
+test('an expansion racing with a source refresh cannot retain an obsolete Back snapshot', async () => {
+  const h = harness();
+  try {
+    await h.view.handleMessage({ type: 'selectNode', key: h.node('B').key });
+    const key = h.node('C').key;
+    h.index.update(analyzer.analyze(uri, '\n' + source));
+    await h.view.handleMessage({ type: 'selectNode', key });
+    assert.equal(h.view.state.canGoBack, false);
+    const current = graph(h.view);
+    await h.view.handleMessage({ type: 'back' }); assert.equal(graph(h.view), current);
+  } finally { h.view.dispose(); }
+});
+
 test('unavailable-slot notification does not block recalling the next slot', async () => {
   const h = harness(); let release: (() => void) | undefined;
   try {
