@@ -1,11 +1,12 @@
 import * as vscode from 'vscode';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { WorkspaceIndex } from './workspace';
 import { FileAnalysis, GraphData, GraphNode, Location, SymbolRecord, fileKey, locationKey } from './model';
 import { ViewState, nodePreviewId, canExpandNode } from './view-state';
 import { analysisNotices } from './analysis-notices';
 import type { CallbackActions } from './copilot-service';
 import { highlightC, SyntaxToken } from './syntax';
+import { matchSavedSymbol, readSlots, SavedBranch, SavedSlot, SavedSymbol, SlotViewOptions } from './relation-slots';
 
 const panelAlignments: Partial<Record<ViewState['contextLayout'], string>> = {
   'combined-full-width': 'Justify', 'combined-center': 'Center',
@@ -15,7 +16,7 @@ const panelAlignments: Partial<Record<ViewState['contextLayout'], string>> = {
 };
 
 export class RelationView implements vscode.Disposable {
-  state: ViewState = { candidates: [], status: 'Open a C file and click a symbol name.', fileCount: 0,
+  state: ViewState = { slots: [], canGoBack: false, candidates: [], status: 'Open a C file and click a symbol name.', fileCount: 0,
     issues: [], mode: 'references', accessFilter: 'all', depth: 1, locked: false, skipInactive: true,
     calleeSort: 'name', contextLayout: 'combined', callGraphDirection: 'callers-left', includeFunctionArguments: false, analyzeCallbacks: true };
   readonly activity = new vscode.EventEmitter<string>();
@@ -40,7 +41,14 @@ export class RelationView implements vscode.Disposable {
   private syntaxCache?: { text: string; tokens: SyntaxToken[][] };
   private panelLayout = Promise.resolve();
   private graphSnapshot?: { key: string; files: FileAnalysis[]; graph?: GraphData };
-  constructor(private workspace: WorkspaceIndex, private extensionUri: vscode.Uri, private callbackActions?: CallbackActions) {
+  private savedSlots: (SavedSlot | null)[];
+  private slotActions = Promise.resolve();
+  private expansionHistory: { expanded: Record<string, number>; selection?: string; selectedNodeKey?: string }[] = [];
+  private historyContext?: { key: string; files: FileAnalysis[] };
+  constructor(private workspace: WorkspaceIndex, private extensionUri: vscode.Uri, private callbackActions?: CallbackActions,
+    private storage?: Pick<vscode.Memento, 'get' | 'update'>) {
+    this.savedSlots = readSlots(storage?.get('relationSlots-v1'));
+    this.slotSummaries();
     this.diagnosticsListener = workspace.diagnosticsChanged.event(() => {
       this.state.diagnostics = workspace.diagnostics;
       void this.webview?.webview.postMessage({ type: 'diagnostics', diagnostics: this.state.diagnostics });
@@ -52,6 +60,7 @@ export class RelationView implements vscode.Disposable {
         const previousLayout = this.state.contextLayout;
         this.readPreferences();
         if (analysisChanged) {
+          this.clearHistory();
           this.callbackFocus = undefined; this.state.callback = undefined;
           this.track(this.lastEditor, true);
         }
@@ -61,7 +70,7 @@ export class RelationView implements vscode.Disposable {
           void vscode.commands.executeCommand('dynsight.context.focus', { preserveFocus: true });
         }
       } else if (event.affectsConfiguration('dynsight.callGraphDirection')) {
-        this.readPreferences(); this.publish();
+        this.clearHistory(); this.readPreferences(); this.publish();
       }
     });
     this.listener = workspace.changed.event(() => {
@@ -161,7 +170,7 @@ export class RelationView implements vscode.Disposable {
     this.root = { id: symbol.id, name: symbol.name, uri: symbol.location.uri };
     this.state.candidates = []; this.refresh();
   }
-  refresh() {
+  refresh(publish = true) {
     clearTimeout(this.refreshTimer); this.refreshTimer = undefined;
     this.state.diagnostics = this.workspace.diagnostics;
     this.state.skipInactive = this.workspace.skipInactive;
@@ -222,7 +231,11 @@ export class RelationView implements vscode.Disposable {
     if (this.selection && this.locations.has(this.selection)) this.preview(this.selection);
     else if (this.state.graph?.root.symbolId) { this.selection = this.state.graph.root.symbolId; this.preview(this.selection); }
     else this.state.context = undefined;
-    this.publish();
+    const historyKey = JSON.stringify([this.root?.id, this.slotOptions()]), files = this.graphSnapshot?.files ?? [];
+    if (this.historyContext?.key !== historyKey || files.length !== this.historyContext.files.length ||
+      files.some((file, n) => file !== this.historyContext!.files[n])) this.clearHistory();
+    this.historyContext = { key: historyKey, files };
+    if (publish) this.publish();
   }
   private preview(id: string) {
     const selected = this.locations.get(id);
@@ -250,9 +263,134 @@ export class RelationView implements vscode.Disposable {
     this.selectedNodeKey = undefined;
     this.setRoot(symbol);
   }
+  private slotSummaries() {
+    this.state.slots = this.savedSlots.map((slot, n) => ({ slot: n, name: slot?.target.name, kind: slot?.target.kind, locked: slot?.locked ?? false }));
+  }
+  private slotOptions(): SlotViewOptions {
+    const { mode, depth, accessFilter, calleeSort, callGraphDirection, includeFunctionArguments } = this.state;
+    return { mode, depth, accessFilter, calleeSort, callGraphDirection, includeFunctionArguments };
+  }
+  private effectiveLevels(key: string) {
+    let levels = this.state.depth, path = '';
+    for (const part of key.split('/')) {
+      if (path) levels--;
+      path = path ? `${path}/${part}` : part;
+      levels = this.expanded[path] ?? levels;
+    }
+    return levels;
+  }
+  private clearHistory() { this.expansionHistory = []; this.state.canGoBack = false; }
+  private changeExpansion(change: () => void) {
+    const before = { expanded: { ...this.expanded }, selection: this.selection, selectedNodeKey: this.selectedNodeKey };
+    const keys = JSON.stringify([...this.nodes.keys()]);
+    change(); this.refresh(false);
+    if (keys !== JSON.stringify([...this.nodes.keys()])) {
+      this.expansionHistory.push(before);
+      if (this.expansionHistory.length > 100) this.expansionHistory.shift();
+    }
+    this.state.canGoBack = this.expansionHistory.length > 0;
+    this.publish();
+  }
+  private slotSymbols(index: WorkspaceIndex['index'], uris: Set<string>): SavedSymbol[] {
+    const result: SavedSymbol[] = [];
+    for (const file of index.files.values()) {
+      if (!uris.has(file.uri)) continue;
+      const unit = file.context && this.workspace.buildProfile?.units.find(unit => unit.id === file.context!.unitId);
+      if (file.context && !unit) continue;
+      const sourceDigest = createHash('sha256').update(file.text).digest('hex');
+      for (const symbol of file.symbols) {
+        if (symbol.kind !== 'function' && symbol.kind !== 'variable') continue;
+        const owner = symbol.storage === 'local' ? file.symbols.find(fn => fn.kind === 'function' &&
+          fn.extent.start <= symbol.location.start && fn.extent.end >= symbol.location.end) : undefined;
+        result.push({ id: symbol.id, uri: symbol.location.uri, name: symbol.name, kind: symbol.kind, start: symbol.location.start,
+          definition: symbol.definition, storage: symbol.storage, sourceDigest, containerName: symbol.containerName,
+          ownerName: owner?.name, sourceUnitUri: unit?.sourceUri });
+      }
+    }
+    return result;
+  }
+  private captureSlot(key: string): SavedSlot | undefined {
+    const node = this.nodes.get(key), graph = this.state.graph;
+    if (!node || !graph) return;
+    const symbols = new Map(this.slotSymbols(this.index, new Set([...this.nodes.values()].map(node => node.location.uri))).map(symbol => [symbol.id, symbol]));
+    const target = node.symbolId && symbols.get(node.symbolId);
+    if (!target) return;
+    const branches: SavedBranch[] = [], options = this.slotOptions();
+    const visit = (child: GraphNode, parent: number | null) => {
+      const symbol = child.symbolId && symbols.get(child.symbolId);
+      if (!symbol) return;
+      const n = branches.length;
+      branches.push({ parent, symbol, direction: child.direction ?? (options.mode === 'both' ? 'callees' : options.mode),
+        levels: parent === null ? this.effectiveLevels(child.key) : this.expanded[child.key] });
+      child.children.forEach(next => visit(next, n));
+    };
+    visit(node, null);
+    if (node === graph.root) graph.callers?.forEach(child => visit(child, 0));
+    return { target, options, branches, locked: false };
+  }
+  private async recallSlot(slot: SavedSlot) {
+    const index = this.workspace.indexFor(slot.target.uri), symbols = this.slotSymbols(index, new Set(slot.branches.map(branch => branch.symbol.uri).concat(slot.target.uri)));
+    const target = matchSavedSymbol(slot.target, symbols), symbol = target && index.symbol(target.id);
+    if (!symbol) { await vscode.window.showWarningMessage(`Saved symbol is unavailable: ${slot.target.name}`); return; }
+    const { mode, depth, accessFilter, calleeSort, includeFunctionArguments } = slot.options;
+    const expanded: Record<string, number> = {}, keys: (string | undefined)[] = [];
+    const build = () => index.graph(symbol.id, mode, depth, expanded, accessFilter, calleeSort, includeFunctionArguments);
+    let graph = build(), partial = false;
+    for (const [n, branch] of slot.branches.entries()) {
+      let node = n === 0 ? graph?.root : undefined;
+      if (branch.parent !== null) {
+        const parentKey = keys[branch.parent];
+        const find = (root: GraphNode): GraphNode | undefined => root.key === parentKey ? root : root.children.map(find).find(Boolean);
+        const parent = graph && (find(graph.root) ?? graph.callers?.map(find).find(Boolean));
+        const children = branch.parent === 0 && mode === 'both' && branch.direction === 'callers' ? graph?.callers : parent?.children;
+        const current = matchSavedSymbol(branch.symbol, symbols);
+        const matches = parentKey && current ? children?.filter(child => child.symbolId === current.id) ?? [] : [];
+        if (matches.length === 1) node = matches[0];
+      }
+      keys[n] = node?.key;
+      if (!node) { partial = true; continue; }
+      if (branch.levels !== undefined) { expanded[node.key] = branch.levels; graph = build(); }
+    }
+    Object.assign(this.state, slot.options);
+    this.clearHistory();
+    this.state.locked = true; this.state.candidates = []; this.state.callback = undefined;
+    this.callbackFocus = undefined; this.pendingTrack = false;
+    this.root = { id: symbol.id, name: symbol.name, uri: symbol.location.uri };
+    this.expanded = expanded; this.selection = symbol.id; this.selectedNodeKey = undefined;
+    if (symbol.location.context) this.contextChoices.set(symbol.location.uri, symbol.location.context);
+    this.refresh();
+    await this.handleMessage({ type: 'open', id: symbol.id });
+    await this.webview?.webview.postMessage({ type: 'revealRoot', id: symbol.id });
+    if (partial) await vscode.window.showInformationMessage(`Restored ${symbol.name}; some saved branches are unavailable.`);
+  }
+  private slotAction(m: Record<string, unknown>) {
+    if (!Number.isInteger(m.slot) || Number(m.slot) < 0 || Number(m.slot) >= 5) return Promise.resolve();
+    const slot = Number(m.slot);
+    const captured = m.type === 'saveSlot' && typeof m.key === 'string' ? this.captureSlot(m.key) : undefined;
+    const action = this.slotActions.then(async () => {
+      const current = this.savedSlots[slot];
+      if (m.type === 'recallSlot') { if (current) await this.recallSlot(current); return; }
+      const next = readSlots(this.savedSlots);
+      if (m.type === 'saveSlot') {
+        if (current?.locked || !captured) return;
+        next[slot] = captured;
+      } else if (m.type === 'lockSlot') {
+        if (!current || typeof m.locked !== 'boolean') return;
+        next[slot]!.locked = m.locked;
+      } else if (m.type === 'clearSlot') {
+        if (!current || current.locked) return;
+        next[slot] = null;
+      }
+      await this.storage?.update('relationSlots-v1', next);
+      this.savedSlots = next; this.slotSummaries(); this.publish();
+    });
+    this.slotActions = action.catch(() => {});
+    return action;
+  }
   async handleMessage(message: unknown) {
     if (!message || typeof message !== 'object') return;
     const m = message as Record<string, unknown>;
+    if (['saveSlot', 'recallSlot', 'lockSlot', 'clearSlot'].includes(String(m.type))) return this.slotAction(m);
     if (m.type === 'selectBuildConfiguration') { await vscode.commands.executeCommand('dynsight.selectBuildConfiguration'); return; }
     if(m.type === 'copyFunctionName') {
       if(typeof m.requestId !== 'string'||!m.requestId.length||m.requestId.length>128)return;
@@ -289,22 +427,24 @@ export class RelationView implements vscode.Disposable {
       case 'settings': await vscode.commands.executeCommand('dynsight.openSettings'); break;
       case 'help': await vscode.commands.executeCommand('dynsight.help'); break;
       case 'preview': if (typeof m.id === 'string' && this.locations.has(m.id)) { this.preview(m.id); this.publish(); } break;
+      case 'back': {
+        this.refresh(false);
+        const previous = this.expansionHistory.pop();
+        if (previous) {
+          this.expanded = previous.expanded; this.selection = previous.selection; this.selectedNodeKey = previous.selectedNodeKey;
+        }
+        this.state.canGoBack = this.expansionHistory.length > 0;
+        this.refresh(); break;
+      }
       case 'selectNode': {
         const node = typeof m.key === 'string' ? this.nodes.get(m.key) : undefined;
         if (!node) return;
-        this.selectedNodeKey = node.key;
-        this.selection = nodePreviewId(node);
-        if (canExpandNode(node)) {
-          // Preserve a deeper inherited expansion, including explicit ancestor overrides.
-          let levels = this.state.depth, path = '';
-          for (const part of node.key.split('/')) {
-            if (path) levels--;
-            path = path ? `${path}/${part}` : part;
-            levels = this.expanded[path] ?? levels;
-          }
-          this.expanded[node.key] = Math.max(levels, this.state.depth);
-        }
-        this.refresh(); break;
+        this.changeExpansion(() => {
+          this.selectedNodeKey = node.key;
+          this.selection = nodePreviewId(node);
+          if (canExpandNode(node)) this.expanded[node.key] = Math.max(this.effectiveLevels(node.key), this.state.depth);
+        });
+        break;
       }
       case 'navigateContext': {
         const preview = this.state.context;
@@ -334,11 +474,11 @@ export class RelationView implements vscode.Disposable {
         const symbol = choices.find(s => s.id === m.id);
         if (symbol) this.setRoot(symbol); else if (this.callbackFocus) this.refresh();
       } break;
-      case 'mode': if (m.value === 'references' || m.value === 'callers' || m.value === 'callees' || m.value === 'both') { this.state.mode = m.value; this.expanded = {}; this.refresh(); } break;
+      case 'mode': if (m.value === 'references' || m.value === 'callers' || m.value === 'callees' || m.value === 'both') { this.clearHistory(); this.state.mode = m.value; this.expanded = {}; this.refresh(); } break;
       case 'access': if (m.value === 'all' || m.value === 'read' || m.value === 'write' || m.value === 'readwrite' || m.value === 'address') {
-        this.state.accessFilter = m.value; this.expanded = {}; this.refresh();
+        this.clearHistory(); this.state.accessFilter = m.value; this.expanded = {}; this.refresh();
       } break;
-      case 'depth': if (Number.isInteger(m.value) && Number(m.value) >= 1 && Number(m.value) <= 8) { this.state.depth = Number(m.value); this.expanded = {}; this.refresh(); } break;
+      case 'depth': if (Number.isInteger(m.value) && Number(m.value) >= 1 && Number(m.value) <= 8) { this.clearHistory(); this.state.depth = Number(m.value); this.expanded = {}; this.refresh(); } break;
       case 'lock':
         if (this.state.locked) { this.state.locked = false; this.publish(); this.track(this.lastEditor); }
         else this.pinNode(this.selectedNodeKey ?? this.state.graph?.root.key);
@@ -347,14 +487,18 @@ export class RelationView implements vscode.Disposable {
       case 'skip': if (typeof m.value === 'boolean') await vscode.workspace.getConfiguration('dynsight').update('skipInactive', m.value, vscode.workspace.workspaceFolders?.length ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global); break;
       case 'refresh': await this.workspace.reindex('toolbar'); this.track(vscode.window.activeTextEditor); this.refresh(); break;
       case 'expand': case 'collapse': case 'expandSpecial': {
-        if (typeof m.key !== 'string' || !this.nodes.has(m.key)) return;
+        if (typeof m.key !== 'string') return;
+        const key = m.key, node = this.nodes.get(key);
+        if (!node || !canExpandNode(node)) return;
         let levels = m.type === 'collapse' ? 0 : 1;
         if (m.type === 'expandSpecial') {
           const value = await vscode.window.showInputBox({ title: 'Additional levels to expand from the selected node', value: '2', validateInput: v => /^[1-8]$/.test(v) ? undefined : 'Enter a number from 1 to 8.' });
-          if (!value || !this.nodes.has(m.key)) return;
+          if (!value || this.nodes.get(key) !== node || !/^[1-8]$/.test(value)) return;
           levels = Number(value);
         }
-        this.expanded[m.key] = levels; this.refresh(); break;
+        if (m.type === 'collapse') { this.clearHistory(); this.expanded[key] = levels; this.refresh(); }
+        else this.changeExpansion(() => { this.expanded[key] = levels; });
+        break;
       }
       case 'open': {
         if (typeof m.id !== 'string') return;

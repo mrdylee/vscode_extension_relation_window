@@ -7,7 +7,7 @@ const sample = { at: now - 2000, heapUsed: 256 * 1048576, heapLimit: 1024 * 1048
 function input(): IssueReportInput {
   return { now, version: '0.1.40', vscodeVersion: '1.105.0', platform: 'linux', arch: 'x64', remoteName: 'wsl',
     scopes: [{ include: 2, exclude: 1, macroMode: 'selected', macroPatterns: 1 }],
-    state: { status: 'Partial index: memory budget reached. Narrow Include/Exclude, then Rebuild index.', fileCount: 1820,
+    state: { slots: [], canGoBack: false, status: 'Partial index: memory budget reached. Narrow Include/Exclude, then Rebuild index.', fileCount: 1820,
       mode: 'both', depth: 2, locked: true, skipInactive: true, accessFilter: 'all', calleeSort: 'source',
       contextLayout: 'separate', callGraphDirection: 'callees-left', includeFunctionArguments: true, analyzeCallbacks: false, candidates: [],
       issues: ['secret/file.c: Callback analysis memory budget reached; targets may be incomplete.', 'secret/file.c: Line 60: incomplete or unsupported C syntax'] },

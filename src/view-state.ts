@@ -1,6 +1,7 @@
 import { CallbackDiagnostic, AccessFilter, CallbackTargets, CalleeSort, GraphData, GraphNode, Location, RelationMode, SymbolRecord } from './model';
 import { SyntaxToken } from './syntax';
 import { Diagnostics } from './diagnostics';
+import type { SlotSummary } from './relation-slots';
 
 export function nodePreviewId(node: GraphNode): string | undefined {
   if (['ai-candidate','user-confirmed'].includes(node.callKind??'') && node.symbolId) return node.symbolId;
@@ -13,6 +14,7 @@ export function canExpandNode(node: GraphNode): boolean {
 export interface Preview { location: Location; text: string; tokens: SyntaxToken[][]; firstLine: number; path: string; label: string }
 export type ContextLayout = 'combined' | 'combined-full-width' | 'combined-keep-left-sidebar' | 'combined-center' | 'combined-keep-right-sidebar' | 'separate';
 export interface ViewState {
+  slots: SlotSummary[]; canGoBack: boolean;
   graph?: GraphData; context?: Preview; candidates: SymbolRecord[];
   callback?: CallbackTargets;
   callbackDiagnostics?: CallbackDiagnostic[];

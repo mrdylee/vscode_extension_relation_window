@@ -21,7 +21,7 @@ export async function activate(context: vscode.ExtensionContext) {
   const workspace = new WorkspaceIndex(context.extensionPath, context.storageUri?.fsPath);
   registerBuildConfigurations(context, workspace);
   const copilot = registerCopilotCallbacks(context, workspace);
-  const view = new RelationView(workspace, context.extensionUri, copilot.actions);
+  const view = new RelationView(workspace, context.extensionUri, copilot.actions, context.workspaceState);
   registerIssueReporting(context, workspace, view);
   let timer: ReturnType<typeof setTimeout> | undefined;
   context.subscriptions.push(workspace, view,
