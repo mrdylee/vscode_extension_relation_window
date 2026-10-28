@@ -2,6 +2,7 @@ import type { Access, GraphNode, Kind } from '../src/model';
 import type { ViewState } from '../src/view-state';
 import { nodePreviewId, canExpandNode } from '../src/view-state';
 import type { Diagnostics } from '../src/diagnostics';
+import type { SlotSummary } from '../src/relation-slots';
 import { copilotWaitMessage } from '../src/diagnostics';
 import { highlightC } from '../src/syntax';
 import { createDiagnostics } from './diagnostics';
@@ -77,6 +78,7 @@ panes.append(context, divider, relation);
 if (contextOnly) app.append(context); else app.append(toolbar, panes, footer);
 let signature: string | undefined = '', previewSignature: string | undefined = '';
 let rootKey: string | undefined;
+let canGoBack = false;
 let currentDirection: ViewState['callGraphDirection'] | undefined;
 let panX = 0, panY = 0;
 function positionGraph() {
@@ -147,6 +149,7 @@ popup.onmouseenter = () => clearTimeout(closeTimer);
 popup.onmouseleave = scheduleClose;
 popup.addEventListener('focusout', event => { if (!popup.contains(event.relatedTarget as Node) && event.relatedTarget !== popupAnchor) hideDetails(); });
 const options = el('div', 'context-menu'); options.hidden = true;
+options.tabIndex = -1;
 options.setAttribute('role', 'menu'); options.setAttribute('aria-label', 'Relation options'); app.append(options);
 let menuAnchor: HTMLElement | undefined;
 function closeOptions(restoreFocus = false) {
@@ -158,32 +161,52 @@ function showOptions(event: MouseEvent | KeyboardEvent) {
   menuAnchor = (event.target as HTMLElement).closest<HTMLElement>('.node-title') ?? graph;
   options.replaceChildren();
   if (menuAnchor.dataset.symbolId) {
-    const key = menuAnchor.dataset.key;
+    const key = menuAnchor.dataset.key, symbolId = menuAnchor.dataset.symbolId;
     const pin = button('Pin this symbol', () => { closeOptions(); send('pinNode', { key }); });
     pin.setAttribute('role', 'menuitem'); options.append(pin);
+    if (['function', 'variable'].includes(menuAnchor.dataset.kind ?? '')) {
+      for (let slot = 0; slot < 5; slot++) {
+        const saved = currentSlots[slot];
+        const save = button(`Save to slot ${slot + 1}${saved?.name ? ` · ${saved.name}` : ''}`, () => { closeOptions(); send('saveSlot', { slot, key, symbolId }); });
+        save.disabled = saved?.locked ?? false; save.setAttribute('role', 'menuitem'); options.append(save);
+      }
+    }
   }
   const settings = button('Settings…', () => { closeOptions(); send('settings'); });
   settings.setAttribute('role', 'menuitem'); options.append(settings);
   const reset = button('Reset graph position', () => { closeOptions(); resetGraphPosition(); }); reset.setAttribute('role', 'menuitem'); options.append(reset);
+  positionOptions(event);
+}
+function positionOptions(event: MouseEvent | KeyboardEvent) {
   options.hidden = false;
-  const anchor = menuAnchor.getBoundingClientRect();
+  const anchor = menuAnchor!.getBoundingClientRect();
   const x = 'clientX' in event ? event.clientX : anchor.left;
   const y = 'clientY' in event ? event.clientY : anchor.bottom;
   options.style.left = `${Math.max(4, Math.min(x, innerWidth - options.offsetWidth - 4))}px`;
   options.style.top = `${Math.max(4, Math.min(y, innerHeight - options.offsetHeight - 4))}px`;
-  options.querySelector<HTMLButtonElement>('button')?.focus();
+  (options.querySelector<HTMLButtonElement>('button:not(:disabled)') ?? options).focus();
 }
 relation.oncontextmenu = showOptions;
 graph.tabIndex = 0; graph.setAttribute('aria-label', 'Relation graph');
 relation.addEventListener('keydown', event => {
   if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) showOptions(event);
 });
+function backKey(event: KeyboardEvent) {
+  const target = event.target as HTMLElement;
+  if (event.key !== 'Backspace' || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey ||
+    target.closest('input, textarea, select') || target.isContentEditable) return;
+  event.preventDefault(); hideDetails(popup.contains(target));
+  if (canGoBack) send('back');
+}
+relation.addEventListener('keydown', backKey);
+popup.addEventListener('keydown', backKey);
 options.onkeydown = event => {
   if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeOptions(true); }
   if (event.key === 'Tab') closeOptions();
   if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
     event.preventDefault();
-    const items = Array.from(options.querySelectorAll<HTMLButtonElement>('button'));
+    const items = Array.from(options.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'));
+    if (!items.length) return;
     const index = items.indexOf(document.activeElement as HTMLButtonElement);
     const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : (index + (event.key === 'ArrowUp' ? -1 : 1) + items.length) % items.length;
     items[next].focus();
@@ -308,6 +331,7 @@ function drawNode(node: GraphNode): HTMLElement {
   const openId = nodePreviewId(node);
   const title = button('', event => { if (event.detail <= 1) send('selectNode', { key: node.key }); }, '');
   title.className = 'node-title'; title.dataset.key = node.key;
+  title.dataset.kind = node.kind;
   if (node.symbolId) title.dataset.symbolId = node.symbolId;
   if (openId) title.dataset.preview = openId;
   title.append(icon(node), el('span', 'symbol-name', node.symbolId ? node.name : node.sites[0]?.name ?? node.name));
@@ -348,17 +372,37 @@ const depth = el('select'); depth.setAttribute('aria-label', 'Depth');
 for (let n = 1; n <= 8; n++) { const option = el('option', '', `${n} ${n === 1 ? 'level' : 'levels'}`); option.value = String(n); depth.append(option); }
 depth.onchange = () => send('depth', { value: Number(depth.value) });
 const lock = button('', () => send('lock'));
-const goToPin = button('↩ Pin', () => {
-  if (!rootKey) return;
+let currentSlots: SlotSummary[] = [];
+const symbolSlots = el('div', 'symbol-slots'); symbolSlots.setAttribute('role', 'group'); symbolSlots.setAttribute('aria-label', 'Saved symbols');
+const slotControls = Array.from({ length: 5 }, (_, slot) => {
+  const group = el('span', 'symbol-slot');
+  const recall = button(String(slot + 1), () => send('recallSlot', { slot })); recall.className = 'slot-recall';
+  const protect = button('🔓', () => send('lockSlot', { slot, locked: !currentSlots[slot]?.locked })); protect.className = 'slot-lock';
+  const menu = (event: MouseEvent | KeyboardEvent) => {
+    if (!currentSlots[slot]?.name) return;
+    event.preventDefault(); hideDetails(); menuAnchor = recall; options.replaceChildren();
+    const clear = button(`Clear slot ${slot + 1}`, () => { closeOptions(); send('clearSlot', { slot }); });
+    clear.setAttribute('role', 'menuitem'); clear.disabled = currentSlots[slot].locked; options.append(clear); positionOptions(event);
+  };
+  group.oncontextmenu = menu;
+  group.onkeydown = event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) menu(event); };
+  group.append(recall, protect); symbolSlots.append(group);
+  return { recall, protect };
+});
+function revealRoot() {
   hideDetails(); finishDrag(); resetGraphPosition();
   graph.querySelector<HTMLElement>(':scope > .branch > .node > .node-title')?.scrollIntoView({ block: 'center', inline: 'center' });
+}
+const goToPin = button('↩ Pin', () => {
+  if (!rootKey) return;
+  revealRoot();
   send('preview', { id: rootKey }); send('open', { id: rootKey });
 }, 'Go to pinned symbol');
 goToPin.setAttribute('aria-label', 'Go to pinned symbol'); goToPin.hidden = true;
 const skipLabel = el('label', 'skip'); const skip = el('input'); skip.type = 'checkbox';
 skipLabel.title = 'Skip branches disabled by literal #if/#elif 0 or 1. Macro conditions (#ifdef, #ifndef, defined) are kept; #define and #undef are not evaluated.';
 skip.onchange = () => send('skip', { value: skip.checked }); skipLabel.append(skip, document.createTextNode('Skip inactive branches'));
-toolbar.append(brand, mode, depth, lock, goToPin, skipLabel, button('Rebuild index', () => send('refresh')),
+toolbar.append(brand, mode, depth, lock, symbolSlots, goToPin, skipLabel, button('Rebuild index', () => send('refresh')),
   button('Settings', () => send('settings'), 'Configure layout, sorting, call graph direction and analysis scope'),
   button('Help', () => send('help'), 'Open the bundled offline user guide'));
 let variableMode: boolean | undefined;
@@ -394,6 +438,17 @@ function renderContext(preview: ViewState['context']) {
   }
 }
 function render(state: ViewState) {
+  currentSlots = state.slots ?? [];
+  slotControls.forEach(({ recall, protect }, slot) => {
+    const saved = currentSlots[slot];
+    recall.title = saved?.name ?? `Empty slot ${slot + 1}`; recall.disabled = !saved?.name;
+    recall.setAttribute('aria-label', `Slot ${slot + 1}: ${saved?.name ?? 'empty'}`);
+    protect.hidden = !saved?.name; protect.textContent = saved?.locked ? '🔒' : '🔓';
+    protect.setAttribute('aria-label', `${saved?.locked ? 'Unlock' : 'Lock'} slot ${slot + 1}`);
+    protect.setAttribute('aria-pressed', String(saved?.locked ?? false));
+    protect.title = saved?.locked ? 'Unlock to allow replacement or clearing' : 'Protect from replacement or clearing';
+  });
+  canGoBack = state.canGoBack ?? false;
   const separate = state.contextLayout === 'separate';
   panes.classList.toggle('separate', separate); context.hidden = divider.hidden = separate;
   const variable = state.graph?.root.kind === 'variable';
@@ -458,7 +513,7 @@ function render(state: ViewState) {
   const next = JSON.stringify([state.graph, direction, state.callback]);
   if (next !== signature) {
     const key = (document.activeElement as HTMLElement)?.dataset.key;
-    hideDetails();
+    hideDetails(); closeOptions();
     signature = next; graph.replaceChildren();
     if (state.graph) {
       const tree = drawNode(state.graph.root);
@@ -483,7 +538,7 @@ function render(state: ViewState) {
       : state.candidates.length ? 'Select a definition above to show its references.' : 'Click a function or variable name in C source to show its references.'));
     positionGraph();
     if (rootChanged || directionChanged) resetGraphPosition();
-    if (key) Array.from(graph.querySelectorAll<HTMLButtonElement>('.node-title')).find(b => b.dataset.key === key)?.focus({ preventScroll: true });
+    if (key) (Array.from(graph.querySelectorAll<HTMLButtonElement>('.node-title')).find(b => b.dataset.key === key) ?? graph).focus({ preventScroll: true });
   }
   const rootTitle = graph.querySelector<HTMLButtonElement>(':scope > .branch > .node > .node-title');
   const marker = rootTitle?.querySelector('.pin-marker');
@@ -513,12 +568,13 @@ function render(state: ViewState) {
     const details = el('details', 'warning'); details.append(el('summary', '', `Analysis notices: ${state.issues.length}`), el('pre', '', state.issues.slice(0, 100).join('\n'))); footer.append(details);
   }
   if (state.graph?.truncated) footer.append(el('span', 'warning', 'Limited to 300 nodes'));
-  footer.append(el('span', 'footer-shortcuts muted', 'Space Details · → Expand · ← Collapse · Shift+→ Levels · Enter Open source'));
+  footer.append(el('span', 'footer-shortcuts muted', 'Backspace Back · Space Details · → Expand · ← Collapse · Shift+→ Levels · Enter Open source'));
   footer.append(button('Diagnostics', () => diagnostics?.open(), 'Show memory measurements for a screenshot'));
 }
 window.addEventListener('message', event => {
   if (event.data?.type === 'diagnostics') { diagnostics?.update(event.data.diagnostics); renderCopilot(event.data.diagnostics?.copilot); renderLocal(event.data.diagnostics); }
   if (event.data?.type === 'state' && !contextOnly) render(event.data.state);
+  if (event.data?.type === 'revealRoot' && !contextOnly && event.data.id === rootKey) revealRoot();
   if (event.data?.type === 'context' && contextOnly) renderContext(event.data.context);
 });
 send(contextOnly ? 'readyContext' : 'ready');

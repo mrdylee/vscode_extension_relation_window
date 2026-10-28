@@ -20,20 +20,20 @@ const text = (value: unknown): value is string => typeof value === 'string' && v
 const level = (value: unknown, min: number) => Number.isInteger(value) && Number(value) >= min && Number(value) <= 8;
 function symbol(value: unknown): value is SavedSymbol {
   return object(value) && ['id', 'uri', 'name', 'sourceDigest'].every(key => text(value[key])) &&
-    ['function', 'variable'].includes(String(value.kind)) && ['static', 'global', 'local'].includes(String(value.storage)) &&
+    ['function', 'variable'].includes(value.kind as string) && ['static', 'global', 'local'].includes(value.storage as string) &&
     Number.isInteger(value.start) && Number(value.start) >= 0 && typeof value.definition === 'boolean' &&
     ['containerName', 'ownerName', 'sourceUnitUri'].every(key => value[key] === undefined || text(value[key]));
 }
 function slot(value: unknown): value is SavedSlot {
   if (!object(value) || !symbol(value.target) || typeof value.locked !== 'boolean' || !object(value.options)) return false;
   const o = value.options, target = value.target;
-  return ['references', 'callers', 'callees', 'both'].includes(String(o.mode)) && level(o.depth, 1) &&
-    ['all', 'read', 'write', 'readwrite', 'address'].includes(String(o.accessFilter)) &&
-    ['name', 'source'].includes(String(o.calleeSort)) && ['callers-left', 'callees-left'].includes(String(o.callGraphDirection)) &&
+  return ['references', 'callers', 'callees', 'both'].includes(o.mode as string) && level(o.depth, 1) &&
+    ['all', 'read', 'write', 'readwrite', 'address'].includes(o.accessFilter as string) &&
+    ['name', 'source'].includes(o.calleeSort as string) && ['callers-left', 'callees-left'].includes(o.callGraphDirection as string) &&
     typeof o.includeFunctionArguments === 'boolean' && Array.isArray(value.branches) && value.branches.length > 0 && value.branches.length <= 300 &&
     value.branches.every((b: unknown, i: number) => object(b) && symbol(b.symbol) &&
       (i === 0 ? b.parent === null && b.symbol.id === target.id : Number.isInteger(b.parent) && Number(b.parent) >= 0 && Number(b.parent) < i) &&
-      ['references', 'callers', 'callees'].includes(String(b.direction)) && (b.levels === undefined || level(b.levels, 0)));
+      ['references', 'callers', 'callees'].includes(b.direction as string) && (b.levels === undefined || level(b.levels, 0)));
 }
 export function readSlots(value: unknown): (SavedSlot | null)[] {
   return Array.from({ length: 5 }, (_, i) => {

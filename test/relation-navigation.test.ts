@@ -18,12 +18,12 @@ class Emitter {
   dispose() { this.listeners.clear(); }
 }
 const uri = 'file:///navigation.c';
-const source = 'int value; void D(void){} void C(void){D();} void B(void){C();} void SideLeaf(void){} void Side(void){SideLeaf();} void A(void){B();Side();value++;} void Entry(void){A();}';
+const source = 'int value; void D(void){} void C(void){D();} void B(void){C();} void SideLeaf(void){} void Side(void){SideLeaf();} void A(void){B();Side();value++;} void Entry(void){A();} void Top(void){Entry();}';
 function harness(saved = new Map<string, unknown>()) {
   const changed = new Emitter(), settings = new Emitter(), diagnosticsChanged = new Emitter();
   const index = new RelationIndex(); index.update(analyzer.analyze(uri, source));
   const opened: any[] = [], messages: any[] = [], notices: string[] = [];
-  const config = new Map<string, unknown>(); let writing: (() => Promise<void>) | undefined, input: string | undefined;
+  const config = new Map<string, unknown>(); let writing: (() => Promise<void>) | undefined, notifying: (() => Promise<void>) | undefined, input: string | undefined;
   const storage = { get: (key: string) => saved.get(key), update: async (key: string, value: unknown) => {
     await writing?.(); saved.set(key, JSON.parse(JSON.stringify(value)));
   } };
@@ -33,7 +33,7 @@ function harness(saved = new Map<string, unknown>()) {
     workspace: { getConfiguration: () => ({ get: (key: string, fallback: unknown) => config.get(key) ?? fallback }),
       onDidChangeConfiguration: settings.event, asRelativePath: (value: unknown) => String(value) },
     window: { showTextDocument: async (document: any, options: any) => { opened.push({ uri: document.toString(), options }); },
-      showWarningMessage: async (message: string) => { notices.push(message); }, showInformationMessage: async (message: string) => { notices.push(message); },
+      showWarningMessage: async (message: string) => { notices.push(message); await notifying?.(); }, showInformationMessage: async (message: string) => { notices.push(message); await notifying?.(); },
       showInputBox: async () => input }, commands: { executeCommand: async () => {} } };
   const module = { exports: {} as any };
   runInNewContext(bundle, { module, exports: module.exports, process, Buffer, URL, setTimeout, clearTimeout,
@@ -48,10 +48,37 @@ function harness(saved = new Map<string, unknown>()) {
   const node = (name: string, direction?: string) => [...view.nodes.values()].find((n: any) => n.name === name && (!direction || n.direction === direction)) as any;
   const update = (text: string) => { index.update(analyzer.analyze(uri, text)); view.refresh(); };
   return { view, workspace, index, root, node, opened, notices, messages, saved, update,
-    writing: (action?: () => Promise<void>) => { writing = action; }, input: (value?: string) => { input = value; },
+    writing: (action?: () => Promise<void>) => { writing = action; }, notifying: (action?: () => Promise<void>) => { notifying = action; }, input: (value?: string) => { input = value; },
     preference: (key: string, value: unknown) => { config.set(key, value); settings.fire({ affectsConfiguration: (name: string) => name === 'dynsight.' + key }); } };
 }
 const graph = (view: any) => JSON.stringify(view.state.graph);
+
+test('unavailable-slot notification does not block recalling the next slot', async () => {
+  const h = harness(); let release: (() => void) | undefined;
+  try {
+    await h.view.handleMessage({ type: 'saveSlot', slot: 0, key: 'root' }); h.root('B');
+    await h.view.handleMessage({ type: 'saveSlot', slot: 1, key: 'root' });
+    h.update(source.replace('void A(', 'void Z(')); h.root('D');
+    h.notifying(() => new Promise<void>(resolve => { release = resolve; }));
+    void h.view.handleMessage({ type: 'recallSlot', slot: 0 });
+    let completed = false;
+    void h.view.handleMessage({ type: 'recallSlot', slot: 1 }).then(() => { completed = true; });
+    await new Promise(setImmediate);
+    assert.equal(completed, true); assert.equal(h.view.state.graph.root.name, 'B');
+  } finally { release?.(); h.view.dispose(); }
+});
+
+test('stale context-menu identity and changed source cannot save a different symbol', async () => {
+  const h = harness();
+  try {
+    const symbolId = h.view.state.graph.root.symbolId;
+    h.root('B'); await h.view.handleMessage({ type: 'saveSlot', slot: 0, key: 'root', symbolId });
+    assert.equal(h.view.state.slots[0].name, undefined);
+    h.root(); h.index.update(analyzer.analyze(uri, source.replace('void A(', 'void Z(')));
+    await h.view.handleMessage({ type: 'saveSlot', slot: 0, key: 'root' });
+    assert.equal(h.view.state.slots[0].name, undefined);
+  } finally { h.view.dispose(); }
+});
 
 test('queued save keeps the exact right-clicked symbol when an earlier recall changes the root', async () => {
   const h = harness();
@@ -104,6 +131,9 @@ test('Back is bounded, handles both directions, and ignores leaves and cancelled
     await h.view.handleMessage({ type: 'expandSpecial', key: h.node('B').key }); assert.equal(h.view.state.canGoBack, false);
     await h.view.handleMessage({ type: 'mode', value: 'both' });
     const initial = graph(h.view);
+    await h.view.handleMessage({ type: 'selectNode', key: h.node('Entry', 'callers').key });
+    assert.ok(h.node('Top', 'callers'));
+    await h.view.handleMessage({ type: 'back' }); assert.equal(graph(h.view), initial);
     await h.view.handleMessage({ type: 'selectNode', key: h.node('B', 'callees').key });
     await h.view.handleMessage({ type: 'selectNode', key: h.node('C', 'callees').key });
     await h.view.handleMessage({ type: 'selectNode', key: h.node('D', 'callees').key });
@@ -151,6 +181,7 @@ test('variable filters and both directions survive recall without writing settin
     await h.view.handleMessage({ type: 'saveSlot', slot: 4, key: 'root' });
     h.root(); await h.view.handleMessage({ type: 'mode', value: 'both' });
     await h.view.handleMessage({ type: 'selectNode', key: h.node('B', 'callees').key });
+    await h.view.handleMessage({ type: 'selectNode', key: h.node('Entry', 'callers').key });
     const original = graph(h.view);
     await h.view.handleMessage({ type: 'saveSlot', slot: 2, key: 'root' });
     await h.view.handleMessage({ type: 'recallSlot', slot: 4 });

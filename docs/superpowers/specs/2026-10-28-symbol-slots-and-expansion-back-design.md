@@ -2,8 +2,7 @@
 
 Date: 2026-10-28
 
-Status: Requirements agreed in brainstorming; this document specifies future
-implementation. Product code has not been changed for this feature.
+Status: Implemented and locally verified, including Backspace keyboard navigation.
 
 ## User decisions
 
@@ -15,8 +14,8 @@ implementation. Product code has not been changed for this feature.
 - Each slot has a lock that prevents overwrite and deletion, while allowing recall.
 - Hovering over a slot shows the saved function name; variable slots show the
   variable name.
-- Add a Back button that undoes expansions in reverse order: expand B, expand C,
-  Back undoes C, and another Back undoes B. This is expansion history.
+- Use the Backspace key to undo expansions in reverse order: expand B, expand C,
+  Backspace undoes C, and another Backspace undoes B. This is expansion history.
 
 ## Existing integration points
 
@@ -43,7 +42,7 @@ There is no new analysis pass or Worker protocol.
 
 ## Slots and registration
 
-The toolbar order is Following Selection, the five-slot group, Back, then the
+The toolbar order is Following Selection, the five-slot group, then the
 existing Go to pin and remaining controls. Keep all five slots grouped when the
 toolbar wraps. A populated slot shows its number and a separate lock button;
 the symbol name appears in its tooltip and accessible name. Empty slots show
@@ -108,8 +107,12 @@ saved slots and locks. With no workspace storage, keep session-only slots.
 
 ## Expansion Back
 
-Place a visible `← Back` button after the slot group. Its tooltip is Undo last
-expansion; its accessible name is Back. Disable it when the stack is empty.
+Use plain Backspace while the Relation graph or its details popup has focus.
+Show the shortcut in the footer. There is no Back toolbar button. Empty history
+is a no-op. Leave input, textarea, select and editable text deletion untouched;
+modified Backspace shortcuts and events in Context or the editor retain their
+normal behavior. When undo removes a focused node, return focus to the graph so
+successive Backspace presses continue to undo earlier expansions.
 
 Before a successful user expansion, copy expanded overrides and current node/
 Context selection. Retain that snapshot only if the visible tree changed. Cover
@@ -134,8 +137,8 @@ from the restored state. Back history is session-only and is not saved in slots.
 
 Add state fields for five slot summaries and canGoBack. The host retains saved
 locators and branch details; the webview receives only display/availability data.
-Add messages saveSlot with slot and node key, recallSlot with slot, lockSlot with
-slot and boolean locked, clearSlot with slot, and back. Use one documented
+Add messages saveSlot with slot, node key and expected symbolId, recallSlot with
+slot, lockSlot with slot and boolean locked, clearSlot with slot, and back. Use one documented
 zero-based slot index on the wire; display numbers 1 through 5.
 After a successful recall state is published, send a revealRoot message carrying
 the current root ID. The webview validates that ID and reveals the root even
@@ -158,12 +161,12 @@ updates must preserve graph DOM, focus, pan and expanded branches.
    failed persistence does not falsely report a successful change.
 5. Source line movement can preserve an unambiguous symbol. Deleted, shadowed,
    ambiguous and unavailable header-context targets never jump to another symbol.
-6. Expand B, then C, then press Back twice. Restore each exact earlier tree,
+6. Expand B, then C, then press Backspace twice. Restore each exact earlier tree,
    including unrelated branches, selection, pin state and canvas position.
-7. Empty history disables Back. No-op clicks and preview/diagnostics updates do
-   not consume history. Root/options/index changes and explicit collapse clear it.
+7. Empty history makes Backspace a no-op. No-op clicks and preview/diagnostics
+   updates do not consume history. Root/options/index changes and explicit collapse clear it.
 8. Verify combined/separate Context, both graph orientations, narrow toolbar,
    keyboard access, themes and existing double-click source opening.
 
-Implement only after the brainstorming review moves to implementation. Version
-changes, packaging, installation and publication are separate delivery work.
+Local implementation was requested after brainstorming. Version changes,
+packaging, installation and publication are separate delivery work.

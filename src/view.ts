@@ -312,6 +312,8 @@ export class RelationView implements vscode.Disposable {
   private captureSlot(key: string): SavedSlot | undefined {
     const node = this.nodes.get(key), graph = this.state.graph;
     if (!node || !graph) return;
+    const files = this.graphSnapshot?.files;
+    if (!files || files.length !== this.index.files.size || files.some(file => this.index.files.get(fileKey(file)) !== file)) return;
     const symbols = new Map(this.slotSymbols(this.index, new Set([...this.nodes.values()].map(node => node.location.uri))).map(symbol => [symbol.id, symbol]));
     const target = node.symbolId && symbols.get(node.symbolId);
     if (!target) return;
@@ -331,7 +333,7 @@ export class RelationView implements vscode.Disposable {
   private async recallSlot(slot: SavedSlot) {
     const index = this.workspace.indexFor(slot.target.uri), symbols = this.slotSymbols(index, new Set(slot.branches.map(branch => branch.symbol.uri).concat(slot.target.uri)));
     const target = matchSavedSymbol(slot.target, symbols), symbol = target && index.symbol(target.id);
-    if (!symbol) { await vscode.window.showWarningMessage(`Saved symbol is unavailable: ${slot.target.name}`); return; }
+    if (!symbol) { void vscode.window.showWarningMessage(`Saved symbol is unavailable: ${slot.target.name}`); return; }
     const { mode, depth, accessFilter, calleeSort, includeFunctionArguments } = slot.options;
     const expanded: Record<string, number> = {}, keys: (string | undefined)[] = [];
     const build = () => index.graph(symbol.id, mode, depth, expanded, accessFilter, calleeSort, includeFunctionArguments);
@@ -361,10 +363,12 @@ export class RelationView implements vscode.Disposable {
     this.refresh();
     await this.handleMessage({ type: 'open', id: symbol.id });
     await this.webview?.webview.postMessage({ type: 'revealRoot', id: symbol.id });
-    if (partial) await vscode.window.showInformationMessage(`Restored ${symbol.name}; some saved branches are unavailable.`);
+    if (partial) void vscode.window.showInformationMessage(`Restored ${symbol.name}; some saved branches are unavailable.`);
   }
   private slotAction(m: Record<string, unknown>) {
     if (!Number.isInteger(m.slot) || Number(m.slot) < 0 || Number(m.slot) >= 5) return Promise.resolve();
+    if (m.type === 'saveSlot' && m.symbolId !== undefined && (typeof m.key !== 'string' ||
+      this.nodes.get(m.key)?.symbolId !== m.symbolId)) return Promise.resolve();
     const slot = Number(m.slot);
     const captured = m.type === 'saveSlot' && typeof m.key === 'string' ? this.captureSlot(m.key) : undefined;
     const action = this.slotActions.then(async () => {
@@ -390,7 +394,7 @@ export class RelationView implements vscode.Disposable {
   async handleMessage(message: unknown) {
     if (!message || typeof message !== 'object') return;
     const m = message as Record<string, unknown>;
-    if (['saveSlot', 'recallSlot', 'lockSlot', 'clearSlot'].includes(String(m.type))) return this.slotAction(m);
+    if (typeof m.type === 'string' && ['saveSlot', 'recallSlot', 'lockSlot', 'clearSlot'].includes(m.type)) return this.slotAction(m);
     if (m.type === 'selectBuildConfiguration') { await vscode.commands.executeCommand('dynsight.selectBuildConfiguration'); return; }
     if(m.type === 'copyFunctionName') {
       if(typeof m.requestId !== 'string'||!m.requestId.length||m.requestId.length>128)return;

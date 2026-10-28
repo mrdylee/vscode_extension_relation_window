@@ -244,6 +244,30 @@ Click **Settings** in Relation to open all Dynsight settings in one place. Sorti
 
 Right-click inside Relation (or focus a node and press **Shift+F10**) for **Settings…** and **Reset graph position**. Reset returns the whole graph to its initial left-aligned position.
 
+The five numbered slots beside **Following selection** save symbols for later.
+Point at a function or variable in Relation, right-click, and choose **Save to
+slot 1–5**. Each slot keeps that symbol, its expanded branches and graph options.
+Hover over a populated slot to see its symbol name; click it to restore the tree,
+show Context and open the symbol's source. Saving a descendant makes that symbol
+the root when recalled. Recall pins the tree; use **Following selection** to
+resume tracking the editor.
+
+Use the padlock beside each populated slot to protect it from replacement or
+clearing. Locked slots still open normally. Unlock before replacing a slot, or
+right-click the slot and choose **Clear slot**. Slots and locks persist in this
+workspace. Relations are rebuilt from current code: unavailable symbols are
+reported, and changed branches may be only partly restored.
+
+Press **Backspace** while Relation has focus to undo the most recent expansion.
+Expand B, then C; Backspace restores the
+tree before expanding C, and another Backspace restores the tree before expanding B.
+It keeps the root, pin state and canvas position. The latest 100 expansions are
+available during this session. Changing the root, graph options or indexed
+sources, recalling a slot, or explicitly collapsing a branch starts a new Back
+history. Backspace keeps its normal deletion behavior in editable fields, and
+does not act as graph navigation in the source editor or Context. Slot contents
+stay as saved until you explicitly replace them.
+
 For a full-width bottom panel beneath both sidebars, select **Settings → Context
 Layout → Combined · Full width**. The same VS Code alignment is available manually
 through **View → Appearance → Align Panel → Justify**.

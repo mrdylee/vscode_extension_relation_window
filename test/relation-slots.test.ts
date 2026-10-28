@@ -22,7 +22,8 @@ test('slot round-trip preserves numbering and owns its records', () => {
 test('malformed entries never shift a later slot', () => {
   for (const bad of [{ ...slot, locked: 'yes' }, { ...slot, options: { ...slot.options, depth: 9 } },
     { ...slot, target: { ...target, kind: 'unknown' } }, { ...slot, branches: [{ ...slot.branches[0], parent: 0 }] },
-    { ...slot, branches: [{ ...slot.branches[0], levels: -1 }] }, { ...slot, branches: Array(301).fill(slot.branches[0]) }]) {
+    { ...slot, branches: [{ ...slot.branches[0], levels: -1 }] }, { ...slot, branches: Array(301).fill(slot.branches[0]) },
+    { ...slot, options: { ...slot.options, mode: { toString: null } } }]) {
     const loaded = readSlots([slot, bad, slot, null, slot]);
     assert.equal(loaded[1], null); assert.equal(loaded[2]?.target.name, 'run'); assert.equal(loaded[4]?.target.name, 'run');
   }

@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import assert from 'node:assert/strict';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { RelationView } from '../src/view';
 
 export async function run() {
   const ext = vscode.extensions.getExtension('dylee.dynsight');
@@ -928,6 +929,40 @@ export async function run() {
   assert.equal(api.workspace.buildProfile.units[0].status,'resolved');
   assert.deepEqual(api.workspace.index.callbackAt(buildSourceUri.toString(),buildSource.lastIndexOf('native_cb();')+2).targets.map((target:any)=>target.name),['native_second']);
   assert.equal(api.workspace.diagnostics.index.sourceParses,sourceParses,'Make options refresh reuses the generic source parse');
+  const slotUri = vscode.Uri.joinPath(root, 'saved-slots.c');
+  const slotSource = 'void slot_D(void){}\nvoid slot_C(void){slot_D();}\nvoid slot_B(void){slot_C();}\nvoid slot_A(void){slot_B();}\n';
+  await vscode.workspace.fs.writeFile(slotUri, Buffer.from(slotSource));
+  await new Promise(resolve => setTimeout(resolve, 500)); await api.workspace.whenIdle();
+  const slotDocument = await vscode.workspace.openTextDocument(slotUri), slotEditor = await vscode.window.showTextDocument(slotDocument);
+  const slotPosition = slotDocument.positionAt(slotSource.indexOf('slot_A('));
+  slotEditor.selection = new vscode.Selection(slotPosition, slotPosition);
+  api.view.state.locked = false; api.view.track(slotEditor, true);
+  await api.view.handleMessage({ type: 'mode', value: 'callees' });
+  await api.view.handleMessage({ type: 'depth', value: 1 });
+  const slotInitial = JSON.stringify(api.view.state.graph);
+  await api.view.handleMessage({ type: 'selectNode', key: api.view.state.graph.root.children.find((node: any) => node.name === 'slot_B').key });
+  const slotAfterB = JSON.stringify(api.view.state.graph);
+  await api.view.handleMessage({ type: 'selectNode', key: api.view.state.graph.root.children[0].children.find((node: any) => node.name === 'slot_C').key });
+  const slotExpanded = JSON.stringify(api.view.state.graph);
+  await api.view.handleMessage({ type: 'saveSlot', slot: 0, key: 'root' });
+  await api.view.handleMessage({ type: 'lockSlot', slot: 0, locked: true });
+  await api.view.handleMessage({ type: 'clearSlot', slot: 0 });
+  assert.equal(api.view.state.slots[0].name, 'slot_A', 'native lock protects the slot');
+  await api.view.handleMessage({ type: 'back' }); assert.equal(JSON.stringify(api.view.state.graph), slotAfterB);
+  await api.view.handleMessage({ type: 'back' }); assert.equal(JSON.stringify(api.view.state.graph), slotInitial);
+  await vscode.window.showTextDocument(buildDocument); api.view.track(buildEditor, true);
+  await api.view.handleMessage({ type: 'recallSlot', slot: 0 });
+  assert.equal(JSON.stringify(api.view.state.graph), slotExpanded, 'native recall restores saved expansions');
+  assert.equal(vscode.window.activeTextEditor!.document.uri.toString(), slotUri.toString());
+  assert.ok(vscode.window.activeTextEditor!.selection.start.isEqual(slotPosition), 'native recall opens the current definition');
+  assert.equal(api.view.state.context.location.uri, slotUri.toString());
+  assert.equal(api.view.state.canGoBack, false, 'recall begins a new expansion history');
+  const reloadedSlots = new RelationView(api.workspace, ext.extensionUri, undefined, api.view.storage);
+  try {
+    assert.equal(reloadedSlots.state.slots[0].locked, true, 'native Memento retains locks');
+    await reloadedSlots.handleMessage({ type: 'recallSlot', slot: 0 });
+    assert.equal(JSON.stringify(reloadedSlots.state.graph), slotExpanded, 'reloaded view restores persisted branches');
+  } finally { reloadedSlots.dispose(); }
   const output = process.env.C_RELATION_TEST_OUTPUT!;
   await mkdir(path.dirname(output), { recursive: true });
   await writeFile(path.join(path.dirname(output), 'diagnostic-report.md'), report);
