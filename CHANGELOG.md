@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.84 — 2026-10-28
+
+- Overlay each slot's padlock on its number so empty, unlocked and locked slots keep the same compact width.
+- Preserve padlock clicks, symbol recall, saved-name tooltips and existing keyboard navigation.
+
 ## 0.1.83 — 2026-10-28
 
 - Save five workspace-persistent function/variable views from a Relation symbol's context menu; restore tree options, expanded branches, Context and current source.
