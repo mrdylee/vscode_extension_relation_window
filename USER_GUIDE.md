@@ -252,7 +252,7 @@ show Context and open the symbol's source. Saving a descendant makes that symbol
 the root when recalled. Recall pins the tree; use **Following selection** to
 resume tracking the editor.
 
-Use the padlock beside each populated slot to protect it from replacement or
+Use the padlock over each populated slot's number to protect it from replacement or
 clearing. Locked slots still open normally. Unlock before replacing a slot, or
 right-click the slot and choose **Clear slot**. Slots and locks persist in this
 workspace. Relations are rebuilt from current code: unavailable symbols are
