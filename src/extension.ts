@@ -24,6 +24,8 @@ export async function activate(context: vscode.ExtensionContext) {
   const view = new RelationView(workspace, context.extensionUri, copilot.actions, context.workspaceState);
   registerIssueReporting(context, workspace, view);
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const openGuide = (language: string) => vscode.commands.executeCommand(
+    'markdown.showPreview', vscode.Uri.joinPath(context.extensionUri, /^ko(?:-|$)/i.test(language) ? 'USER_GUIDE.ko.md' : 'USER_GUIDE.md'));
   context.subscriptions.push(workspace, view,
     vscode.window.registerWebviewViewProvider('dynsight.explorer', { resolveWebviewView: webview => view.resolveWebviewView(webview) }),
     vscode.window.registerWebviewViewProvider('dynsight.context', { resolveWebviewView: webview => view.resolveWebviewView(webview, true) }),
@@ -42,8 +44,9 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('dynsight.openSettings', () => vscode.commands.executeCommand(
       vscode.workspace.workspaceFolders?.length ? 'workbench.action.openWorkspaceSettings' : 'workbench.action.openSettings',
       { query: '@ext:dylee.dynsight', jsonEditor: false })),
-    vscode.commands.registerCommand('dynsight.help', () => vscode.commands.executeCommand(
-      'markdown.showPreview', vscode.Uri.joinPath(context.extensionUri, 'USER_GUIDE.md'))),
+    vscode.commands.registerCommand('dynsight.help', () => openGuide(vscode.env.language)),
+    vscode.commands.registerCommand('dynsight.helpKorean', () => openGuide('ko')),
+    vscode.commands.registerCommand('dynsight.helpEnglish', () => openGuide('en')),
     vscode.window.onDidChangeTextEditorSelection(event => {
       clearTimeout(timer); timer = setTimeout(() => view.track(event.textEditor), 80);
     }),

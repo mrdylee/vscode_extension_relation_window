@@ -1,5 +1,141 @@
 # Dynsight — User Guide
 
+**Language: English | [한국어 사용 설명서](USER_GUIDE.ko.md)**
+
+> **New to Dynsight?** Follow [Quick start](#quick-start), then [Settings step by step](#settings-step-by-step). This manual is bundled with the extension and works offline.
+>
+> Open it anytime with **Help · 사용법** beside **Settings** in Relation. VS Code's display language selects the initial guide; use the language link above to switch.
+
+## Find what you need
+
+| I want to… | Go to… |
+| --- | --- |
+| See my first call tree | [Quick start](#quick-start) |
+| Configure Settings without writing JSON | [Settings step by step](#settings-step-by-step) |
+| Understand each setting and its default | [Settings at a glance](#settings-at-a-glance) |
+| Analyze only a few folders | [Choose which files to analyze](#choose-which-files-to-analyze) |
+| Follow macros and callbacks | [Smart Analysis](#smart-analysis) |
+| Use optional AI suggestions | [Optional Copilot callback candidates](#optional-copilot-callback-candidates) |
+| Save trees in slots, pin a symbol or undo a branch change | [Settings and moving Context](#settings-and-moving-context-v0130) |
+| Understand an icon | [Symbol icons and badges](#symbol-icons-and-badges) |
+| Fix missing results or slow analysis | [Troubleshooting checklist](#troubleshooting-checklist) |
+| Select a Make build configuration | [Existing Make build configurations](#existing-make-build-configurations) |
+| Update Dynsight | [WSL and updates](#wsl-and-updates) |
+
+## Quick start
+
+1. In VS Code, select **File → Open Folder…** and open the folder containing your C/H files. A compiler or build is not required.
+2. Open the Command Palette: **Ctrl+Shift+P** on Windows/Linux, **Cmd+Shift+P** on macOS.
+3. Run **Dynsight: Open Relation and Context**.
+4. Wait for indexing to finish, then click a function name in a `.c` or `.h` editor.
+5. Read the **Relation** tree and the code in **Context**. Click a tree node to preview it; double-click or press **Enter** to open its location in the main editor.
+
+**First useful example:** Select `main`, choose **Callees · Called functions**, and start with **1 level**. You can expand an individual branch later by clicking it.
+
+## Settings step by step
+
+### Open the settings screen
+
+1. Click **Settings** in the Relation toolbar, beside **Help · 사용법**. Alternatively, run **Dynsight: Open Settings** from the Command Palette.
+2. Use the **Workspace** tab to configure this project. **User** settings apply across projects; folder tabs in a multi-folder workspace configure that folder's analysis scope. Automatic Updates is a User setting.
+3. Change a dropdown, checkbox or folder list. VS Code saves settings as you edit; a folder selection review saves only when you click **Apply**.
+4. Return to your C/H editor and click a symbol. Display settings apply immediately. Scope changes refresh affected analysis; wait for the status to settle before checking results.
+
+> **Can't find a setting?** Search for its exact key, for example `@id:dynsight.include`. Search for `@ext:dylee.dynsight` to show all Dynsight settings again.
+
+### Recipe A — Analyze App and Drivers only
+
+1. Find **Include** (`dynsight.include`) and click **Select folders…**.
+2. Choose **Add folders…**, select your `App` and `Drivers` folders, then return to the review list.
+3. Check the list and click **Apply**. Rules such as `App/**` mean “everything under App.” Remove an existing `**` rule if you want to narrow the scope.
+4. In **Exclude**, review folders that should be skipped. **Exclude always wins.** Needed shared headers must remain inside the general analysis scope.
+
+**Easiest alternative:** Select folders in Explorer, right-click → **Dynsight → Add to Analysis Include / Exclude from Analysis**, review, then **Apply**. **Esc** cancels without saving.
+
+### Recipe B — Enable local macro and callback analysis
+
+1. First verify that ordinary function navigation works.
+2. Find **Smart Analysis: Include** and click **Select folders…**. Choose a small relevant folder, such as `App/control`, and save it.
+3. Leave **Smart Analysis: Macro** checked. It enables local macro expansion and callback propagation together.
+4. Leave **Smart Analysis: Copilot** unchecked if you only want local analysis. Watch the detailed-analysis status as additional relationships appear.
+
+> **Two different Include lists:** General **Include = empty** means all C/H files subject to exclusions and discovery limits. **Smart Analysis: Include = empty** disables the extra analysis in new workspaces. To select all indexed files for Smart Analysis, use `["**"]`. Existing legacy scopes stay effective until the new Smart Analysis Include is explicitly saved.
+
+### Recipe C — Make the screen easier to read
+
+| Desired result | Setting to choose |
+| --- | --- |
+| Context and Relation together | **Context Layout → Combined** |
+| Use the full bottom width | **Context Layout → Combined · Full width** |
+| Move Context separately | **Context Layout → Separate**, then drag the **Dynsight Context** header |
+| Reverse incoming/outgoing branches | **Call Graph Direction → Callees left / Callers right**, in **Callers & Callees** mode |
+| Read called functions in source order | **Callee Sort → source**; this is written order, not execution order |
+| Show functions passed as callback arguments | Enable **Include Function Arguments**; a dotted connector means an argument, not a proven call |
+
+Explicit Combined alignment also moves Terminal and other bottom-panel views because they share VS Code's panel alignment.
+
+### Recipe D — Enable optional Copilot suggestions
+
+1. Choose **Smart Analysis: Include** folders first.
+2. Check **Smart Analysis: Copilot**.
+3. Click **Select Copilot Model** in **Copilot Model** and choose an available model. Follow VS Code's account/access prompts if shown.
+4. Eligible unresolved callbacks are analyzed one at a time. **Stop Copilot Analysis** pauses requests for this session; **Analyze Callbacks with Copilot** resumes them.
+
+**Source snippets are sent to the selected Copilot model and account limits apply.** Supporting snippets can come from other indexed files. **AI candidate** is a suggestion. Use **Set manually → choose a function → Apply** to record your choice as **User confirmed**. Neither label proves runtime execution.
+
+## Settings at a glance
+
+Names below match the English Settings screen; exact keys work in any VS Code language.
+
+| Setting / key | Default and purpose |
+| --- | --- |
+| Context Layout · `dynsight.contextLayout` | **`combined`** — Places Context with Relation or in a separate view. |
+| Call Graph Direction · `dynsight.callGraphDirection` | **`callers-left`** — Places incoming/outgoing branches in **Callers & Callees**. |
+| Include · `dynsight.include` | **`[]`** — Selects general C/H scope. Empty means all subject to exclusions and limits. |
+| Exclude · `dynsight.exclude` | **Built-in list** — Skips test/mock, third-party and build/tool output folders. A saved list replaces the defaults; `[]` disables the configurable defaults. |
+| Smart Analysis: Include · `dynsight.smartAnalysis.include` | **`[]`** — Chooses files for extra Macro/Copilot work inside the general scope. |
+| Smart Analysis: Exclude · `dynsight.smartAnalysis.exclude` | **`[]`** — Skips extra analysis in these paths while retaining basic navigation. |
+| Smart Analysis: Macro · `dynsight.smartAnalysis.macro` | **On** — Expands macros and propagates local callback targets within Smart Analysis scope. |
+| Smart Analysis: Copilot · `dynsight.smartAnalysis.copilot` | **Off** — Requests AI candidates for eligible unresolved callbacks. |
+| Copilot Model · `dynsight.copilotModel` | **Empty** — Choose from your account's available models using **Select Copilot Model**. |
+| Skip Inactive · `dynsight.skipInactive` | **On** — Hides provably inactive branches; unknown conditions remain visible. |
+| Callee Sort · `dynsight.calleeSort` | **`name`** — Sorts Callees by name or first source location. |
+| Include Function Arguments · `dynsight.includeFunctionArguments` | **Off** — Shows functions passed as arguments, with a distinct dotted connector. |
+| Automatic Updates · `dynsight.automaticUpdates` | **On** — Checks GitHub for releases; asks before installing. Requires internet. |
+
+For JSON users, open **Preferences: Open Workspace Settings (JSON)** and merge only the keys you need into the existing object. This example uses local analysis only:
+
+```json
+{
+  "dynsight.include": ["App/**", "Drivers/**"],
+  "dynsight.smartAnalysis.include": ["App/control/**"],
+  "dynsight.smartAnalysis.exclude": ["App/control/generated/**"],
+  "dynsight.smartAnalysis.macro": true,
+  "dynsight.smartAnalysis.copilot": false
+}
+```
+
+Replace sample paths with your project's paths. Omitting **Exclude** retains its defaults if you have not overridden it at another settings scope. Always use `/`, including on Windows. Paths are relative to the opened workspace folder.
+
+## Troubleshooting checklist
+
+| Symptom | First steps |
+| --- | --- |
+| Nothing appears | Open a C/H folder, run **Open Relation and Context**, wait for indexing, click a symbol. |
+| Tree stays on another function | Click **Pinned · Follow paused** to resume **Following selection**. |
+| A function or shared header is missing | Check general Include/Exclude first. Exclude takes priority; default rules also skip test and `third*` folders. |
+| Macros/callbacks are missing | Check Smart Analysis Include and Macro. Extra analysis needs a nonempty scope. Inspect partial-result reasons in Diagnostics. |
+| Copilot does not start | Check its checkbox, model and nonempty scope. Run **Analyze Callbacks with Copilot** after a pause. |
+| Analysis is slow | Start with a smaller Smart Analysis folder and shallower tree depth. **Stop local** pauses local work; **Resume Local Analysis** resumes it. |
+| Update asks for Rebuild | Read the reason. A changed analysis version can require a rebuild; the extension version alone does not. Rebuild when the prompt requires it. |
+| Need to report a problem | Use **Dynsight: Report Issue**; review the draft and attachments before submitting. |
+
+More detail: [missing or slow results and Diagnostics](#if-results-are-missing-or-slow). Use **Rebuild index** when a full rebuild is needed; display changes do not require it.
+
+---
+
+## Detailed reference
+
 Published as **dylee**, with extension ID **`dylee.dynsight`**.
 Settings and commands use the **`dynsight.*`** prefix.
 

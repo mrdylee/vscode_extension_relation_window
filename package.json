@@ -2,7 +2,7 @@
   "name": "dynsight",
   "displayName": "Dynsight — C Code Explorer",
   "description": "Build-free C references, caller/callee graphs and a linked Context preview.",
-  "version": "0.1.85",
+  "version": "0.1.86",
   "publisher": "dylee",
   "author": "dylee",
   "license": "MIT",
@@ -69,6 +69,14 @@
       {
         "command": "dynsight.help",
         "title": "Dynsight: Open User Guide"
+      },
+      {
+        "command": "dynsight.helpKorean",
+        "title": "Dynsight: 사용 설명서 열기 (한국어)"
+      },
+      {
+        "command": "dynsight.helpEnglish",
+        "title": "Dynsight: Open User Guide (English)"
       },
       {
         "command": "dynsight.selectIncludeFolders",
@@ -198,7 +206,7 @@
           ],
           "default": "combined",
           "scope": "window",
-          "description": "Place Combined across the full bottom, preserve either sidebar's full height, or use only the center below the editor. Separate opens an independent Context view. Explicit alignment also changes Terminal and other bottom-panel views. All layouts share the same analysis and selection."
+          "markdownDescription": "**Settings guide / 설정 사용법:** [한국어](command:dynsight.helpKorean) · [English](command:dynsight.helpEnglish)\n\nPlace Combined across the full bottom, preserve either sidebar's full height, or use only the center below the editor. Separate opens an independent Context view. Explicit alignment also changes Terminal and other bottom-panel views. All layouts share the same analysis and selection."
         },
         "dynsight.callGraphDirection": {
           "order": 11,
@@ -428,7 +436,7 @@
     "test:freertos": "npm run build && node scripts/test-freertos.mjs",
     "test:ui": "npm run build && tsx test/create-ui-fixture.ts && node test/ui.mjs && node test/scoped-ui.mjs",
     "vscode:prepublish": "npm run build",
-    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license --out artifacts/dynsight-0.1.85.vsix",
+    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license --out artifacts/dynsight-0.1.86.vsix",
     "test:build-context-performance": "tsx test/build-context-performance.ts"
   },
   "dependencies": {

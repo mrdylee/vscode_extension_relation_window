@@ -8,6 +8,7 @@ button, select { font: inherit; color: inherit; border: 1px solid var(--border);
 button { cursor: pointer; } button:hover { background: var(--vscode-toolbar-hoverBackground, #334052); }
 button:focus-visible, select:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
 .toolbar { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.toolbar .user-guide { border-color: var(--accent); font-weight: 600; white-space: nowrap; }
 .symbol-slots { display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0; }
 .symbol-slot { position: relative; display: inline-flex; width: 24px; flex-shrink: 0; }
 .slot-recall { width: 100%; min-width: 0; }.slot-lock { position: absolute; top: 0; right: 0; width: 11px; height: 11px; padding: 0; border: 0; font-size: 8px; line-height: 11px; }

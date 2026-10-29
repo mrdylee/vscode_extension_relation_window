@@ -57,6 +57,8 @@ export async function run() {
   assert.deepEqual(vscode.workspace.getConfiguration('dynsight', root).get('include'), includeBeforePicker, 'cancelling native scope review preserves settings');
   for (const command of ['dynsight.selectBuildConfiguration', 'dynsight.refreshBuildConfiguration']) assert.ok((await vscode.commands.getCommands()).includes(command), command);
   assert.ok((await vscode.commands.getCommands()).includes('dynsight.help'), 'offline help command registered');
+  for (const command of ['dynsight.helpKorean', 'dynsight.helpEnglish'])
+    assert.ok((await vscode.commands.getCommands()).includes(command), `${command} opens a specific guide language`);
   assert.ok((await vscode.commands.getCommands()).includes('dynsight.selectCopilotModel'), 'Copilot model picker command registered');
   assert.equal(vscode.workspace.getConfiguration('dynsight').get('copilotModel'), '', 'model choice is visible in Settings');
   assert.equal(vscode.workspace.getConfiguration('dynsight').get('smartAnalysis.copilot'), false, 'AI requests are opt-in');
@@ -429,7 +431,19 @@ export async function run() {
   await api.view.handleMessage({ type: 'help' });
   await new Promise(resolve => setTimeout(resolve, 500));
   assert.ok(vscode.window.tabGroups.all.flatMap(group => group.tabs).some(tab => tab.input instanceof vscode.TabInputWebview && /USER_GUIDE/.test(tab.label)), 'Help opens a rendered offline guide');
+  const defaultGuide = /^ko(?:-|$)/i.test(vscode.env.language) ? 'USER_GUIDE.ko.md' : 'USER_GUIDE.md';
+  console.log(`Offline guide: VS Code language=${vscode.env.language}, default=${defaultGuide}`);
+  assert.ok(vscode.window.tabGroups.activeTabGroup.activeTab?.label.includes(defaultGuide), 'Help follows the VS Code display language');
   assert.equal(api.view.state.graph?.root.symbolId, rootBeforeHelp, 'Help preserves Relation root');
+  const helpState = JSON.stringify({ locked: api.view.state.locked, graph: api.view.state.graph, context: api.view.state.context, canGoBack: api.view.state.canGoBack });
+  for (const [command, filename] of [['dynsight.helpKorean', 'USER_GUIDE.ko.md'], ['dynsight.helpEnglish', 'USER_GUIDE.md']]) {
+    await vscode.commands.executeCommand(command);
+    await new Promise(resolve => setTimeout(resolve, 500));
+    const active = vscode.window.tabGroups.activeTabGroup.activeTab;
+    assert.ok(active?.input instanceof vscode.TabInputWebview && active.label.includes(filename), `${command} renders ${filename}`);
+    assert.equal(api.view.state.graph?.root.symbolId, rootBeforeHelp, 'language selection preserves Relation root');
+    assert.equal(JSON.stringify({ locked: api.view.state.locked, graph: api.view.state.graph, context: api.view.state.context, canGoBack: api.view.state.canGoBack }), helpState, 'language selection preserves following, branches, Context and undo');
+  }
   await api.view.handleMessage({ type: 'settings' });
   await new Promise(resolve => setTimeout(resolve, 300));
   assert.ok(vscode.window.tabGroups.all.flatMap(group => group.tabs).some(tab => tab.label === 'Settings'), 'Settings opens the native settings editor');

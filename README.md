@@ -76,9 +76,9 @@ Smart Analysis Include는 일반 Include에서 자동 복사되지 않으며 빈
 GitHub를 방문하지 않아도 Dynsight 상단의 두 버튼으로 사용할 수 있습니다.
 
 - **Settings**: 정렬·Context 레이아웃·Callers/Callees 좌우 배치와 Include/Exclude 등 확장의 모든 설정을 엽니다. 폴더를 열지 않은 경우 사용자 설정을 엽니다. 다중 폴더 워크스페이스에서는 설정 화면의 폴더 탭에서 개별 분석 범위를 지정할 수 있습니다.
-- **Help**: VSIX에 포함된 [사용 안내](USER_GUIDE.md)를 VS Code 문서 미리보기로 엽니다. 인터넷 연결 없이도 탐색 방법, 설정 예제, 비활성 코드 처리와 문제 해결을 읽을 수 있습니다. 현재 Relation은 유지됩니다.
+- **Help · 사용법**: VSIX에 포함된 [한국어 설명서](USER_GUIDE.ko.md) / [English User Guide](USER_GUIDE.md)를 엽니다. VS Code 표시 언어에 맞춰 열리며 문서 맨 위에서 언어를 바꿀 수 있습니다. 빠른 시작, Settings 단계별 사용법, 설정 기본값 표와 문제 해결을 인터넷 없이 읽을 수 있습니다. 현재 Relation은 유지됩니다.
 
-명령 팔레트에서도 **Dynsight: Open Settings**, **Dynsight: Open User Guide**를 실행할 수 있습니다. 버튼과 내장 안내는 영어로 표시합니다.
+명령 팔레트에서도 **Dynsight: Open Settings**, **Dynsight: Open User Guide**를 실행할 수 있습니다. 언어를 직접 고르려면 **Dynsight: 사용 설명서 열기 (한국어)** 또는 **Dynsight: Open User Guide (English)**를 실행하세요. Settings 맨 위의 Context Layout 설명에도 두 언어 사용법 링크가 있습니다.
 
 ## 분석 범위 설정: Include / Exclude
 

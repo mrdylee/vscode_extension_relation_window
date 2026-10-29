@@ -203,7 +203,7 @@ try {
   assert.equal(await page.locator('option[value="both"]').textContent(), 'Callers & Callees');
   await page.getByRole('button', { name: 'Settings', exact: true }).click({ timeout: 3000 });
   assert.ok(await page.evaluate(() => window.sent.some(m => m.type === 'settings')), 'Settings button requests scope configuration');
-  await page.getByRole('button', { name: 'Help', exact: true }).click();
+  await page.getByRole('button', { name: 'Help · 사용법', exact: true }).click();
   assert.ok(await page.evaluate(() => window.sent.some(m => m.type === 'help')), 'Help button requests offline guide');
   for (const form of ['declaration', 'definition']) {
     const glyph = page.locator(`.symbol-icon[data-form="${form}"]`).first();
@@ -729,6 +729,8 @@ try {
   await page.setViewportSize({ width: 520, height: 700 });
   const narrowSlots = await savedSymbols.boundingBox();
   assert.ok(narrowSlots && narrowSlots.x >= 0 && narrowSlots.x + narrowSlots.width <= 520, 'five slots remain together in a narrow toolbar');
+  const narrowHelp = await page.getByRole('button', { name: 'Help · 사용법', exact: true }).boundingBox();
+  assert.ok(narrowHelp && narrowHelp.x >= 0 && narrowHelp.x + narrowHelp.width <= 520, 'bilingual help remains visible in a narrow toolbar');
   assert.ok(await page.locator('.context').isVisible());
   assert.ok(await page.locator('.relation').isVisible());
   assert.equal(await divider.isVisible(), false);

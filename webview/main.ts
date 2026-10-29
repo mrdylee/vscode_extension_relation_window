@@ -402,9 +402,11 @@ goToPin.setAttribute('aria-label', 'Go to pinned symbol'); goToPin.hidden = true
 const skipLabel = el('label', 'skip'); const skip = el('input'); skip.type = 'checkbox';
 skipLabel.title = 'Skip branches disabled by literal #if/#elif 0 or 1. Macro conditions (#ifdef, #ifndef, defined) are kept; #define and #undef are not evaluated.';
 skip.onchange = () => send('skip', { value: skip.checked }); skipLabel.append(skip, document.createTextNode('Skip inactive branches'));
+const userGuide = button('Help · 사용법', () => send('help'), '한국어 / English · Quick start, settings and troubleshooting · 오프라인 사용 설명서');
+userGuide.classList.add('user-guide');
 toolbar.append(brand, mode, depth, lock, symbolSlots, goToPin, skipLabel, button('Rebuild index', () => send('refresh')),
   button('Settings', () => send('settings'), 'Configure layout, sorting, call graph direction and analysis scope'),
-  button('Help', () => send('help'), 'Open the bundled offline user guide'));
+  userGuide);
 let variableMode: boolean | undefined;
 let candidateSignature: string | undefined;
 function renderContext(preview: ViewState['context']) {

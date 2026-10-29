@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.86 — 2026-10-30
+
+- Bundle separate Korean and English offline user guides with language switching, quick start, step-by-step Settings recipes, all visible settings/defaults and troubleshooting.
+- Make Help · 사용법 easier to find in Relation, select the initial guide from VS Code display language and add explicit Korean/English guide commands.
+- Link both manuals from the Settings screen and retain current Relation, Context and undo state while opening help.
+- Preserve analysis cache compatibility 16 and existing analysis behavior.
+
 ## 0.1.85 — 2026-10-29
 
 - Save the entire Relation tree in each slot, including the original root, caller/callee branches, expansion/collapse states and view options; restore the exact right-clicked symbol as the selection.
