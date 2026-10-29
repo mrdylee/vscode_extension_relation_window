@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.85 — 2026-10-29
+
+- Save the entire Relation tree in each slot, including the original root, caller/callee branches, expansion/collapse states and view options; restore the exact right-clicked symbol as the selection.
+- Keep Following Selection or the existing pin state when recalling a slot, including across source/build indexes. Preserve existing slot locks and legacy records; re-save old descendant-only slots to capture the full tree.
+- Make Backspace undo the latest expansion or collapse without returning to a previously selected function or changing the current Context preview.
+- Keep the current view and undo history if opening a saved source fails, and prevent an earlier source-open timer from interrupting a later recall.
+- Preserve analysis cache compatibility 16 and existing analysis limits.
+
 ## 0.1.84 — 2026-10-28
 
 - Overlay each slot's padlock on its number so empty, unlocked and locked slots keep the same compact width.

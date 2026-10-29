@@ -1,0 +1,11 @@
+# Save the complete Relation tree in slots
+
+The user confirmed that saving B from a tree rooted at A must restore A's entire tree and select B. This supersedes the previous descendant re-root behavior. Restore caller and callee branches, expansion/collapse overrides and view options from the whole Relation view. Continue rebuilding relationships from current code, as previously agreed; unchanged code must produce the same full graph. This is saved view state rather than a frozen source-code archive.
+
+Keep the existing `target` symbol for the slot name, source jump and Context. `branches[0].symbol` identifies the tree root. Add an optional `targetBranch` index identifying the exact right-clicked occurrence in the parent-indexed branch records. Existing records without that index keep their old root-target behavior. Validate and deep-copy the new index with the current schema; invalid entries remain empty without shifting later slots.
+
+Capture starts from `graph.root` and includes `graph.callers`. Recall matches the saved root in the root file's current index, restores parent-first branch overrides and selects the matched target branch. Open the target definition and preview that symbol in Context; reveal the restored tree using its root ID. If the target occurrence is no longer available, retain the reconstructed root and other branches, open the current target if resolvable, and report partial restoration. If the root is missing, leave the current view intact and report it. Locks, queued writes, failed-open behavior and follow-state independence remain in effect.
+
+The graph index follows the graph root. Editor tracking resolves symbols against the editor's own index before changing the root, because a recalled root and selected target may be in different source/build projections. This preserves complete recalled graphs while Following Selection remains enabled.
+
+Success: saving B in A/B/C plus A/Side and caller Entry/Top restores an identical graph rooted at A, keeps B selected, preserves the tooltip B, survives workspace-state reload and keeps Following Selection unchanged. Validate both directions, explicit collapsed branches, legacy records, unavailable roots/targets and cross-index editor tracking. No pan-history, analysis changes, new UI controls or publication is included.

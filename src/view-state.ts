@@ -14,7 +14,7 @@ export function canExpandNode(node: GraphNode): boolean {
 export interface Preview { location: Location; text: string; tokens: SyntaxToken[][]; firstLine: number; path: string; label: string }
 export type ContextLayout = 'combined' | 'combined-full-width' | 'combined-keep-left-sidebar' | 'combined-center' | 'combined-keep-right-sidebar' | 'separate';
 export interface ViewState {
-  slots: SlotSummary[]; canGoBack: boolean;
+  slots: SlotSummary[]; canGoBack: boolean; selectedNodeKey?: string;
   graph?: GraphData; context?: Preview; candidates: SymbolRecord[];
   callback?: CallbackTargets;
   callbackDiagnostics?: CallbackDiagnostic[];

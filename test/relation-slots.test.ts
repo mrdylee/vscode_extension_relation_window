@@ -19,6 +19,16 @@ test('slot round-trip preserves numbering and owns its records', () => {
   assert.equal(target.name, 'run'); assert.equal(slot.branches[0].levels, 2);
   assert.equal(loaded[4]!.target.name, 'run');
 });
+test('a full-tree slot keeps its root and selected branch independently', () => {
+  const selected = { ...target, id: 'file:///a.c#40', start: 40, name: 'selected' };
+  const full = { ...slot, target: selected, targetBranch: 1, branches: [slot.branches[0],
+    { parent: 0, symbol: selected, direction: 'callees' as const, levels: 1 }] };
+  const loaded = readSlots([full]);
+  assert.deepEqual(loaded[0], full);
+  loaded[0]!.branches[0].symbol.name = 'changed';
+  assert.equal(target.name, 'run');
+  for (const bad of [-1, 2, 0.5, '1', 0]) assert.equal(readSlots([{ ...full, targetBranch: bad }])[0], null);
+});
 test('malformed entries never shift a later slot', () => {
   for (const bad of [{ ...slot, locked: 'yes' }, { ...slot, options: { ...slot.options, depth: 9 } },
     { ...slot, target: { ...target, kind: 'unknown' } }, { ...slot, branches: [{ ...slot.branches[0], parent: 0 }] },

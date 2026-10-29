@@ -553,7 +553,9 @@ function render(state: ViewState) {
   const preview = state.context;
   if (state.contextLayout !== 'separate') renderContext(preview);
   popup.querySelectorAll<HTMLElement>('.site').forEach(site => site.classList.toggle('selected', site.dataset.site === `${preview?.location.uri}@${preview?.location.start}`));
-  graph.querySelectorAll<HTMLElement>('.node-title').forEach(title => title.classList.toggle('selected', title.dataset.preview === `${preview?.location.uri}#${preview?.location.start}` || title.dataset.preview === `${preview?.location.uri}@${preview?.location.start}`));
+  graph.querySelectorAll<HTMLElement>('.node-title').forEach(title => title.classList.toggle('selected', state.selectedNodeKey
+    ? title.dataset.key === state.selectedNodeKey
+    : title.dataset.preview === `${preview?.location.uri}#${preview?.location.start}` || title.dataset.preview === `${preview?.location.uri}@${preview?.location.start}`));
   const indexStatus = el('span', 'index-status', `${state.status} · ${state.fileCount} files`);
   indexStatus.title = indexStatus.textContent ?? '';
   footer.replaceChildren(indexStatus);
@@ -568,7 +570,7 @@ function render(state: ViewState) {
     const details = el('details', 'warning'); details.append(el('summary', '', `Analysis notices: ${state.issues.length}`), el('pre', '', state.issues.slice(0, 100).join('\n'))); footer.append(details);
   }
   if (state.graph?.truncated) footer.append(el('span', 'warning', 'Limited to 300 nodes'));
-  footer.append(el('span', 'footer-shortcuts muted', 'Backspace Back · Space Details · → Expand · ← Collapse · Shift+→ Levels · Enter Open source'));
+  footer.append(el('span', 'footer-shortcuts muted', 'Backspace Undo · Space Details · → Expand · ← Collapse · Shift+→ Levels · Enter Open source'));
   footer.append(button('Diagnostics', () => diagnostics?.open(), 'Show memory measurements for a screenshot'));
 }
 window.addEventListener('message', event => {

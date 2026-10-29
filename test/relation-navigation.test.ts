@@ -23,7 +23,8 @@ function harness(saved = new Map<string, unknown>()) {
   const changed = new Emitter(), settings = new Emitter(), diagnosticsChanged = new Emitter();
   const index = new RelationIndex(); index.update(analyzer.analyze(uri, source));
   const opened: any[] = [], messages: any[] = [], notices: string[] = [];
-  const config = new Map<string, unknown>(); let writing: (() => Promise<void>) | undefined, notifying: (() => Promise<void>) | undefined, input: string | undefined;
+  const config = new Map<string, unknown>(); let writing: (() => Promise<void>) | undefined, notifying: (() => Promise<void>) | undefined,
+    opening: (() => Promise<void>) | undefined, input: string | undefined;
   const storage = { get: (key: string) => saved.get(key), update: async (key: string, value: unknown) => {
     await writing?.(); saved.set(key, JSON.parse(JSON.stringify(value)));
   } };
@@ -32,7 +33,9 @@ function harness(saved = new Map<string, unknown>()) {
     ViewColumn: { One: 1 }, Uri: { parse: (value: string) => ({ toString: () => value, path: value }) },
     workspace: { getConfiguration: () => ({ get: (key: string, fallback: unknown) => config.get(key) ?? fallback }),
       onDidChangeConfiguration: settings.event, asRelativePath: (value: unknown) => String(value) },
-    window: { showTextDocument: async (document: any, options: any) => { opened.push({ uri: document.toString(), options }); },
+    window: { showTextDocument: async (document: any, options: any) => {
+      opened.push({ uri: document.toString(), options }); await opening?.(); return { document: { uri: document } };
+    },
       showWarningMessage: async (message: string) => { notices.push(message); await notifying?.(); }, showInformationMessage: async (message: string) => { notices.push(message); await notifying?.(); },
       showInputBox: async () => input }, commands: { executeCommand: async () => {} } };
   const module = { exports: {} as any };
@@ -49,9 +52,231 @@ function harness(saved = new Map<string, unknown>()) {
   const update = (text: string) => { index.update(analyzer.analyze(uri, text)); view.refresh(); };
   return { view, workspace, index, root, node, opened, notices, messages, saved, update,
     writing: (action?: () => Promise<void>) => { writing = action; }, notifying: (action?: () => Promise<void>) => { notifying = action; }, input: (value?: string) => { input = value; },
+    opening: (action?: () => Promise<void>) => { opening = action; },
     preference: (key: string, value: unknown) => { config.set(key, value); settings.fire({ affectsConfiguration: (name: string) => name === 'dynsight.' + key }); } };
 }
 const graph = (view: any) => JSON.stringify(view.state.graph);
+
+test('Back undoes the latest tree action without returning to a previously selected function', async () => {
+  const h = harness();
+  try {
+    await h.view.handleMessage({ type: 'selectNode', key: h.node('B').key });
+    const afterB = graph(h.view);
+    await h.view.handleMessage({ type: 'selectNode', key: h.node('C').key });
+    const selection = h.view.selection, context = JSON.stringify(h.view.state.context), selectedKey = h.view.selectedNodeKey;
+    await h.view.handleMessage({ type: 'back' });
+    assert.equal(graph(h.view), afterB); assert.equal(h.node('D'), undefined);
+    assert.equal(h.view.selection, selection);
+    assert.equal(JSON.stringify(h.view.state.context), context);
+    assert.equal(h.view.selectedNodeKey, selectedKey);
+    await h.view.handleMessage({ type: 'back' });
+    assert.equal(h.node('C'), undefined); assert.equal(h.view.selection, selection);
+    assert.equal(JSON.stringify(h.view.state.context), context, 'a hidden node still keeps its current Context');
+    assert.equal(h.opened.length, 0);
+    h.update('\n' + source);
+    assert.equal(h.view.state.context.label, 'A', 'source changes discard hidden previews');
+    assert.equal(h.view.state.context.location.line, 1);
+  } finally { h.view.dispose(); }
+});
+
+test('unchanged graph history cannot retain a callback preview after the call is removed', () => {
+  const h = harness();
+  try {
+    const text = 'void Handler(void){} void Run(void (*cb)(void)){cb();}';
+    h.index.update(analyzer.derive([analyzer.analyze(uri, text)])[0]);
+    const editor = { document: { uri: { path: '/navigation.c', toString: () => uri },
+      getWordRangeAtPosition: () => ({ start: 0 }), offsetAt: () => text.indexOf('cb();') }, selection: { isEmpty: true, active: 0 } };
+    h.view.track(editor, true);
+    assert.ok(h.view.state.callback); assert.ok(h.view.state.context);
+    h.update(text.replace('cb();', 'Handler();'));
+    assert.equal(h.view.state.callback, undefined);
+    assert.equal(h.view.state.context, undefined);
+  } finally { h.view.dispose(); }
+});
+
+test('Back reverses collapse before earlier expansions and ignores repeated no-op collapse', async () => {
+  const h = harness();
+  try {
+    await h.view.handleMessage({ type: 'selectNode', key: h.node('Side').key });
+    const initial = graph(h.view);
+    await h.view.handleMessage({ type: 'selectNode', key: h.node('B').key }); const afterB = graph(h.view);
+    await h.view.handleMessage({ type: 'selectNode', key: h.node('C').key }); const afterC = graph(h.view);
+    await h.view.handleMessage({ type: 'collapse', key: h.node('B').key });
+    await h.view.handleMessage({ type: 'collapse', key: h.node('B').key });
+    assert.equal(h.node('C'), undefined); assert.equal(h.view.state.canGoBack, true);
+    await h.view.handleMessage({ type: 'back' }); assert.equal(graph(h.view), afterC);
+    await h.view.handleMessage({ type: 'back' }); assert.equal(graph(h.view), afterB);
+    await h.view.handleMessage({ type: 'back' }); assert.equal(graph(h.view), initial);
+    assert.ok(h.node('SideLeaf')); assert.equal(h.opened.length, 0);
+  } finally { h.view.dispose(); }
+});
+
+test('each slot recall preserves Following Selection or the existing pin', async () => {
+  const h = harness();
+  try {
+    for (let slot = 0; slot < 5; slot++) await h.view.handleMessage({ type: 'saveSlot', slot, key: 'root' });
+    for (const locked of [false, true]) for (let slot = 0; slot < 5; slot++) {
+      h.root('B'); h.view.state.locked = locked;
+      await h.view.handleMessage({ type: 'recallSlot', slot });
+      assert.equal(h.view.state.graph.root.name, 'A');
+      assert.equal(h.view.state.locked, locked, `slot ${slot + 1} must preserve follow state`);
+    }
+  } finally { h.view.dispose(); }
+});
+
+test('following-enabled recall uses the saved file index across source and build files', async () => {
+  const h = harness(), otherUri = 'file:///built.c';
+  try {
+    await h.view.handleMessage({ type: 'selectNode', key: h.node('B').key });
+    await h.view.handleMessage({ type: 'saveSlot', slot: 0, key: 'root' });
+    const built = new RelationIndex(); built.update(analyzer.analyze(otherUri, 'void Built(void){}'));
+    h.workspace.indexFor = (file = otherUri) => file === uri ? h.index : built;
+    h.view.lastEditor = { document: { uri: { toString: () => otherUri } } };
+    h.view.setRoot(built.symbols().find(s => s.name === 'Built'));
+    await h.view.handleMessage({ type: 'recallSlot', slot: 0 });
+    assert.equal(h.view.state.graph?.root.name, 'A'); assert.ok(h.node('C'));
+    assert.equal(h.view.state.locked, false);
+    assert.equal(h.view.lastEditor.document.uri.toString(), uri);
+    h.view.refresh(); assert.equal(h.view.state.graph?.root.name, 'A');
+  } finally { h.view.dispose(); }
+});
+
+test('saving a descendant restores the entire root tree, both directions and collapsed branches after reload', async () => {
+  const h = harness();
+  try {
+    await h.view.handleMessage({ type: 'mode', value: 'both' });
+    for (const name of ['B', 'C', 'Side']) await h.view.handleMessage({ type: 'selectNode', key: h.node(name, 'callees').key });
+    await h.view.handleMessage({ type: 'selectNode', key: h.node('Entry', 'callers').key });
+    await h.view.handleMessage({ type: 'collapse', key: h.node('C', 'callees').key });
+    const original = graph(h.view), selected = h.node('B', 'callees');
+    await h.view.handleMessage({ type: 'saveSlot', slot: 0, key: selected.key });
+    assert.equal(h.view.state.slots[0].name, 'B');
+    h.root('D'); await h.view.handleMessage({ type: 'recallSlot', slot: 0 });
+    assert.equal(graph(h.view), original); assert.equal(h.view.selectedNodeKey, selected.key);
+    assert.equal(h.view.state.selectedNodeKey, selected.key, 'the webview receives the exact selected occurrence');
+    assert.equal(h.view.state.context.label, 'B'); assert.equal(h.view.state.locked, false);
+    assert.equal(h.opened.at(-1).options.selection.column, selected.location.column);
+    const loaded = harness(h.saved);
+    try {
+      await loaded.view.handleMessage({ type: 'recallSlot', slot: 0 });
+      assert.equal(graph(loaded.view), original); assert.equal(loaded.view.selectedNodeKey, selected.key);
+      assert.ok(loaded.node('SideLeaf')); assert.ok(loaded.node('Top', 'callers')); assert.equal(loaded.node('D'), undefined);
+    } finally { loaded.view.dispose(); }
+    h.update(source.replace('void A(', 'void Z(')); h.root('D'); const current = graph(h.view);
+    await h.view.handleMessage({ type: 'recallSlot', slot: 0 });
+    assert.equal(graph(h.view), current, 'a missing saved root must not become the selected descendant');
+    assert.match(h.notices.at(-1)!, /A/);
+  } finally { h.view.dispose(); }
+});
+
+test('full-tree recall selects the exact caller occurrence when the target also occurs as a callee', async () => {
+  const h = harness();
+  try {
+    h.update('void A(void){B();} void B(void){A();}'); h.root();
+    await h.view.handleMessage({ type: 'mode', value: 'both' });
+    const selected = h.node('B', 'callers').key, original = graph(h.view);
+    await h.view.handleMessage({ type: 'saveSlot', slot: 0, key: selected });
+    h.root('B'); await h.view.handleMessage({ type: 'recallSlot', slot: 0 });
+    assert.equal(graph(h.view), original); assert.equal(h.view.selectedNodeKey, selected);
+    assert.equal(h.view.state.context.label, 'B');
+  } finally { h.view.dispose(); }
+});
+
+test('legacy root-target records still restore without a selected-branch index', async () => {
+  const h = harness();
+  try {
+    h.root('B'); await h.view.handleMessage({ type: 'selectNode', key: h.node('C').key });
+    const original = graph(h.view);
+    await h.view.handleMessage({ type: 'saveSlot', slot: 0, key: 'root' });
+    const records = JSON.parse(JSON.stringify(h.saved.get('relationSlots-v1'))); delete records[0].targetBranch;
+    const loaded = harness(new Map([['relationSlots-v1', records]]));
+    try {
+      await loaded.view.handleMessage({ type: 'recallSlot', slot: 0 });
+      assert.equal(graph(loaded.view), original); assert.equal(loaded.view.state.context.label, 'B');
+    } finally { loaded.view.dispose(); }
+  } finally { h.view.dispose(); }
+});
+
+test('unavailable selected branches restore the remaining full tree and report partial restoration', async () => {
+  const h = harness();
+  try {
+    await h.view.handleMessage({ type: 'selectNode', key: h.node('Side').key });
+    await h.view.handleMessage({ type: 'saveSlot', slot: 0, key: h.node('B').key });
+    for (const removeTarget of [false, true]) {
+      let text = source.replace('B();Side();', 'Side();');
+      if (removeTarget) text = text.replace('void B(void){C();}', '');
+      h.update(text); h.root('D');
+      await h.view.handleMessage({ type: 'recallSlot', slot: 0 });
+      assert.equal(h.view.state.graph.root.name, 'A'); assert.ok(h.node('SideLeaf'));
+      assert.equal(h.view.state.context.label, removeTarget ? 'A' : 'B');
+      assert.match(h.notices.at(-1)!, /some saved branches/);
+    }
+  } finally { h.view.dispose(); }
+});
+
+test('a full tree uses its root index while its saved target opens in another source/build file', async () => {
+  const h = harness(), otherUri = 'file:///built.c';
+  try {
+    h.update(source.replace('void B(void){C();}', ''));
+    const text = 'void B(void){C();}';
+    h.index.update(analyzer.analyze(otherUri, text)); h.view.refresh();
+    await h.view.handleMessage({ type: 'selectNode', key: h.node('B').key });
+    await h.view.handleMessage({ type: 'selectNode', key: h.node('Side').key });
+    const original = graph(h.view);
+    await h.view.handleMessage({ type: 'saveSlot', slot: 0, key: h.node('B').key });
+    const built = new RelationIndex(); built.update(analyzer.analyze(otherUri, text));
+    h.workspace.indexFor = (file = uri) => file === otherUri ? built : h.index;
+    h.root('D'); await h.view.handleMessage({ type: 'recallSlot', slot: 0 });
+    assert.equal(graph(h.view), original); assert.equal(h.view.state.context.label, 'B');
+    assert.equal(h.view.lastEditor.document.uri.toString(), otherUri); assert.equal(h.view.state.locked, false);
+    h.view.refresh(); assert.equal(graph(h.view), original);
+    const editor = (file: string, offset: number) => ({ document: { uri: { path: '/file.c', toString: () => file },
+      getWordRangeAtPosition: () => ({ start: 0 }), offsetAt: () => offset }, selection: { isEmpty: true, active: 0 } });
+    h.view.track(editor(otherUri, text.indexOf('B(')), true); assert.equal(h.view.state.graph.root.name, 'B');
+    h.view.track(editor(uri, h.index.symbols().find(s => s.name === 'A')!.location.start), true);
+    assert.equal(h.view.state.graph.root.name, 'A', 'editor tracking resolves through the editor index');
+  } finally { h.view.dispose(); }
+});
+
+test('a failed slot source open keeps the current tree, options and undo history', async () => {
+  const h = harness();
+  try {
+    await h.view.handleMessage({ type: 'saveSlot', slot: 0, key: 'root' });
+    h.root('B'); await h.view.handleMessage({ type: 'mode', value: 'both' });
+    await h.view.handleMessage({ type: 'selectNode', key: h.node('C', 'callees').key });
+    const original = graph(h.view), context = JSON.stringify(h.view.state.context);
+    h.opening(async () => { throw new Error('source unavailable'); });
+    await assert.rejects(h.view.handleMessage({ type: 'recallSlot', slot: 0 }), /source unavailable/);
+    assert.equal(h.view.state.mode, 'both'); assert.equal(h.view.state.canGoBack, true);
+    assert.equal(h.view.state.locked, false); assert.equal(JSON.stringify(h.view.state.context), context);
+    h.view.refresh(); assert.equal(graph(h.view), original);
+    h.opening(); await h.view.handleMessage({ type: 'recallSlot', slot: 0 });
+    assert.equal(h.view.state.graph.root.name, 'A', 'a failed recall does not block the next one');
+  } finally { h.view.dispose(); }
+});
+
+test('an earlier open timer cannot resume following during a later slot source open', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const h = harness(); let release: (() => void) | undefined, recalling: Promise<void> | undefined;
+  try {
+    await h.view.handleMessage({ type: 'saveSlot', slot: 0, key: 'root' });
+    h.root('B'); await h.view.handleMessage({ type: 'saveSlot', slot: 1, key: 'root' });
+    await h.view.handleMessage({ type: 'recallSlot', slot: 0 });
+    t.mock.timers.tick(100);
+    h.opening(() => new Promise<void>(resolve => { release = resolve; }));
+    recalling = h.view.handleMessage({ type: 'recallSlot', slot: 1 });
+    await new Promise(setImmediate);
+    t.mock.timers.tick(50);
+    const editor = { document: { uri: { path: '/navigation.c', toString: () => uri },
+      getWordRangeAtPosition: () => ({ start: 0 }), offsetAt: () => source.indexOf('D(void)') }, selection: { isEmpty: true, active: 0 } };
+    assert.equal(h.view.track(editor), false, 'source-open events must not replace the saved tree');
+    release!(); await recalling;
+    assert.equal(h.view.state.graph.root.name, 'B'); assert.equal(h.view.state.locked, false);
+    t.mock.timers.tick(150);
+    assert.equal(h.view.track(editor), true, 'following resumes after the latest open');
+    assert.equal(h.view.state.graph.root.name, 'D');
+  } finally { release?.(); await recalling; h.view.dispose(); }
+});
 
 test('an expansion racing with a source refresh cannot retain an obsolete Back snapshot', async () => {
   const h = harness();
@@ -176,10 +401,10 @@ test('right-click target, five slots, locks, recall and reload preserve saved tr
     await h.view.handleMessage({ type: 'clearSlot', slot: 1 });
     assert.equal(h.view.state.slots[1].name, 'B');
     h.root('D'); await h.view.handleMessage({ type: 'recallSlot', slot: 0 });
-    assert.equal(graph(h.view), original); assert.equal(h.view.state.locked, true);
+    assert.equal(graph(h.view), original); assert.equal(h.view.state.locked, false);
     assert.equal(h.opened.at(-1).uri, uri); assert.equal(h.view.state.context.location.start, h.index.symbols().find(s => s.name === 'A')!.location.start);
     await h.view.handleMessage({ type: 'recallSlot', slot: 1 });
-    assert.equal(h.view.state.graph.root.name, 'B'); assert.ok(h.node('D'), 'descendant expansions are rebased');
+    assert.equal(graph(h.view), original); assert.equal(h.view.state.context.label, 'B'); assert.ok(h.node('D'));
     const loaded = harness(h.saved);
     try { assert.equal(loaded.view.state.slots[1].locked, true); await loaded.view.handleMessage({ type: 'recallSlot', slot: 1 }); assert.ok(loaded.node('D')); }
     finally { loaded.view.dispose(); }
@@ -236,21 +461,21 @@ test('slot writes are ordered, failures keep saved state and later writes recove
   } finally { h.view.dispose(); }
 });
 
-test('Back reverses expansions one at a time and preserves unrelated branches and selection', async () => {
+test('Back reverses expansions one at a time and preserves unrelated branches', async () => {
   const h = harness();
   try {
     await h.view.handleMessage({ type: 'selectNode', key: h.node('Side').key });
-    const original = graph(h.view), selection = h.view.selection;
+    const original = graph(h.view);
     await h.view.handleMessage({ type: 'selectNode', key: h.node('B').key }); const afterB = graph(h.view);
     await h.view.handleMessage({ type: 'selectNode', key: h.node('C').key });
     assert.ok(h.node('D')); assert.equal(h.view.state.canGoBack, true);
     await h.view.handleMessage({ type: 'back' }); assert.equal(graph(h.view), afterB);
-    await h.view.handleMessage({ type: 'back' }); assert.equal(graph(h.view), original); assert.equal(h.view.selection, selection);
+    await h.view.handleMessage({ type: 'back' }); assert.equal(graph(h.view), original);
     assert.ok(h.node('SideLeaf')); assert.equal(h.opened.length, 0);
     await h.view.handleMessage({ type: 'back' }); assert.equal(h.view.state.canGoBack, false);
   } finally { h.view.dispose(); }
 });
-test('no-op clicks, previews and diagnostics do not consume history; changes and collapse reset it', async () => {
+test('no-op clicks, previews and diagnostics do not consume history; root/options/source changes reset it', async () => {
   const h = harness();
   try {
     await h.view.handleMessage({ type: 'selectNode', key: h.node('B').key }); const expanded = graph(h.view);
@@ -258,8 +483,7 @@ test('no-op clicks, previews and diagnostics do not consume history; changes and
     await h.view.handleMessage({ type: 'preview', id: h.node('B').symbolId }); h.view.refresh();
     await h.view.handleMessage({ type: 'back' }); assert.notEqual(graph(h.view), expanded); assert.equal(h.view.state.canGoBack, false);
     for (const change of [() => h.root('D'), () => h.view.handleMessage({ type: 'depth', value: 2 }),
-      () => h.update('\n' + source), () => h.preference('callGraphDirection', 'callees-left'),
-      () => h.view.handleMessage({ type: 'collapse', key: h.node('B').key })]) {
+      () => h.update('\n' + source), () => h.preference('callGraphDirection', 'callees-left')]) {
       h.root(); h.view.state.depth = 1; h.view.expanded = {}; h.view.refresh();
       await h.view.handleMessage({ type: 'selectNode', key: h.node('B').key }); assert.equal(h.view.state.canGoBack, true);
       await change(); assert.equal(h.view.state.canGoBack, false);

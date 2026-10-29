@@ -12,7 +12,7 @@ export interface SlotViewOptions {
 export interface SavedBranch {
   parent: number | null; symbol: SavedSymbol; direction: 'references' | 'callers' | 'callees'; levels?: number;
 }
-export interface SavedSlot { target: SavedSymbol; options: SlotViewOptions; branches: SavedBranch[]; locked: boolean }
+export interface SavedSlot { target: SavedSymbol; targetBranch?: number; options: SlotViewOptions; branches: SavedBranch[]; locked: boolean }
 export interface SlotSummary { slot: number; name?: string; kind?: 'function' | 'variable'; locked: boolean }
 
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object';
@@ -26,19 +26,22 @@ function symbol(value: unknown): value is SavedSymbol {
 }
 function slot(value: unknown): value is SavedSlot {
   if (!object(value) || !symbol(value.target) || typeof value.locked !== 'boolean' || !object(value.options)) return false;
-  const o = value.options, target = value.target;
+  const o = value.options, target = value.target, selected = value.targetBranch === undefined ? 0 : value.targetBranch;
   return ['references', 'callers', 'callees', 'both'].includes(o.mode as string) && level(o.depth, 1) &&
     ['all', 'read', 'write', 'readwrite', 'address'].includes(o.accessFilter as string) &&
     ['name', 'source'].includes(o.calleeSort as string) && ['callers-left', 'callees-left'].includes(o.callGraphDirection as string) &&
     typeof o.includeFunctionArguments === 'boolean' && Array.isArray(value.branches) && value.branches.length > 0 && value.branches.length <= 300 &&
+    Number.isInteger(selected) && Number(selected) >= 0 && Number(selected) < value.branches.length &&
     value.branches.every((b: unknown, i: number) => object(b) && symbol(b.symbol) &&
-      (i === 0 ? b.parent === null && b.symbol.id === target.id : Number.isInteger(b.parent) && Number(b.parent) >= 0 && Number(b.parent) < i) &&
-      ['references', 'callers', 'callees'].includes(b.direction as string) && (b.levels === undefined || level(b.levels, 0)));
+      (i === 0 ? b.parent === null : Number.isInteger(b.parent) && Number(b.parent) >= 0 && Number(b.parent) < i) &&
+      ['references', 'callers', 'callees'].includes(b.direction as string) && (b.levels === undefined || level(b.levels, 0))) &&
+    value.branches[Number(selected)].symbol.id === target.id;
 }
 export function readSlots(value: unknown): (SavedSlot | null)[] {
   return Array.from({ length: 5 }, (_, i) => {
     const entry: unknown = Array.isArray(value) ? value[i] : undefined;
-    return slot(entry) ? { target: { ...entry.target }, options: { ...entry.options }, locked: entry.locked,
+    return slot(entry) ? { target: { ...entry.target }, ...(entry.targetBranch === undefined ? {} : { targetBranch: entry.targetBranch }),
+      options: { ...entry.options }, locked: entry.locked,
       branches: entry.branches.map(branch => ({ ...branch, symbol: { ...branch.symbol } })) } : null;
   });
 }

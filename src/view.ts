@@ -35,7 +35,7 @@ export class RelationView implements vscode.Disposable {
   private preferences: vscode.Disposable;
   private diagnosticsListener: vscode.Disposable;
   private refreshTimer?: ReturnType<typeof setTimeout>;
-  private openingSource = false;
+  private openingSource?: object;
   private lastEditor?: vscode.TextEditor;
   private pendingTrack = false;
   private syntaxCache?: { text: string; tokens: SyntaxToken[][] };
@@ -43,7 +43,7 @@ export class RelationView implements vscode.Disposable {
   private graphSnapshot?: { key: string; files: FileAnalysis[]; graph?: GraphData };
   private savedSlots: (SavedSlot | null)[];
   private slotActions = Promise.resolve();
-  private expansionHistory: { expanded: Record<string, number>; selection?: string; selectedNodeKey?: string }[] = [];
+  private expansionHistory: Record<string, number>[] = [];
   private historyContext?: { key: string; files: FileAnalysis[] };
   constructor(private workspace: WorkspaceIndex, private extensionUri: vscode.Uri, private callbackActions?: CallbackActions,
     private storage?: Pick<vscode.Memento, 'get' | 'update'>) {
@@ -117,8 +117,8 @@ export class RelationView implements vscode.Disposable {
     });
     if (!contextOnly) { this.publish(); void this.applyPanelLayout(); }
   }
-  private get index() { const uri = this.state.locked && this.root ? this.root.uri : this.lastEditor?.document.uri.toString() ?? this.root?.uri; return uri ? this.workspace.indexFor(uri) : this.workspace.index; }
-  private contextKey(uri: string) { const key = this.contextChoices.get(uri); return key && this.index.files.has(key) ? key : uri; }
+  private get index() { const uri = this.root?.uri ?? this.lastEditor?.document.uri.toString(); return uri ? this.workspace.indexFor(uri) : this.workspace.index; }
+  private contextKey(uri: string, index = this.index) { const key = this.contextChoices.get(uri); return key && index.files.has(key) ? key : uri; }
   private async chooseContext(editor: vscode.TextEditor, files: FileAnalysis[]) {
     if (this.choosingContext) return;
     this.choosingContext = true;
@@ -138,19 +138,19 @@ export class RelationView implements vscode.Disposable {
     const position = editor.selection.isEmpty ? editor.selection.active : editor.selection.start;
     const word = editor.document.getWordRangeAtPosition(position, /[A-Za-z_][A-Za-z0-9_]*/);
     if (!word) return false;
-    const uri = editor.document.uri.toString(), offset = editor.document.offsetAt(word.start);
-    const contexts = this.index.contextsAt(uri);
-    if (contexts.length > 1 && this.contextKey(uri) === uri) { void this.chooseContext(editor, contexts); return false; }
-    const foundCallback = this.index.callbackAt(this.contextKey(uri), offset);
+    const uri = editor.document.uri.toString(), offset = editor.document.offsetAt(word.start), index = this.workspace.indexFor(uri);
+    const contexts = index.contextsAt(uri);
+    if (contexts.length > 1 && this.contextKey(uri, index) === uri) { void this.chooseContext(editor, contexts); return false; }
+    const foundCallback = index.callbackAt(this.contextKey(uri, index), offset);
     const callback = this.state.analyzeCallbacks || foundCallback?.targets.length ? foundCallback : undefined;
     if (callback) {
       if (this.callbackFocus?.uri === uri && this.callbackFocus.offset === offset && this.state.callback) return false;
       this.activity.fire('callback-selection');
-      this.callbackFocus = { uri, offset, text: this.index.fileAt(uri)!.text.slice(callback.location.start, callback.location.end) };
+      this.callbackFocus = { uri, offset, text: index.fileAt(uri)!.text.slice(callback.location.start, callback.location.end) };
       this.root = undefined; this.selection = undefined; this.selectedNodeKey = undefined; this.expanded = {};
       this.state.graph = undefined; this.state.candidates = []; this.refresh(); return true;
     }
-    const candidates = this.index.resolveAt(this.contextKey(uri), offset);
+    const candidates = index.resolveAt(this.contextKey(uri, index), offset);
     if (!candidates.length) { this.pendingTrack = true; return false; }
     if (candidates.length > 1) {
       this.root = undefined; this.selection = undefined; this.selectedNodeKey = undefined; this.expanded = {};
@@ -227,14 +227,17 @@ export class RelationView implements vscode.Disposable {
     };
     if (this.state.graph) visit(this.state.graph.root);
     this.state.graph?.callers?.forEach(visit);
+    const historyKey = JSON.stringify([this.root?.id, this.slotOptions()]), files = this.graphSnapshot?.files ?? [];
+    const sameContext = this.historyContext?.key === historyKey && files.length === this.historyContext.files.length &&
+      files.every((file, n) => file === this.historyContext!.files[n]);
+    if (!sameContext) this.clearHistory();
+    this.historyContext = { key: historyKey, files };
     if (this.selectedNodeKey && !this.nodes.has(this.selectedNodeKey)) this.selectedNodeKey = undefined;
     if (this.selection && this.locations.has(this.selection)) this.preview(this.selection);
-    else if (this.state.graph?.root.symbolId) { this.selection = this.state.graph.root.symbolId; this.preview(this.selection); }
-    else this.state.context = undefined;
-    const historyKey = JSON.stringify([this.root?.id, this.slotOptions()]), files = this.graphSnapshot?.files ?? [];
-    if (this.historyContext?.key !== historyKey || files.length !== this.historyContext.files.length ||
-      files.some((file, n) => file !== this.historyContext!.files[n])) this.clearHistory();
-    this.historyContext = { key: historyKey, files };
+    else if (!sameContext || !this.state.context || !this.state.graph) {
+      if (this.state.graph?.root.symbolId) { this.selection = this.state.graph.root.symbolId; this.preview(this.selection); }
+      else this.state.context = undefined;
+    }
     if (publish) this.publish();
   }
   private preview(id: string) {
@@ -250,6 +253,8 @@ export class RelationView implements vscode.Disposable {
       path: vscode.workspace.asRelativePath(vscode.Uri.parse(selected.location.uri)) };
   }
   private publish() {
+    this.state.selectedNodeKey = this.selectedNodeKey && this.selection === this.nodes.get(this.selectedNodeKey)?.symbolId
+      ? this.selectedNodeKey : undefined;
     void this.webview?.webview.postMessage({ type: 'state', state: this.state });
     void this.contextView?.webview.postMessage({ type: 'context', context: this.state.context });
   }
@@ -281,7 +286,7 @@ export class RelationView implements vscode.Disposable {
   }
   private clearHistory() { this.expansionHistory = []; this.state.canGoBack = false; }
   private changeExpansion(change: () => void) {
-    const before = { expanded: { ...this.expanded }, selection: this.selection, selectedNodeKey: this.selectedNodeKey };
+    const before = { ...this.expanded };
     const history = this.expansionHistory, keys = JSON.stringify([...this.nodes.keys()]);
     change(); this.refresh(false);
     if (history === this.expansionHistory && keys !== JSON.stringify([...this.nodes.keys()])) {
@@ -318,24 +323,30 @@ export class RelationView implements vscode.Disposable {
     const target = node.symbolId && symbols.get(node.symbolId);
     if (!target) return;
     const branches: SavedBranch[] = [], options = this.slotOptions();
+    let targetBranch: number | undefined;
     const visit = (child: GraphNode, parent: number | null) => {
       const symbol = child.symbolId && symbols.get(child.symbolId);
       if (!symbol) return;
       const n = branches.length;
+      if (child.key === key) targetBranch = n;
       branches.push({ parent, symbol, direction: child.direction ?? (options.mode === 'both' ? 'callees' : options.mode),
         levels: parent === null ? this.effectiveLevels(child.key) : this.expanded[child.key] });
       child.children.forEach(next => visit(next, n));
     };
-    visit(node, null);
-    if (node === graph.root) graph.callers?.forEach(child => visit(child, 0));
-    return { target, options, branches, locked: false };
+    visit(graph.root, null);
+    graph.callers?.forEach(child => visit(child, 0));
+    if (targetBranch === undefined) return;
+    return { target, targetBranch, options, branches, locked: false };
   }
   private async recallSlot(slot: SavedSlot) {
-    const index = this.workspace.indexFor(slot.target.uri), symbols = this.slotSymbols(index, new Set(slot.branches.map(branch => branch.symbol.uri).concat(slot.target.uri)));
-    const target = matchSavedSymbol(slot.target, symbols), symbol = target && index.symbol(target.id);
-    if (!symbol) { void vscode.window.showWarningMessage(`Saved symbol is unavailable: ${slot.target.name}`); return; }
+    const savedRoot = slot.branches[0].symbol;
+    const index = this.workspace.indexFor(savedRoot.uri), symbols = this.slotSymbols(index, new Set(slot.branches.map(branch => branch.symbol.uri).concat(slot.target.uri)));
+    const root = matchSavedSymbol(savedRoot, symbols), symbol = root && index.symbol(root.id);
+    if (!symbol) { void vscode.window.showWarningMessage(`Saved symbol is unavailable: ${savedRoot.name}`); return; }
+    const target = matchSavedSymbol(slot.target, symbols), selected = target && index.symbol(target.id);
     const { mode, depth, accessFilter, calleeSort, includeFunctionArguments } = slot.options;
     const expanded: Record<string, number> = {}, keys: (string | undefined)[] = [];
+    let selectedNodeKey: string | undefined;
     const build = () => index.graph(symbol.id, mode, depth, expanded, accessFilter, calleeSort, includeFunctionArguments);
     let graph = build(), partial = false;
     for (const [n, branch] of slot.branches.entries()) {
@@ -350,18 +361,21 @@ export class RelationView implements vscode.Disposable {
         if (matches.length === 1) node = matches[0];
       }
       keys[n] = node?.key;
+      if (n === (slot.targetBranch ?? 0)) selectedNodeKey = node?.key;
       if (!node) { partial = true; continue; }
       if (branch.levels !== undefined) { expanded[node.key] = branch.levels; graph = build(); }
     }
+    if (!selected || !selectedNodeKey) partial = true;
+    await this.openSource((selected ?? symbol).location);
     Object.assign(this.state, slot.options);
     this.clearHistory();
-    this.state.locked = true; this.state.candidates = []; this.state.callback = undefined;
+    this.state.candidates = []; this.state.callback = undefined;
     this.callbackFocus = undefined; this.pendingTrack = false;
     this.root = { id: symbol.id, name: symbol.name, uri: symbol.location.uri };
-    this.expanded = expanded; this.selection = symbol.id; this.selectedNodeKey = undefined;
-    if (symbol.location.context) this.contextChoices.set(symbol.location.uri, symbol.location.context);
-    this.refresh();
-    await this.handleMessage({ type: 'open', id: symbol.id });
+    this.expanded = expanded; this.selection = (selected ?? symbol).id; this.selectedNodeKey = selectedNodeKey;
+    this.refresh(false);
+    if (selected) { this.locations.set(selected.id, { location: selected.location, label: selected.name }); this.preview(selected.id); }
+    this.publish();
     await this.webview?.webview.postMessage({ type: 'revealRoot', id: symbol.id });
     if (partial) void vscode.window.showInformationMessage(`Restored ${symbol.name}; some saved branches are unavailable.`);
   }
@@ -390,6 +404,14 @@ export class RelationView implements vscode.Disposable {
     });
     this.slotActions = action.catch(() => {});
     return action;
+  }
+  private async openSource(loc: Location) {
+    const opening = this.openingSource = {};
+    try {
+      if (loc.context) this.contextChoices.set(loc.uri, loc.context);
+      this.lastEditor = await vscode.window.showTextDocument(vscode.Uri.parse(loc.uri), { viewColumn: this.lastEditor?.viewColumn ?? vscode.ViewColumn.One,
+        selection: new vscode.Range(loc.line, loc.column, loc.endLine, loc.endColumn), preview: true });
+    } finally { setTimeout(() => { if (this.openingSource === opening) this.openingSource = undefined; }, 150); }
   }
   async handleMessage(message: unknown) {
     if (!message || typeof message !== 'object') return;
@@ -434,9 +456,7 @@ export class RelationView implements vscode.Disposable {
       case 'back': {
         this.refresh(false);
         const previous = this.expansionHistory.pop();
-        if (previous) {
-          this.expanded = previous.expanded; this.selection = previous.selection; this.selectedNodeKey = previous.selectedNodeKey;
-        }
+        if (previous) this.expanded = previous;
         this.state.canGoBack = this.expansionHistory.length > 0;
         this.refresh(); break;
       }
@@ -500,21 +520,14 @@ export class RelationView implements vscode.Disposable {
           if (!value || this.nodes.get(key) !== node || !/^[1-8]$/.test(value)) return;
           levels = Number(value);
         }
-        if (m.type === 'collapse') { this.clearHistory(); this.expanded[key] = levels; this.refresh(); }
-        else this.changeExpansion(() => { this.expanded[key] = levels; });
+        this.changeExpansion(() => { this.expanded[key] = levels; });
         break;
       }
       case 'open': {
         if (typeof m.id !== 'string') return;
         const target = this.locations.get(m.id);
         if (!target) return;
-        this.openingSource = true;
-        try {
-          const loc = target.location;
-          if(loc.context)this.contextChoices.set(loc.uri,loc.context);
-          await vscode.window.showTextDocument(vscode.Uri.parse(loc.uri), { viewColumn: this.lastEditor?.viewColumn ?? vscode.ViewColumn.One,
-            selection: new vscode.Range(loc.line, loc.column, loc.endLine, loc.endColumn), preview: true });
-        } finally { setTimeout(() => { this.openingSource = false; }, 150); }
+        await this.openSource(target.location);
         break;
       }
     }
