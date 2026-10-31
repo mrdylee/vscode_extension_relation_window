@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.87 — 2026-10-31
+
+- Use one installed Copilot, Claude Code or Codex extension for Smart Analysis, selecting and remembering one provider when several are installed.
+- Automatically use the default model for Claude Code and Codex. Remove their model ID input/settings and ignore obsolete typed IDs; Copilot retains its available-model picker.
+- Find the selected extension's bundled engine without separate CLI/path setup, cancel requests before switching providers and never fall back to another provider after failure.
+
 ## 0.1.86 — 2026-10-30
 
 - Bundle separate Korean and English offline user guides with language switching, quick start, step-by-step Settings recipes, all visible settings/defaults and troubleshooting.

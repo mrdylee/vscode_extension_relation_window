@@ -15,7 +15,7 @@
 | Understand each setting and its default | [Settings at a glance](#settings-at-a-glance) |
 | Analyze only a few folders | [Choose which files to analyze](#choose-which-files-to-analyze) |
 | Follow macros and callbacks | [Smart Analysis](#smart-analysis) |
-| Use optional AI suggestions | [Optional Copilot callback candidates](#optional-copilot-callback-candidates) |
+| Use optional AI suggestions | [Optional AI callback candidates](#optional-ai-callback-candidates) |
 | Save trees in slots, pin a symbol or undo a branch change | [Settings and moving Context](#settings-and-moving-context-v0130) |
 | Understand an icon | [Symbol icons and badges](#symbol-icons-and-badges) |
 | Fix missing results or slow analysis | [Troubleshooting checklist](#troubleshooting-checklist) |
@@ -57,7 +57,7 @@
 1. First verify that ordinary function navigation works.
 2. Find **Smart Analysis: Include** and click **Select folders…**. Choose a small relevant folder, such as `App/control`, and save it.
 3. Leave **Smart Analysis: Macro** checked. It enables local macro expansion and callback propagation together.
-4. Leave **Smart Analysis: Copilot** unchecked if you only want local analysis. Watch the detailed-analysis status as additional relationships appear.
+4. Leave **Smart Analysis: AI** unchecked if you only want local analysis. Watch the detailed-analysis status as additional relationships appear.
 
 > **Two different Include lists:** General **Include = empty** means all C/H files subject to exclusions and discovery limits. **Smart Analysis: Include = empty** disables the extra analysis in new workspaces. To select all indexed files for Smart Analysis, use `["**"]`. Existing legacy scopes stay effective until the new Smart Analysis Include is explicitly saved.
 
@@ -74,14 +74,14 @@
 
 Explicit Combined alignment also moves Terminal and other bottom-panel views because they share VS Code's panel alignment.
 
-### Recipe D — Enable optional Copilot suggestions
+### Recipe D — Enable optional AI suggestions
 
 1. Choose **Smart Analysis: Include** folders first.
-2. Check **Smart Analysis: Copilot**.
-3. Click **Select Copilot Model** in **Copilot Model** and choose an available model. Follow VS Code's account/access prompts if shown.
-4. Eligible unresolved callbacks are analyzed one at a time. **Stop Copilot Analysis** pauses requests for this session; **Analyze Callbacks with Copilot** resumes them.
+2. Check **Smart Analysis: AI**. Auto selects one installed AI extension or asks you to choose one if several are installed.
+3. Open the selected extension and sign in. Claude Code/Codex automatically use their default model without asking for an ID. Copilot offers its available model list.
+4. Eligible unresolved callbacks are analyzed one at a time. **Stop AI Analysis** pauses requests for this session; **Analyze Callbacks with AI** resumes them.
 
-**Source snippets are sent to the selected Copilot model and account limits apply.** Supporting snippets can come from other indexed files. **AI candidate** is a suggestion. Use **Set manually → choose a function → Apply** to record your choice as **User confirmed**. Neither label proves runtime execution.
+**Source snippets are sent to the selected AI provider/model and account limits apply.** Supporting snippets can come from other indexed files. **AI candidate** is a suggestion. Use **Set manually → choose a function → Apply** to record your choice as **User confirmed**. Neither label proves runtime execution.
 
 ## Settings at a glance
 
@@ -93,11 +93,12 @@ Names below match the English Settings screen; exact keys work in any VS Code la
 | Call Graph Direction · `dynsight.callGraphDirection` | **`callers-left`** — Places incoming/outgoing branches in **Callers & Callees**. |
 | Include · `dynsight.include` | **`[]`** — Selects general C/H scope. Empty means all subject to exclusions and limits. |
 | Exclude · `dynsight.exclude` | **Built-in list** — Skips test/mock, third-party and build/tool output folders. A saved list replaces the defaults; `[]` disables the configurable defaults. |
-| Smart Analysis: Include · `dynsight.smartAnalysis.include` | **`[]`** — Chooses files for extra Macro/Copilot work inside the general scope. |
+| Smart Analysis: Include · `dynsight.smartAnalysis.include` | **`[]`** — Chooses files for extra Macro/AI work inside the general scope. |
 | Smart Analysis: Exclude · `dynsight.smartAnalysis.exclude` | **`[]`** — Skips extra analysis in these paths while retaining basic navigation. |
 | Smart Analysis: Macro · `dynsight.smartAnalysis.macro` | **On** — Expands macros and propagates local callback targets within Smart Analysis scope. |
-| Smart Analysis: Copilot · `dynsight.smartAnalysis.copilot` | **Off** — Requests AI candidates for eligible unresolved callbacks. |
-| Copilot Model · `dynsight.copilotModel` | **Empty** — Choose from your account's available models using **Select Copilot Model**. |
+| Smart Analysis: AI · `dynsight.smartAnalysis.ai` | **Off** — Requests AI candidates for eligible unresolved callbacks. |
+| Smart Analysis: Provider · `dynsight.smartAnalysis.provider` | **`auto`** — Uses one installed extension; asks once and saves the choice when several are installed. |
+| Copilot Model · `dynsight.copilotModel` | **Empty** — Choose from your account's available models using **Select AI Model**. |
 | Skip Inactive · `dynsight.skipInactive` | **On** — Hides provably inactive branches; unknown conditions remain visible. |
 | Callee Sort · `dynsight.calleeSort` | **`name`** — Sorts Callees by name or first source location. |
 | Include Function Arguments · `dynsight.includeFunctionArguments` | **Off** — Shows functions passed as arguments, with a distinct dotted connector. |
@@ -111,7 +112,7 @@ For JSON users, open **Preferences: Open Workspace Settings (JSON)** and merge o
   "dynsight.smartAnalysis.include": ["App/control/**"],
   "dynsight.smartAnalysis.exclude": ["App/control/generated/**"],
   "dynsight.smartAnalysis.macro": true,
-  "dynsight.smartAnalysis.copilot": false
+  "dynsight.smartAnalysis.ai": false
 }
 ```
 
@@ -125,7 +126,7 @@ Replace sample paths with your project's paths. Omitting **Exclude** retains its
 | Tree stays on another function | Click **Pinned · Follow paused** to resume **Following selection**. |
 | A function or shared header is missing | Check general Include/Exclude first. Exclude takes priority; default rules also skip test and `third*` folders. |
 | Macros/callbacks are missing | Check Smart Analysis Include and Macro. Extra analysis needs a nonempty scope. Inspect partial-result reasons in Diagnostics. |
-| Copilot does not start | Check its checkbox, model and nonempty scope. Run **Analyze Callbacks with Copilot** after a pause. |
+| AI does not start | Check its checkbox, model and nonempty scope. Run **Analyze Callbacks with AI** after a pause. |
 | Analysis is slow | Start with a smaller Smart Analysis folder and shallower tree depth. **Stop local** pauses local work; **Resume Local Analysis** resumes it. |
 | Update asks for Rebuild | Read the reason. A changed analysis version can require a rebuild; the extension version alone does not. Rebuild when the prompt requires it. |
 | Need to report a problem | Use **Dynsight: Report Issue**; review the draft and attachments before submitting. |
@@ -192,13 +193,17 @@ Unsaved edits remain temporary and are not written into the disk generation.
 Scope changes reconcile selected files; only **Rebuild index** explicitly clears
 all local analysis. Diagnostics shows cache state and parse/relation counters.
 
-## Optional Copilot callback candidates
+## Optional AI callback candidates
 
-Enable **Smart Analysis: Copilot**, select a **Copilot Model**, and explicitly
+Enable **Smart Analysis: AI** to use one installed **Copilot / Claude Code / Codex** extension. Auto selects the only installed extension; if several are installed, choose one once and Dynsight saves it. **Only the selected provider receives Smart Analysis requests. Failures never trigger another provider.** Change the choice with **Dynsight: Select AI Extension**. Open that extension and sign in. No separate CLI installation or executable path is needed. Claude Code/Codex automatically use their default model with no model ID input or setting. Copilot offers its available model list through **Select AI Model**.
+
+Copilot uses VS Code's Language Model API. Claude Code and Codex use the installed extension's bundled engine and existing login, rather than typing into an existing chat panel. Requests still receive bounded snippets in a temporary folder with the existing validation and cancellation limits. Changing providers cancels the old request and waits for it to end before starting the new one. WSL/SSH requires a compatible extension in that environment. Fix login/update errors in the selected extension and run **Analyze Callbacks with AI** to resume. Existing Copilot settings and command IDs remain compatible.
+
+Enable **Smart Analysis: AI**, choose a **Smart Analysis: Provider** and model, and explicitly
 choose **Smart Analysis: Include** paths. Invocation files must be indexed,
 included in the shared Smart Analysis scope and outside its exclusions. Empty
 Smart Analysis Include permits no requests. Paths are not copied from general
-Include. Copilot works independently of the **Macro** switch.
+Include. AI works independently of the **Macro** switch.
 
 When enabled, analysis starts automatically once the saved index is ready. Startup,
 saved source changes, Rebuild, and model/scope changes analyze missing eligible
@@ -207,15 +212,15 @@ Choose a model when prompted if none is configured. Active **User confirmed**
 calls are skipped. Open a callback's popup for an individual **Find target with AI**
 or **Recheck with AI** request.
 
-**Stop analysis** or **Stop Copilot Analysis** cancels the active request, retains
+**Stop analysis** or **Stop AI Analysis** cancels the active request, retains
 completed results, and pauses automatic requests for this session. Index and source
-notifications do not resume it. Run **Analyze Callbacks with Copilot**, toggle the
-Copilot setting, or change its model/scope to resume. Request failures also pause
+notifications do not resume it. Run **Analyze Callbacks with AI**, toggle the
+AI setting, or change its provider/model/scope to resume. Request failures also pause
 automation without automatic retries or model fallback. Saved basic navigation
 can support analysis after local detailed analysis is stopped or reaches a limit.
 Save modified sources first.
 
-Relevant source snippets are sent to your selected Copilot model. Supporting code
+Relevant source snippets are sent to your selected AI provider/model. Supporting code
 may come from other indexed paths, even when only the invocation file is inside
 Smart Analysis Include. Account limits and organization policies apply. Source comments
 and strings are analysis data. Dynsight uses bounded snippets, not chat history or
@@ -237,7 +242,7 @@ Hover or focus an **AI candidate** to open its popup:
   AI result if available or the original unresolved call. It makes no AI request.
 
 User choices are saved separately from AI cache in local workspace extension
-storage. Rebuild, restart, model changes and disabling Copilot do not erase them.
+storage. Rebuild, restart, model changes and disabling AI do not erase them.
 Code changes that invalidate call/target identity require review, rather than
 reattaching by line number or name. **User confirmed** records your decision; it
 is not a statically proven runtime call. These choices do not feed the local
@@ -249,7 +254,7 @@ callback propagation engine. AI and user overlays never enter the Worker cache.
   "dynsight.smartAnalysis.include": ["App/**"],
   "dynsight.smartAnalysis.exclude": ["App/Generated/**"],
   "dynsight.smartAnalysis.macro": true,
-  "dynsight.smartAnalysis.copilot": true
+  "dynsight.smartAnalysis.ai": true
 }
 ```
 
@@ -290,7 +295,7 @@ Other examples: `App/**/*.{c,h}` matches C/H files under App; `**/vendor/**` mat
 
 Use **Select folders…** in the general Include/Exclude setting to avoid typing patterns. Choose **Add folders…**, select one or more folders (including nested folders), review the rules, then **Apply** to save and refresh analysis. Select a rule to remove it. **Esc** cancels without saving. **Analyze all C/H files** clears Include; adding folders to an empty Include restricts analysis to the selected paths. Existing broad globs such as `**` are preserved; remove those rules to narrow the scope. Matching folder exclusion rules appear beneath Include entries. Exclude also offers **Restore default exclusions**. Opening Settings from the picker discards staged changes and lets you edit arbitrary glob patterns directly.
 
-Alternatively, select folders in Explorer and right-click **Dynsight → Add to Analysis Include / Exclude from Analysis**. This opens the same review before saving. Existing rules, including default exclusions, are retained when adding folders. Multi-root workspaces save each root's folder settings. These commands configure general indexing, separately from Smart Analysis Macro/Copilot scope.
+Alternatively, select folders in Explorer and right-click **Dynsight → Add to Analysis Include / Exclude from Analysis**. This opens the same review before saving. Existing rules, including default exclusions, are retained when adding folders. Multi-root workspaces save each root's folder settings. These commands configure general indexing, separately from Smart Analysis Macro/AI scope.
 
 Selecting a workspace root for Include restores all C/H files using the normal discovery limit; selecting the root for Exclude excludes all files. Settings editing opens the selected root's folder settings when folder scope applies. Fixed exclusions are marked as always excluded and cannot be overridden by Include/Exclude settings.
 
@@ -306,13 +311,13 @@ Selecting a workspace root for Include restores all C/H files using the normal d
 ## Smart Analysis
 
 Settings are ordered as **View → Include → Exclude → Smart Analysis Include /
-Exclude → Macro / Copilot → other options**. Only four path lists are shown.
+Exclude → Macro / AI → other options**. Only four path lists are shown.
 General Include/Exclude select the basic index. The shared Smart Analysis scope
 selects extra analysis within that index:
 
 - **Macro** expands macros and propagates local function-pointer and callback
   targets together. It is enabled by default, but requires a nonempty scope.
-- **Copilot** requests AI candidates for unresolved callbacks. It is off by
+- **AI** requests AI candidates for unresolved callbacks. It is off by
   default and runs independently of Macro.
 
 Use **Select folders…** or **Dynsight: Select Smart Analysis Folders**. An empty
@@ -325,8 +330,8 @@ pulled into local propagation automatically.
 
 Saved legacy Macro Expansion Folders, Analyze Callbacks, Detailed Analysis
 Folders and Copilot paths remain effective until Smart Analysis Include is
-explicitly saved. They are hidden from the Settings UI. Saving even an empty new
-Include replaces those path scopes for that root; Macro and Copilot switches
+explicitly saved. They are hidden from the Settings UI. The old AI enable settings remain effective until Smart Analysis: AI is explicitly saved. Saving even an empty new
+Include replaces those path scopes for that root; Macro and AI switches
 remain independent. Legacy picker commands open the new shared selection.
 Changing a scope refreshes affected flow
 facts; increasing the scope may require parsing the affected files again.
@@ -655,7 +660,7 @@ not continue from the exact interrupted instruction. Both actions are also in th
 command palette as **Dynsight: Stop Local Analysis / Resume Local Analysis**.
 Stopped analysis remains paused across source edits until Retry or Rebuild.
 Old fixed-deadline caches retain parsed sources but recompute relationships once.
-These controls do not enable Copilot. Memory, work and convergence limits
+These controls do not enable AI. Memory, work and convergence limits
 remain, including cumulative function/project work bounds and the 256-slot function mutation limit. A function budget is not reset on each propagation visit.
 
 Mutation slots count distinct storage locations retained in a function summary,

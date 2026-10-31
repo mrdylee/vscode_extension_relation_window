@@ -23,7 +23,7 @@ export async function selectDetailedAnalysisFolders() {
   if (!choices.length) { void vscode.window.showInformationMessage('No source folders found. Edit Smart Analysis: Include in Settings to enter a glob pattern.'); return; }
   const selected = await vscode.window.showQuickPick(choices, {
     title: `Smart Analysis Include · ${folder.name}`, canPickMany: true,
-    placeHolder: 'Choose paths for Macro and Copilot. Copilot sends relevant source when enabled. Empty disables Smart Analysis.'
+    placeHolder: 'Choose paths for Macro and AI. The selected AI provider receives relevant source when enabled. Empty disables Smart Analysis.'
   });
   if (!selected) return;
   await config.update('smartAnalysis.include', selected.map(item => item.pattern),

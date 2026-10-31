@@ -151,6 +151,14 @@ try {
   assert.equal(await page.locator('.copilot-progress').count(),1,'AI progress must be visible outside Diagnostics');
   assert.match(await page.locator('.copilot-progress').textContent(),/5\/7 processed.*Remaining: 2/);
   assert.equal(await page.locator('.graph > .branch').getAttribute('data-ai-progress'),'retained','progress does not rerender the graph');
+  for (const provider of ['Claude Code','Codex']) {
+    Object.assign(aiDiagnostics.copilot,{provider,state:'request-failed',error:'Sign in with the selected CLI'});
+    await page.evaluate(diagnostics=>window.dispatchEvent(new MessageEvent('message',{data:{type:'diagnostics',diagnostics}})),aiDiagnostics);
+    assert.match(await page.locator('.copilot-progress').textContent(),new RegExp(`${provider}: request failed`));
+    assert.match(await page.locator('.copilot-progress').textContent(),/Sign in with the selected CLI/);
+    assert.doesNotMatch(await page.locator('.copilot-progress').textContent(),/Copilot/);
+  }
+  delete aiDiagnostics.copilot.provider;delete aiDiagnostics.copilot.error;
   assert.equal(await page.getByRole('button',{name:'Choose callback…',exact:true}).count(),0,'enabled analysis must not require choosing a callback');
   Object.assign(aiDiagnostics.copilot,{state:'analyzing',automatic:true});
   await page.evaluate(diagnostics=>window.dispatchEvent(new MessageEvent('message',{data:{type:'diagnostics',diagnostics}})),aiDiagnostics);
@@ -485,7 +493,7 @@ try {
   assert.equal(await page.evaluate(() => window.sent.filter(message => message.type === 'open').at(-1).id), aiTarget.symbolId);
   await pointerTarget.focus(); await pointerTarget.press('Space');
   assert.ok((await popup.textContent()).includes('This is not proof of invocation.'));
-  assert.ok((await popup.textContent()).includes('Copilot candidate · callbacks.run'));
+  assert.ok((await popup.textContent()).includes('AI candidate · callbacks.run'));
   assert.equal(await popup.locator('.node-actions').count(), 1, 'candidate definition retains expansion actions');
   await popup.locator('.site:not(.evidence)').first().click();
   assert.match(await page.locator('.code-line.highlight').textContent(), /callbacks\.run\(\)/, 'the original callback invocation remains available');

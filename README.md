@@ -13,24 +13,28 @@ C 소스 폴더만 열어 함수의 호출·참조 관계, 변수의 읽기·쓰
 3. **Dynsight: Open Relation and Context**를 실행합니다.
 4. 메인 편집기에서 함수나 변수 이름을 클릭합니다. 하단에 Context(왼쪽)와 Relation(오른쪽)이 표시됩니다.
 
-VS Code 데스크톱 1.95 이상이 필요합니다. 기본 분석은 로컬 WASM으로 수행합니다. 선택 기능인 **Copilot 콜백 분석**을 켜면 관련 소스 일부를 기존 Copilot 계정으로 전송하며 계정 사용량 한도가 적용됩니다. 업데이트 확인을 켜면 GitHub에 릴리스 정보를 요청합니다. 릴리스 게시 전 검증은 Windows·macOS·Ubuntu에서 단위 테스트와 Extension Host 통합 테스트를 실행합니다. WSL 원격 연결 및 원격 자동 설치는 실환경 미검증입니다. 웹 전용 VS Code는 지원하지 않습니다.
+VS Code 데스크톱 1.95 이상이 필요합니다. 기본 분석은 로컬 WASM으로 수행합니다. 선택 기능인 **AI 콜백 분석**을 켜면 관련 소스 일부를 선택한 Copilot·Claude Code·Codex 계정으로 전송하며 계정 사용량 한도가 적용됩니다. 업데이트 확인을 켜면 GitHub에 릴리스 정보를 요청합니다. 릴리스 게시 전 검증은 Windows·macOS·Ubuntu에서 단위 테스트와 Extension Host 통합 테스트를 실행합니다. WSL 원격 연결 및 원격 자동 설치는 실환경 미검증입니다. 웹 전용 VS Code는 지원하지 않습니다.
 
-## 상세 분석과 Copilot 콜백 후보
+## 상세 분석과 AI 콜백 후보
+
+**Settings → Smart Analysis: AI**를 켜면 VS Code에 설치된 **Copilot / Claude Code / Codex** 중 하나를 사용합니다. 하나만 설치돼 있으면 자동 선택하고, 여러 개면 한 번 선택해 저장합니다. **Dynsight: Select AI Extension**에서 바꿀 수 있습니다. **선택한 하나만 요청을 처리하며 다른 제공자로 자동 전환하지 않습니다.** 별도 CLI 설치나 실행 파일 경로 입력은 필요하지 않습니다. 선택한 확장을 열어 로그인하세요. Claude Code·Codex는 모델 ID 입력 없이 기본 모델을 바로 사용합니다. Copilot만 **Select AI Model**의 목록에서 고릅니다.
+
+Copilot은 VS Code 모델 API를 사용하고, Claude Code·Codex는 설치된 확장에 포함된 실행 엔진을 자동으로 찾아 기존 로그인을 사용합니다. 기존 채팅창에 메시지를 입력하는 방식은 아닙니다. 제공자를 바꾸면 이전 요청이 끝난 뒤 새 요청을 시작합니다. WSL·SSH에서는 해당 환경에서 사용할 수 있는 확장이 필요합니다. 실패하면 선택한 확장의 로그인·업데이트 상태를 확인한 뒤 **Analyze Callbacks with AI**로 재개하세요. 기존 Copilot 사용 여부는 새 AI 설정을 명시적으로 저장하기 전까지 적용됩니다.
 
 설정은 **보기 → Include → Exclude → Smart Analysis Include / Exclude →
-Smart Analysis Macro / Copilot → 기타 옵션** 순서입니다. UI 문구는 영어로 제공합니다.
+Smart Analysis Macro / AI / Provider → 기타 옵션** 순서입니다. UI 문구는 영어로 제공합니다.
 
 경로는 일반 **Include / Exclude**와 **Smart Analysis Include / Exclude** 네 개만
 사용합니다. 일반 범위는 기본 색인을 정하며, Smart Analysis 범위는 그 안에서 추가
 분석할 파일을 정합니다. **Macro**는 로컬 매크로 확장과 콜백 전파를 함께 켜고 끕니다.
-**Copilot**은 미해결 콜백의 AI 후보 분석이며 Macro와 독립적으로 켤 수 있습니다.
+**AI**는 미해결 콜백의 AI 후보 분석이며 Macro와 독립적으로 켤 수 있습니다.
 새 프로젝트의 Smart Analysis Include는 비어 있으므로 기본 탐색부터 시작합니다.
 `["**"]`는 모든 색인 파일을 선택하며 Smart Analysis Exclude가 우선합니다.
 기존 경로 설정은 화면에서 숨기고, 새 Include를 명시적으로 저장하기 전까지 기존
 분석 범위와 AI 허용 범위를 유지합니다. 새 Include를 저장하면 두 기능이 이 범위를
 공유합니다. 색인된 외부 헤더 정의는 참조하지만 외부 함수 본문을 자동으로 추적하지 않습니다.
 
-Copilot 사용 여부·모델·허용 경로를 지정하면 저장된 색인이 준비된 뒤 미해결 콜백을
+AI 사용 여부·제공자·모델·허용 경로를 지정하면 저장된 색인이 준비된 뒤 미해결 콜백을
 자동으로 하나씩 분석합니다. 기존 유효 캐시는 재사용하며 5개 뒤에도 이어서 처리합니다.
 호출 팝업의 **Find target with AI**로 한 호출만 조사할 수도 있습니다.
 **AI candidate** 팝업에는 **Set manually / Recheck with AI**가
@@ -44,7 +48,7 @@ User confirmed에서도 AI로 재확인할 수 있습니다. 다른 후보는 �
 
 활성화·시작·파일 저장·재색인과 모델/범위 변경은 설정된 범위의 누락된 결과를 자동으로
 분석합니다. **Stop analysis**는 완료 결과를 유지하고 이 세션의 자동 요청을 멈춥니다.
-**Analyze Callbacks with Copilot** 명령, 설정 다시 켜기, 모델/범위 변경으로 재개합니다.
+**Analyze Callbacks with AI** 명령, 설정 다시 켜기, 모델/범위 변경으로 재개합니다.
 요청 실패도 자동 반복하지 않고 일시 중단합니다. User confirmed는 자동 분석에서 제외합니다.
 Smart Analysis Include는 일반 Include에서 자동 복사되지 않으며 빈 목록은 요청을 허용하지 않습니다.
 호출 위치는 공유 Smart Analysis 범위에 들어가야 합니다. 근거 소스는 다른 기본 색인 경로에서 수집될 수 있습니다.
@@ -132,7 +136,7 @@ Settings 화면에서는 `@id:dynsight.include` 또는 `@id:dynsight.exclude`를
 
 패턴을 직접 입력하지 않으려면 Include/Exclude 설명의 **Select folders…**를 누르세요. **Add folders…**에서 하위 폴더를 여러 개 선택하고, 목록에서 불필요한 규칙을 선택해 제거한 뒤 **Apply**로 한 번에 저장합니다. **Esc**로 닫으면 변경을 버립니다. Include의 **Analyze all C/H files**는 전체 분석으로 돌아가며, Include가 비어 있을 때 폴더를 추가하면 선택한 경로만 분석합니다. 기존 `**` 같은 광범위한 glob은 보존하므로 범위를 좁히려면 목록에서 해당 규칙을 제거하세요. Exclude에 걸리는 폴더에는 일치하는 폴더 제외 규칙을 표시합니다. 기본 제외 복원과 기존 glob 직접 편집도 가능합니다. 설정 편집으로 이동하면 선택기의 미적용 변경은 버립니다.
 
-탐색기에서도 폴더를 여러 개 선택한 뒤 우클릭 → **Dynsight → Add to Analysis Include / Exclude from Analysis**로 같은 검토 목록을 열 수 있습니다. 여러 루트를 연 경우 각 루트의 설정으로 저장하며, 기본 Exclude와 직접 작성한 기존 패턴은 추가 시 유지합니다. 이 선택기는 일반 분석 범위용이며 **Smart Analysis**의 Macro/Copilot 범위와는 별개입니다.
+탐색기에서도 폴더를 여러 개 선택한 뒤 우클릭 → **Dynsight → Add to Analysis Include / Exclude from Analysis**로 같은 검토 목록을 열 수 있습니다. 여러 루트를 연 경우 각 루트의 설정으로 저장하며, 기본 Exclude와 직접 작성한 기존 패턴은 추가 시 유지합니다. 이 선택기는 일반 분석 범위용이며 **Smart Analysis**의 Macro/AI 범위와는 별개입니다.
 
 워크스페이스 루트를 Include로 선택하면 기존 Include를 비워 검색 제한이 적용되는 전체 C/H 분석으로 돌아갑니다. 루트를 Exclude로 선택하면 전체 파일을 제외합니다. 폴더별 설정이 적용되는 경우 설정 편집은 선택한 루트의 설정을 엽니다. `node_modules`, `.git`, `.vscode-test`에는 설정으로 해제할 수 없는 고정 제외라는 안내를 표시합니다.
 
@@ -162,7 +166,7 @@ Settings 화면에서는 `@id:dynsight.include` 또는 `@id:dynsight.exclude`를
   "dynsight.smartAnalysis.include": ["App/control/**"],
   "dynsight.smartAnalysis.exclude": ["App/control/generated/**"],
   "dynsight.smartAnalysis.macro": true,
-  "dynsight.smartAnalysis.copilot": false
+  "dynsight.smartAnalysis.ai": false
 }
 ```
 
@@ -245,7 +249,7 @@ Settings 화면에서는 `@id:dynsight.include` 또는 `@id:dynsight.exclude`를
 결과로 유지하며, **Retry local**은 파싱한 소스를 재사용해 관계 분석을 다시 시도합니다.
 명령 팔레트에서도 **Dynsight: Stop Local Analysis / Resume Local Analysis**를 사용할 수 있습니다.
 메모리·작업량·256슬롯·전파 반복 제한은 유지합니다. 이전 10초 정책의 캐시는 원본 파싱을
-재사용하고 관계만 자동 재계산합니다. 이 기능은 Copilot 활성화 설정을 바꾸지 않습니다.
+재사용하고 관계만 자동 재계산합니다. 이 기능은 AI 활성화 설정을 바꾸지 않습니다.
 
 표준 정수 typedef와 배열 원소의 타입을 보존해, 콜백에 쓰이지 않는 정수·바이트 쓰기는
 변경 요약에서 제외합니다. 외부 `memcpy`·`memmove`·`memset`은 목적지의 바이트만 변경하는

@@ -1,0 +1,11 @@
+# Smart Analysis with installed AI extensions
+
+The user's correction supersedes the October 30 CLI setup design: use already-installed VS Code Copilot, Claude Code and Codex extensions, with exactly one provider handling Smart Analysis requests.
+
+Use Copilot through the VS Code Language Model API. The inspected Codex extension does not expose a request/response API or a Language Model provider; it bundles its execution engine. Discover the selected Claude Code/Codex extension through `vscode.extensions.getExtension` and use only its bundled engine with the existing bounded request protocol. Do not activate other AI extensions, inspect credentials, install a CLI or search PATH. Authentication stays with the selected engine and its existing login. This is bundled-engine integration, not sending messages to an existing chat panel.
+
+Default Provider is Auto. When analysis starts, one installed provider is selected automatically; multiple installed providers produce one choice, saved to workspace settings. A Select AI Extension command changes this choice. Never fan out requests or fall back after errors. Changing the selected provider cancels the old request and waits for it to end before starting the new provider. Keep existing explicit selections and Copilot command aliases compatible.
+
+Remove the Claude/Codex executable-path settings and their setup instructions. The user's later correction also removes Claude/Codex model ID inputs and settings entirely: use the bundled engine's default, ignoring obsolete typed IDs. Copilot retains the available-model list. Missing extensions, incompatible/missing engines and login failures point to the relevant VS Code extension. A remote workspace requires a compatible engine in its own extension host; a local Windows binary must never be launched as a Linux engine.
+
+Reuse context building, validation, scope, cache separation, manual confirmations and sequential scheduling. Verify all-three-installed exclusivity for each provider, automatic single-extension selection, one saved choice for multiple extensions, cancellation without overlap, no fallback on error, bundled-path discovery by platform and no global-CLI dependency. Run unit, UI, typecheck, actual macOS host and real installed Codex-engine smoke checks. Claude and remote-host limitations must be reported as unverified where unavailable.

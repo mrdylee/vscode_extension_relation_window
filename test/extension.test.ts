@@ -1,8 +1,10 @@
 import * as vscode from 'vscode';
 import assert from 'node:assert/strict';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { RelationView } from '../src/view';
+import { createCliCallbackProvider } from '../src/cli-callback-provider';
 
 export async function run() {
   const ext = vscode.extensions.getExtension('dylee.dynsight');
@@ -61,7 +63,19 @@ export async function run() {
     assert.ok((await vscode.commands.getCommands()).includes(command), `${command} opens a specific guide language`);
   assert.ok((await vscode.commands.getCommands()).includes('dynsight.selectCopilotModel'), 'Copilot model picker command registered');
   assert.equal(vscode.workspace.getConfiguration('dynsight').get('copilotModel'), '', 'model choice is visible in Settings');
-  assert.equal(vscode.workspace.getConfiguration('dynsight').get('smartAnalysis.copilot'), false, 'AI requests are opt-in');
+  assert.equal(vscode.workspace.getConfiguration('dynsight').get('smartAnalysis.ai'), false, 'AI requests are opt-in');
+  assert.equal(vscode.workspace.getConfiguration('dynsight').get('smartAnalysis.provider'), 'auto', 'new workspaces choose one installed AI extension');
+  for(const key of ['dynsight.smartAnalysis.claudePath','dynsight.smartAnalysis.codexPath','dynsight.smartAnalysis.claudeModel','dynsight.smartAnalysis.codexModel'])
+    assert.equal(ext.packageJSON.contributes.configuration.properties[key],undefined,'installed-extension integration needs no path or model ID settings');
+  for (const command of ['selectAiProvider','selectAiModel','analyzeCallbacksWithAI','reanalyzeCallbacksWithAI','stopAiAnalysis'])
+    assert.ok((await vscode.commands.getCommands()).includes(`dynsight.${command}`), `AI command registered: ${command}`);
+  const cliFixture=await mkdtemp(path.join(tmpdir(),'dynsight-native-cli-'));
+  try {
+    const executable=path.join(cliFixture,'fixture.cjs');
+    await writeFile(executable,`if(process.argv.includes('--version')){console.log('fixture 1');process.exit(0);}process.stdin.resume();process.stdin.on('end',()=>console.log(JSON.stringify({type:'result',is_error:false,result:'{"status":"not-found","candidates":[]}'})));`);
+    const provider=await createCliCallbackProvider({provider:'claude',executable,model:''});
+    assert.equal(JSON.parse(await provider.complete('synthetic callback context',new AbortController().signal)).status,'not-found','CLI transport works inside the actual Electron extension host');
+  } finally {await rm(cliFixture,{recursive:true,force:true});}
   assert.equal(api.workspace.index.files.size, 93, 'all files indexed beyond the document cache limit');
   assert.equal(api.workspace.diagnostics.index.cache.saved, 93, 'native workspace writes the saved index');
   assert.equal(api.workspace.diagnostics.index.rebuilds[0].reason, 'startup');

@@ -80,10 +80,12 @@ export function createDiagnostics(version: string, refresh: () => void, reportIs
     }
     if (data.copilot) {
       const ai = data.copilot;
+      const provider=ai.provider ?? 'Copilot';
+      if(ai.error)body.append(el('div',ai.error,'warning'));
       if (ai.state === 'waiting-for-saved-index') {
-        body.append(el('div', `Copilot paused: ${copilotWaitMessage(ai.waitReason)} · Requests this session: ${ai.requests}. Current callback counts are unavailable while waiting.`));
+        body.append(el('div', `${provider} paused: ${copilotWaitMessage(ai.waitReason)} · Requests this session: ${ai.requests}. Current callback counts are unavailable while waiting.`));
       } else {
-        body.append(el('div', `Copilot callbacks: ${ai.state} · Processed: ${ai.completed ?? 0}/${ai.total ?? 0} · Requests this session: ${ai.requests} · Cache hits: ${ai.cacheHits} · Remaining (includes failed): ${ai.remaining} · Failures: ${ai.failures}`));
+        body.append(el('div', `${provider} callbacks: ${ai.state} · Processed: ${ai.completed ?? 0}/${ai.total ?? 0} · Requests this session: ${ai.requests} · Cache hits: ${ai.cacheHits} · Remaining (includes failed): ${ai.remaining} · Failures: ${ai.failures}`));
         body.append(el('div', `AI candidates: ${ai.candidates} · No candidate in supplied context: ${ai.notFound} · Context limited: ${ai.contextLimited}${ai.excluded ? ` · Excluded by path: ${ai.excluded}` : ''}`));
         body.append(el('div', 'Coverage is limited to detected callback sites in the saved index, not proof of all runtime targets. Analyze all remaining continues automatically in batches of 5. Stop analysis keeps completed results. Normal Rebuild preserves valid AI results.', 'diagnostics-note muted'));
       }

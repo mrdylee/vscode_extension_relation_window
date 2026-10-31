@@ -45,11 +45,12 @@ function renderCopilot(ai: Diagnostics['copilot']) {
   copilotProgress.hidden = !ai;
   copilotProgress.replaceChildren();
   if (!ai) return;
+  const provider=ai.provider ?? 'Copilot';
   if(ai.manualReview)copilotProgress.append(el('span','warning',`User confirmations: ${ai.manualReview} need review`));
   if(ai.manualInactive)copilotProgress.append(el('span','muted',`User confirmations: ${ai.manualInactive} inactive`));
-  const stop = () => copilotProgress.append(button('Stop analysis', () => send('copilotStop'), 'Stop Copilot analysis and keep completed results'));
+  const stop = () => copilotProgress.append(button('Stop analysis', () => send('copilotStop'), `Stop ${provider} analysis and keep completed results`));
   if (ai.state === 'waiting-for-saved-index') {
-    copilotProgress.append(el('span', '', `Copilot paused: ${copilotWaitMessage(ai.waitReason)}`));
+    copilotProgress.append(el('span', '', `${provider} paused: ${copilotWaitMessage(ai.waitReason)}`));
     copilotProgress.title = 'Current callback counts are unavailable while the saved index is not ready. This is not a model response wait.';
     if (ai.automatic) stop();
     return;
@@ -57,7 +58,8 @@ function renderCopilot(ai: Diagnostics['copilot']) {
   const total = ai.total ?? 0, completed = ai.completed ?? 0;
   const ready = ai.state === 'ready';
   const state = ready ? total ? 'All detected sites processed' : ai.excluded ? 'No callback sites in AI scope' : 'No unresolved callback sites detected' : ai.state.replaceAll('-', ' ');
-  copilotProgress.append(el('span', '', `Copilot: ${state} · ${completed}/${total} processed · Remaining: ${ai.remaining} · Failed: ${ai.failures}`));
+  copilotProgress.append(el('span', '', `${provider}: ${state} · ${completed}/${total} processed · Remaining: ${ai.remaining} · Failed: ${ai.failures}`));
+  if(ai.error)copilotProgress.append(el('span','warning',ai.error));
   if (ai.excluded) copilotProgress.append(el('span', 'muted', `Excluded by path: ${ai.excluded}`));
   if (total) copilotProgress.append(el('span', 'muted', `Candidates: ${ai.candidates} · No candidate in supplied context: ${ai.notFound} · Context limited: ${ai.contextLimited}`));
   copilotProgress.title = 'Coverage of detected callback sites in the current saved index. Failed sites remain pending. Processing every site does not prove every runtime target was found.';
@@ -255,7 +257,7 @@ function showDetails(node: GraphNode, anchor: HTMLButtonElement) {
   popup.append(meta);
   if (node.cycle) popup.append(el('div', 'condition detail-warning', 'Recursion: further expansion stopped on this path.'));
   if (node.ambiguous) popup.append(el('div', 'condition detail-warning', 'Candidate: inferred targets, conditions or multiple definitions prevent a unique match.'));
-  if (node.sites.some(site => site.callKind === 'ai-candidate')) popup.append(el('div', 'condition detail-warning', 'Copilot candidate: source evidence suggests a possible callback target. This is not proof of invocation.'));
+  if (node.sites.some(site => site.callKind === 'ai-candidate')) popup.append(el('div', 'condition detail-warning', 'AI candidate: source evidence suggests a possible callback target. This is not proof of invocation.'));
   if (node.sites.some(site => site.callKind === 'registered' && site.kind === 'reference')) popup.append(el('div', 'condition', 'Registration: this function is explicitly assigned here. This is not proof of invocation.'));
   if (node.sites.some(site => site.callKind === 'registered' && site.kind === 'call')) popup.append(el('div', 'condition detail-warning', 'Registered candidate: an explicit registration and local alias suggest this callback target. This is not proof of invocation.'));
   if (node.callKind === 'macro') popup.append(el('div', 'condition detail-warning', 'Macro invocation: expansion is unavailable, incomplete, or leaves this recursive call.'));
@@ -281,7 +283,7 @@ function showDetails(node: GraphNode, anchor: HTMLButtonElement) {
       popup.append(el('div', 'condition', 'Passing a function does not prove that the receiving code invokes it.'));
     }
     if (site.inference) {
-      popup.append(el('strong', 'detail-label', `${site.callKind === 'user-confirmed' ? 'User confirmed' : site.callKind === 'ai-candidate' ? 'Copilot candidate' : site.callKind === 'registered' ? site.kind === 'reference' ? 'Registration' : 'Registered candidate' : site.argument ? 'Argument value' : 'Inferred call'} · ${site.inference.expression}`));
+      popup.append(el('strong', 'detail-label', `${site.callKind === 'user-confirmed' ? 'User confirmed' : site.callKind === 'ai-candidate' ? 'AI candidate' : site.callKind === 'registered' ? site.kind === 'reference' ? 'Registration' : 'Registered candidate' : site.argument ? 'Argument value' : 'Inferred call'} · ${site.inference.expression}`));
       popup.append(condition(site.inference.expression));
       if (site.inference.incomplete) popup.append(el('div', 'condition detail-warning', 'Other targets may exist. ' + site.inference.reasons.join(' · ')));
       for (const [i, frame] of site.inference.evidence.entries()) {

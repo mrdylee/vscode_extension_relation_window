@@ -18,7 +18,7 @@
 | 호출한 함수와 호출되는 함수 구분하기 | [4. Relation과 Context 읽기](#4-relation과-context-읽기) |
 | 트리를 저장하고 다시 열기 | [5. 슬롯과 잠금과 되돌리기](#5-슬롯과-잠금과-되돌리기) |
 | 아이콘과 R/W 표시 이해하기 | [6. 아이콘과 변수 표시](#6-아이콘과-변수-표시) |
-| 콜백 대상을 직접 지정하거나 AI 사용하기 | [7. 콜백과 Copilot](#7-콜백과-copilot) |
+| 콜백 대상을 직접 지정하거나 AI 사용하기 | [7. 콜백과 AI](#7-콜백과-ai) |
 | Make 빌드 설정 선택하기 | [8. 빌드 설정](#8-빌드-설정) |
 | 결과가 없거나 느릴 때 확인하기 | [9. 문제 해결](#9-문제-해결) |
 | 설치하거나 업데이트하기 | [10. 설치와 업데이트](#10-설치와-업데이트) |
@@ -75,7 +75,7 @@
 1. 먼저 기본 함수 관계가 보이는지 확인합니다.
 2. **Smart Analysis: Include**의 **Select folders…** 링크에서 `App/control`처럼 필요한 작은 폴더를 선택하고 저장합니다.
 3. **Smart Analysis: Macro**는 체크된 상태로 둡니다. 매크로 확장과 로컬 함수 포인터·콜백 추론을 함께 켭니다.
-4. 로컬 분석만 필요하면 **Smart Analysis: Copilot**은 끈 상태로 둡니다.
+4. 로컬 분석만 필요하면 **Smart Analysis: AI**는 끈 상태로 둡니다.
 5. 기본 탐색이 준비된 뒤 상세 분석 결과가 추가되는지 확인합니다.
 
 **두 Include의 차이는 꼭 확인하세요.**
@@ -83,7 +83,7 @@
 | 항목 | 무엇을 정하나요? | 빈 목록 `[]`의 뜻 |
 | --- | --- | --- |
 | 일반 **Include** | 기본적으로 읽을 C/H 파일 | Exclude와 파일 수 제한을 적용한 전체 범위 |
-| **Smart Analysis: Include** | 그 안에서 추가 분석할 파일 | 새 프로젝트에서는 매크로·Copilot 추가 분석 안 함 |
+| **Smart Analysis: Include** | 그 안에서 추가 분석할 파일 | 새 프로젝트에서는 매크로·AI 추가 분석 안 함 |
 
 전체 색인 파일에 추가 분석을 하려면 Smart Analysis Include에 `["**"]`를 사용합니다. 큰 프로젝트는 작은 폴더부터 시작하면 분석 부담을 줄일 수 있습니다. **Smart Analysis: Exclude**가 추가 분석 범위에서 우선합니다. 이 항목에 제외해도 일반 색인에 있는 파일의 기본 탐색은 유지됩니다.
 
@@ -117,7 +117,7 @@
   "dynsight.smartAnalysis.include": ["App/control/**"],
   "dynsight.smartAnalysis.exclude": ["App/control/generated/**"],
   "dynsight.smartAnalysis.macro": true,
-  "dynsight.smartAnalysis.copilot": false
+  "dynsight.smartAnalysis.ai": false
 }
 ```
 
@@ -131,11 +131,12 @@
 | **Call Graph Direction** · `dynsight.callGraphDirection` | **`callers-left`** — 양방향 모드의 Callers/Callees 좌우를 정합니다. |
 | **Include** · `dynsight.include` | **`[]`** — 기본적으로 읽을 C/H 범위입니다. 비우면 제외 규칙과 제한 안에서 전체를 읽습니다. |
 | **Exclude** · `dynsight.exclude` | **기본 제외 목록** — 기본 분석에서 빼는 폴더입니다. Include보다 우선합니다. 저장 목록은 기본 목록을 대체합니다. |
-| **Smart Analysis: Include** · `dynsight.smartAnalysis.include` | **`[]`** — 매크로·콜백·Copilot 추가 분석을 할 파일입니다. |
+| **Smart Analysis: Include** · `dynsight.smartAnalysis.include` | **`[]`** — 매크로·콜백·AI 추가 분석을 할 파일입니다. |
 | **Smart Analysis: Exclude** · `dynsight.smartAnalysis.exclude` | **`[]`** — 추가 분석만 건너뛸 경로입니다. 일반 범위에서 제외하지 않으면 기본 탐색은 됩니다. |
 | **Smart Analysis: Macro** · `dynsight.smartAnalysis.macro` | **켜짐** — 지정 범위 안에서 로컬 매크로 확장과 콜백 전파를 수행합니다. |
-| **Smart Analysis: Copilot** · `dynsight.smartAnalysis.copilot` | **꺼짐** — 미해결 콜백의 AI 후보를 요청합니다. Macro와 별도로 켤 수 있습니다. |
-| **Copilot Model** · `dynsight.copilotModel` | **비어 있음** — **Select Copilot Model**로 계정에서 사용할 모델을 고릅니다. |
+| **Smart Analysis: AI** · `dynsight.smartAnalysis.ai` | **꺼짐** — 미해결 콜백의 AI 후보를 요청합니다. Macro와 별도로 켤 수 있습니다. |
+| **Smart Analysis: Provider** · `dynsight.smartAnalysis.provider` | **`auto`** — 설치된 확장 하나를 선택합니다. 여러 개면 한 번 묻고 저장합니다. |
+| **Copilot Model** · `dynsight.copilotModel` | **비어 있음** — **Select AI Model**로 계정에서 사용할 모델을 고릅니다. |
 | **Skip Inactive** · `dynsight.skipInactive` | **켜짐** — 확실히 비활성인 조건부 분기를 숨깁니다. 판단 불가능한 분기는 남깁니다. |
 | **Callee Sort** · `dynsight.calleeSort` | **`name`** — Callees를 이름 또는 첫 호출 소스 위치(`source`)로 정렬합니다. 실행 순서가 아닙니다. |
 | **Include Function Arguments** · `dynsight.includeFunctionArguments` | **꺼짐** — 인자로 전달되는 함수를 표시합니다. 전달이 실행을 뜻하지는 않습니다. |
@@ -204,7 +205,7 @@ Relation에 포커스가 있을 때 **Backspace**를 누르면 최근 가지 확
 
 변수를 선택하면 Read/Write 필터로 사용 위치를 골라 볼 수 있습니다. 함수 모드는 기억했다가 함수로 돌아오면 복원합니다. 구조체·공용체 멤버는 같은 이름이라도 소속 타입과 실제 접근 위치를 확인하세요. 분석이 타입을 확정하지 못하면 후보 선택이 필요할 수 있습니다.
 
-## 7. 콜백과 Copilot
+## 7. 콜백과 AI
 
 ### 먼저 로컬 결과 확인하기
 
@@ -217,16 +218,20 @@ Relation에 포커스가 있을 때 **Backspace**를 누르면 최근 가지 확
 
 **Skip Inactive**는 확실히 비활성인 분기만 건너뜁니다. 불확실한 조건은 남깁니다. 제한·미지원 표현식·메모리 부족으로 결과가 부분적일 수 있으므로 “트리에 없음”을 “실행되지 않음”으로 해석하지 마세요.
 
-### Copilot 후보 켜기
+### AI 후보 켜기
+
+**Settings → Smart Analysis: AI**를 켜면 VS Code에 설치된 **Copilot / Claude Code / Codex** 중 하나를 사용합니다. 하나만 설치돼 있으면 자동 선택하고, 여러 개면 한 번 선택해 저장합니다. **Dynsight: Select AI Extension**에서 바꿀 수 있습니다. **선택한 하나만 요청을 처리하며 다른 제공자로 자동 전환하지 않습니다.** 별도 CLI 설치나 실행 파일 경로 입력은 필요하지 않습니다. 선택한 확장을 열어 로그인하세요. Claude Code·Codex는 모델 ID 입력 없이 기본 모델을 바로 사용합니다. Copilot만 **Select AI Model**의 목록에서 고릅니다.
+
+Copilot은 VS Code 모델 API를 사용하고, Claude Code·Codex는 설치된 확장에 포함된 실행 엔진을 자동으로 찾아 기존 로그인을 사용합니다. 기존 채팅창에 메시지를 입력하는 방식은 아닙니다. 제공자를 바꾸면 이전 요청이 끝난 뒤 새 요청을 시작합니다. WSL·SSH에서는 해당 환경에서 사용할 수 있는 확장이 필요합니다. 실패하면 선택한 확장의 로그인·업데이트 상태를 확인한 뒤 **Analyze Callbacks with AI**로 재개하세요. 기존 Copilot 사용 여부는 새 AI 설정을 명시적으로 저장하기 전까지 적용됩니다.
 
 1. **Smart Analysis: Include**에 분석할 폴더를 저장합니다.
-2. **Smart Analysis: Copilot**을 체크합니다.
-3. **Copilot Model → Select Copilot Model**로 모델을 선택합니다. 필요한 경우 VS Code의 계정·접근 허용 안내를 따릅니다. 모델 선택 자체가 Copilot 체크박스를 켜지는 않습니다.
+2. **Smart Analysis: AI**를 체크합니다. Auto에서 설치된 확장 하나를 고릅니다. 여러 개면 사용할 하나를 선택합니다.
+3. 선택한 확장에서 로그인합니다. Claude Code·Codex는 기본 모델을 바로 사용하며 ID를 묻지 않습니다. Copilot을 선택했다면 표시되는 모델 목록에서 고릅니다.
 4. 색인이 준비되면 미해결 콜백을 하나씩 분석합니다. 유효한 기존 결과는 재사용합니다. 저장·재색인·모델/범위 변경도 필요한 결과의 분석을 시작합니다.
 
-> **전송 범위:** 관련 소스 일부를 선택한 Copilot 모델로 보내며 계정 사용량 한도가 적용됩니다. 호출 위치는 Smart Analysis 범위 안이어야 하지만 근거 코드는 다른 색인 파일에서도 수집할 수 있습니다. 로컬 분석만 쓰려면 Copilot을 끄세요.
+> **전송 범위:** 관련 소스 일부를 선택한 AI 제공자·모델로 보내며 계정 사용량 한도가 적용됩니다. 호출 위치는 Smart Analysis 범위 안이어야 하지만 근거 코드는 다른 색인 파일에서도 수집할 수 있습니다. 로컬 분석만 쓰려면 AI를 끄세요.
 
-**Stop analysis / Dynsight: Stop Copilot Analysis**는 완료 결과를 남기고 이 세션의 자동 요청을 멈춥니다. **Dynsight: Analyze Callbacks with Copilot**, 설정 다시 켜기, 모델/범위 변경으로 재개합니다. 요청 실패도 자동 반복하지 않고 일시 중단합니다.
+**Stop analysis / Dynsight: Stop AI Analysis**는 완료 결과를 남기고 이 세션의 자동 요청을 멈춥니다. **Dynsight: Analyze Callbacks with AI**, 설정 다시 켜기, 모델/범위 변경으로 재개합니다. 요청 실패도 자동 반복하지 않고 일시 중단합니다.
 
 ### 후보를 직접 지정하기
 
@@ -259,7 +264,7 @@ Relation에 포커스가 있을 때 **Backspace**를 누르면 최근 가지 확
 | 편집기에서 다른 함수를 눌러도 트리가 그대로임 | **Pinned · Follow paused**를 눌러 **Following selection**으로 전환 |
 | 함수나 헤더가 빠짐 | 일반 Include/Exclude 확인. 기본 test·`third*` 제외도 확인 |
 | 매크로·콜백이 안 나옴 | Smart Analysis Include가 비어 있지 않은지, Macro가 켜져 있는지 확인 |
-| Copilot이 시작되지 않음 | 체크박스·모델·범위 확인. 중단했다면 **Analyze Callbacks with Copilot** 실행 |
+| AI가 시작되지 않음 | 체크박스·모델·범위 확인. 중단했다면 **Analyze Callbacks with AI** 실행 |
 | 분석이 느림 | Smart Analysis를 작은 폴더로 줄이고 트리 깊이를 낮춤. 필요하면 **Stop local**로 중단 |
 | Local 분석이 중단됨 | 명령 팔레트의 **Dynsight: Resume Local Analysis**로 재개. 제한 이유도 확인 |
 | 업데이트 후 Rebuild 안내 | 메시지의 이유 확인 후 필요하면 **Rebuild index**. 확장 버전 번호만으로 항상 재색인하는 것은 아님 |

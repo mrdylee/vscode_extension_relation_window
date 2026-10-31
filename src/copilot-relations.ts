@@ -39,7 +39,7 @@ export function applyCallbackHints(index: RelationIndex, hints: readonly Callbac
         if (existingTargets.get(`${key}:${target.id}`)) continue;
         added.push({ ...site, id: `${site.id}:ai:${target.id}`, name: target.name, targetId: target.id, indirect: false, member: undefined,
           callKind: 'ai-candidate', inference: { expression: hint.expression, incomplete: true,
-            reasons: ['Copilot candidate; not proof of invocation.',...(candidate.uncertainties??[]),...(candidate.conditions??[]).map(value=>'Condition: '+value), ...(hint.contextLimited ? ['Only bounded source context was examined.'] : [])],
+            reasons: ['AI candidate; not proof of invocation.',...(candidate.uncertainties??[]),...(candidate.conditions??[]).map(value=>'Condition: '+value), ...(hint.contextLimited ? ['Only bounded source context was examined.'] : [])],
             evidence: candidate.evidence.map(location => ({ location, reason: candidate.reason })) } });
       }
     }
