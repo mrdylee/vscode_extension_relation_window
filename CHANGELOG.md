@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.88 — 2026-10-31
+
+- Combine AI enable, provider and raw Copilot model settings into one Smart Analysis: AI control. Checking it immediately guides extension selection followed by model selection; changing the choice uses the same setting link.
+- Discover model display names through the selected extension's catalog, with an explicit Default model choice for Claude Code/Codex. Save the completed pair together; cancelling a fresh enable turns AI off without saving a partial choice.
+- Show the selected model in analysis status, preserve exclusive provider handoff and model-specific caches, and keep old commands/settings readable for compatibility without exposing string fields.
+
 ## 0.1.87 — 2026-10-31
 
 - Use one installed Copilot, Claude Code or Codex extension for Smart Analysis, selecting and remembering one provider when several are installed.

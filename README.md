@@ -17,12 +17,12 @@ VS Code 데스크톱 1.95 이상이 필요합니다. 기본 분석은 로컬 WAS
 
 ## 상세 분석과 AI 콜백 후보
 
-**Settings → Smart Analysis: AI**를 켜면 VS Code에 설치된 **Copilot / Claude Code / Codex** 중 하나를 사용합니다. 하나만 설치돼 있으면 자동 선택하고, 여러 개면 한 번 선택해 저장합니다. **Dynsight: Select AI Extension**에서 바꿀 수 있습니다. **선택한 하나만 요청을 처리하며 다른 제공자로 자동 전환하지 않습니다.** 별도 CLI 설치나 실행 파일 경로 입력은 필요하지 않습니다. 선택한 확장을 열어 로그인하세요. Claude Code·Codex는 모델 ID 입력 없이 기본 모델을 바로 사용합니다. Copilot만 **Select AI Model**의 목록에서 고릅니다.
+**Settings → Smart Analysis: AI** 하나에서 설정합니다. 체크하면 **1/2: 설치된 Copilot / Claude Code / Codex 선택 → 2/2: 해당 모델 선택**이 이어집니다. 모델은 이름을 보고 목록에서 고르며, Claude Code·Codex에는 **Default model**도 있습니다. 두 단계를 마친 선택만 함께 저장합니다. 중간에 취소하면 새로 켠 체크가 꺼집니다. 같은 항목의 **Choose or change AI extension and model…** 링크나 **Dynsight: Configure Smart Analysis AI**로 다시 선택할 수 있습니다. **선택한 하나만 요청을 처리하며 다른 제공자로 자동 전환하지 않습니다.** 별도 CLI·경로·모델 ID 입력은 필요하지 않습니다. 선택한 확장에 로그인해 두세요.
 
 Copilot은 VS Code 모델 API를 사용하고, Claude Code·Codex는 설치된 확장에 포함된 실행 엔진을 자동으로 찾아 기존 로그인을 사용합니다. 기존 채팅창에 메시지를 입력하는 방식은 아닙니다. 제공자를 바꾸면 이전 요청이 끝난 뒤 새 요청을 시작합니다. WSL·SSH에서는 해당 환경에서 사용할 수 있는 확장이 필요합니다. 실패하면 선택한 확장의 로그인·업데이트 상태를 확인한 뒤 **Analyze Callbacks with AI**로 재개하세요. 기존 Copilot 사용 여부는 새 AI 설정을 명시적으로 저장하기 전까지 적용됩니다.
 
 설정은 **보기 → Include → Exclude → Smart Analysis Include / Exclude →
-Smart Analysis Macro / AI / Provider → 기타 옵션** 순서입니다. UI 문구는 영어로 제공합니다.
+Smart Analysis Macro / AI → 기타 옵션** 순서입니다. UI 문구는 영어로 제공합니다.
 
 경로는 일반 **Include / Exclude**와 **Smart Analysis Include / Exclude** 네 개만
 사용합니다. 일반 범위는 기본 색인을 정하며, Smart Analysis 범위는 그 안에서 추가

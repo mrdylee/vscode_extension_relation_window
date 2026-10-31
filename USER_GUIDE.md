@@ -77,8 +77,8 @@ Explicit Combined alignment also moves Terminal and other bottom-panel views bec
 ### Recipe D — Enable optional AI suggestions
 
 1. Choose **Smart Analysis: Include** folders first.
-2. Check **Smart Analysis: AI**. Auto selects one installed AI extension or asks you to choose one if several are installed.
-3. Open the selected extension and sign in. Claude Code/Codex automatically use their default model without asking for an ID. Copilot offers its available model list.
+2. Check **Smart Analysis: AI**, then choose an extension in the first list.
+3. Choose a model by name, or **Default model**, in the next list. Both choices are saved together. Cancel leaves the newly enabled checkbox off.
 4. Eligible unresolved callbacks are analyzed one at a time. **Stop AI Analysis** pauses requests for this session; **Analyze Callbacks with AI** resumes them.
 
 **Source snippets are sent to the selected AI provider/model and account limits apply.** Supporting snippets can come from other indexed files. **AI candidate** is a suggestion. Use **Set manually → choose a function → Apply** to record your choice as **User confirmed**. Neither label proves runtime execution.
@@ -97,8 +97,6 @@ Names below match the English Settings screen; exact keys work in any VS Code la
 | Smart Analysis: Exclude · `dynsight.smartAnalysis.exclude` | **`[]`** — Skips extra analysis in these paths while retaining basic navigation. |
 | Smart Analysis: Macro · `dynsight.smartAnalysis.macro` | **On** — Expands macros and propagates local callback targets within Smart Analysis scope. |
 | Smart Analysis: AI · `dynsight.smartAnalysis.ai` | **Off** — Requests AI candidates for eligible unresolved callbacks. |
-| Smart Analysis: Provider · `dynsight.smartAnalysis.provider` | **`auto`** — Uses one installed extension; asks once and saves the choice when several are installed. |
-| Copilot Model · `dynsight.copilotModel` | **Empty** — Choose from your account's available models using **Select AI Model**. |
 | Skip Inactive · `dynsight.skipInactive` | **On** — Hides provably inactive branches; unknown conditions remain visible. |
 | Callee Sort · `dynsight.calleeSort` | **`name`** — Sorts Callees by name or first source location. |
 | Include Function Arguments · `dynsight.includeFunctionArguments` | **Off** — Shows functions passed as arguments, with a distinct dotted connector. |
@@ -195,11 +193,11 @@ all local analysis. Diagnostics shows cache state and parse/relation counters.
 
 ## Optional AI callback candidates
 
-Enable **Smart Analysis: AI** to use one installed **Copilot / Claude Code / Codex** extension. Auto selects the only installed extension; if several are installed, choose one once and Dynsight saves it. **Only the selected provider receives Smart Analysis requests. Failures never trigger another provider.** Change the choice with **Dynsight: Select AI Extension**. Open that extension and sign in. No separate CLI installation or executable path is needed. Claude Code/Codex automatically use their default model with no model ID input or setting. Copilot offers its available model list through **Select AI Model**.
+Use the single **Smart Analysis: AI** setting. Checking it opens **1/2: choose an installed Copilot / Claude Code / Codex extension**, followed immediately by **2/2: choose its model**. Choose display names from a list; Claude Code/Codex also offer **Default model**. Only the completed pair is saved. Cancelling setup leaves a newly enabled checkbox off. Use **Choose or change AI extension and model…** in the same setting, or **Dynsight: Configure Smart Analysis AI**, to change the pair. **Only the selected provider receives requests; failures never trigger another provider.** Sign in to that extension first. No separate CLI, executable path or typed model ID is needed.
 
 Copilot uses VS Code's Language Model API. Claude Code and Codex use the installed extension's bundled engine and existing login, rather than typing into an existing chat panel. Requests still receive bounded snippets in a temporary folder with the existing validation and cancellation limits. Changing providers cancels the old request and waits for it to end before starting the new one. WSL/SSH requires a compatible extension in that environment. Fix login/update errors in the selected extension and run **Analyze Callbacks with AI** to resume. Existing Copilot settings and command IDs remain compatible.
 
-Enable **Smart Analysis: AI**, choose a **Smart Analysis: Provider** and model, and explicitly
+Enable **Smart Analysis: AI**, choose an extension and model in its guided picker, and explicitly
 choose **Smart Analysis: Include** paths. Invocation files must be indexed,
 included in the shared Smart Analysis scope and outside its exclusions. Empty
 Smart Analysis Include permits no requests. Paths are not copied from general

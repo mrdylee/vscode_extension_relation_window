@@ -46,6 +46,7 @@ function renderCopilot(ai: Diagnostics['copilot']) {
   copilotProgress.replaceChildren();
   if (!ai) return;
   const provider=ai.provider ?? 'Copilot';
+  if(ai.model)copilotProgress.append(el('span','muted',`Model: ${ai.model}`));
   if(ai.manualReview)copilotProgress.append(el('span','warning',`User confirmations: ${ai.manualReview} need review`));
   if(ai.manualInactive)copilotProgress.append(el('span','muted',`User confirmations: ${ai.manualInactive} inactive`));
   const stop = () => copilotProgress.append(button('Stop analysis', () => send('copilotStop'), `Stop ${provider} analysis and keep completed results`));

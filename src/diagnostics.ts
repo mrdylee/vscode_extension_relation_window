@@ -54,5 +54,5 @@ export interface Diagnostics {
   worker?: WorkerDiagnostics;
   workerError?: string;
   index?: IndexDiagnostics;
-  copilot?: { state: string; provider?: string; error?: string; manualReview?: number; manualInactive?: number; automatic?: boolean; waitReason?: CopilotWaitReason; total?: number; completed?: number; requests: number; cacheHits: number; remaining: number; failures: number; candidates: number; notFound: number; contextLimited: number; excluded?: number };
+  copilot?: { state: string; provider?: string; model?: string; error?: string; manualReview?: number; manualInactive?: number; automatic?: boolean; waitReason?: CopilotWaitReason; total?: number; completed?: number; requests: number; cacheHits: number; remaining: number; failures: number; candidates: number; notFound: number; contextLimited: number; excluded?: number };
 }

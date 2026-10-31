@@ -1,0 +1,6 @@
+# Single-setting AI picker plan
+
+1. Add failing catalog protocol tests using real child-process fixtures, then add bounded, cancellable model discovery to the existing transport. Codex sends initialize/initialized/model-list only; Claude sends an initialize control request only. Normalize display labels and model IDs without exposing other response fields.
+2. Add failing service regressions for checkbox -> provider -> model, empty scope/unready index, cancellation/disable, atomic persistence, restart, model handoff/cache and legacy compatibility. Store the completed selection in workspace state and route all configure aliases through one two-step flow.
+3. Hide Provider and Copilot Model while preserving legacy reads. Keep AI as the sole visible AI control and link its configure flow. Update status, commands and both guides. Verify manifest/native settings and browser display.
+4. Run focused/full/typecheck/browser/native checks, inspect real installed Codex model metadata, and package 0.1.88. Under the user's existing deployment request for this Smart Analysis correction, publish the validated tag through the repository release workflow and independently verify the public assets and updater. Record what was exercised and provider/remote limitations.

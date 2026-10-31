@@ -81,6 +81,7 @@ export function createDiagnostics(version: string, refresh: () => void, reportIs
     if (data.copilot) {
       const ai = data.copilot;
       const provider=ai.provider ?? 'Copilot';
+      if(ai.model)body.append(el('div',`AI model: ${ai.model}`));
       if(ai.error)body.append(el('div',ai.error,'warning'));
       if (ai.state === 'waiting-for-saved-index') {
         body.append(el('div', `${provider} paused: ${copilotWaitMessage(ai.waitReason)} · Requests this session: ${ai.requests}. Current callback counts are unavailable while waiting.`));

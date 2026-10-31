@@ -62,12 +62,13 @@ export async function run() {
   for (const command of ['dynsight.helpKorean', 'dynsight.helpEnglish'])
     assert.ok((await vscode.commands.getCommands()).includes(command), `${command} opens a specific guide language`);
   assert.ok((await vscode.commands.getCommands()).includes('dynsight.selectCopilotModel'), 'Copilot model picker command registered');
-  assert.equal(vscode.workspace.getConfiguration('dynsight').get('copilotModel'), '', 'model choice is visible in Settings');
+  assert.equal(ext.packageJSON.contributes.configuration.properties['dynsight.copilotModel'].included,false,'raw model setting is hidden');
   assert.equal(vscode.workspace.getConfiguration('dynsight').get('smartAnalysis.ai'), false, 'AI requests are opt-in');
-  assert.equal(vscode.workspace.getConfiguration('dynsight').get('smartAnalysis.provider'), 'auto', 'new workspaces choose one installed AI extension');
+  assert.equal(ext.packageJSON.contributes.configuration.properties['dynsight.smartAnalysis.provider'].included,false,'separate provider setting is hidden');
+  assert.match(ext.packageJSON.contributes.configuration.properties['dynsight.smartAnalysis.ai'].markdownDescription,/command:dynsight.configureAi/,'the single AI row opens the whole picker flow');
   for(const key of ['dynsight.smartAnalysis.claudePath','dynsight.smartAnalysis.codexPath','dynsight.smartAnalysis.claudeModel','dynsight.smartAnalysis.codexModel'])
     assert.equal(ext.packageJSON.contributes.configuration.properties[key],undefined,'installed-extension integration needs no path or model ID settings');
-  for (const command of ['selectAiProvider','selectAiModel','analyzeCallbacksWithAI','reanalyzeCallbacksWithAI','stopAiAnalysis'])
+  for (const command of ['configureAi','selectAiProvider','selectAiModel','analyzeCallbacksWithAI','reanalyzeCallbacksWithAI','stopAiAnalysis'])
     assert.ok((await vscode.commands.getCommands()).includes(`dynsight.${command}`), `AI command registered: ${command}`);
   const cliFixture=await mkdtemp(path.join(tmpdir(),'dynsight-native-cli-'));
   try {
@@ -1011,6 +1012,42 @@ export async function run() {
     assert.equal(JSON.stringify(reloadedSlots.state.graph), slotExpanded, 'reloaded view restores persisted branches');
     assert.equal(reloadedSlots.state.context!.label, 'slot_B');
   } finally { reloadedSlots.dispose(); }
+  if(process.env.DYNSIGHT_AI_SETUP_TEST==='1') {
+    const config=vscode.workspace.getConfiguration('dynsight');
+    const currentConfig=()=>vscode.workspace.getConfiguration('dynsight');
+    await config.update('smartAnalysis.include',[],vscode.ConfigurationTarget.Workspace);
+    await config.update('smartAnalysis.ai',false,vscode.ConfigurationTarget.Workspace);
+    async function drivePicker(done:()=>boolean,next=false,cancel=false) {
+      const deadline=Date.now()+30_000;
+      while(!done()&&Date.now()<deadline) {
+        await new Promise(resolve=>setTimeout(resolve,150));
+        if(cancel)await vscode.commands.executeCommand('workbench.action.closeQuickOpen');
+        else {
+          if(next)await vscode.commands.executeCommand('workbench.action.quickOpenSelectNext');
+          await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
+        }
+      }
+      assert.ok(done(),'native AI picker did not finish');
+    }
+    let chosen:any;
+    const configured=vscode.commands.executeCommand('dynsight.configureAi').then(value=>{chosen=value;});
+    await drivePicker(()=>!!chosen);await configured;
+    assert.equal(chosen.provider,'codex');assert.equal(chosen.modelId,'');assert.equal(chosen.modelLabel,'Default model');
+    assert.equal(currentConfig().get('smartAnalysis.ai'),false,'choosing via the link does not enable source transmission');
+    await config.update('smartAnalysis.ai',true,vscode.ConfigurationTarget.Workspace);
+    await drivePicker(()=>!!api.workspace.copilotDiagnostics?.model&&api.workspace.copilotDiagnostics.model!=='Default model',true);
+    const model=api.workspace.copilotDiagnostics.model;
+    assert.equal(api.workspace.copilotDiagnostics.provider,'Codex');assert.equal(api.workspace.copilotDiagnostics.requests,0,'catalog lookup and empty scope send no inference prompts');
+    await config.update('smartAnalysis.ai',false,vscode.ConfigurationTarget.Workspace);
+    await config.update('smartAnalysis.ai',true,vscode.ConfigurationTarget.Workspace);
+    await drivePicker(()=>currentConfig().get('smartAnalysis.ai')===false,false,true);
+    assert.equal(api.workspace.copilotDiagnostics.model,model,'cancelled setup keeps the completed selection');
+    await config.update('smartAnalysis.ai',undefined,vscode.ConfigurationTarget.Workspace);
+    await config.update('smartAnalysis.ai',true,vscode.ConfigurationTarget.Global);
+    await drivePicker(()=>currentConfig().inspect<boolean>('smartAnalysis.ai')?.globalValue===false,false,true);
+    assert.equal(currentConfig().inspect('smartAnalysis.ai')?.workspaceValue,undefined,'cancelling a User checkbox does not leave a hidden workspace override');
+    console.log('Native AI setup passed: two real pickers, default/live-catalog model choice, checkbox enable/cancel, zero inference requests');
+  }
   const output = process.env.C_RELATION_TEST_OUTPUT!;
   await mkdir(path.dirname(output), { recursive: true });
   await writeFile(path.join(path.dirname(output), 'diagnostic-report.md'), report);

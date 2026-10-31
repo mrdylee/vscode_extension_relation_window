@@ -1,0 +1,9 @@
+# One Smart AI setting with a guided picker
+
+The user's latest correction supersedes the three separate AI/Provider/Copilot Model settings. Keep only Smart Analysis: AI visible. Its checkbox starts provider selection followed immediately by model selection, using display names rather than typed IDs. Its description links to the same flow for changing the choice.
+
+Always show the provider step, even with one installed extension. Query models only for the selected provider: Copilot via VS Code LM, Codex via app-server model/list, Claude via its initialize control response. Offer the installed engine default for Claude/Codex as a real selectable item. A catalog error may leave only that explicitly labelled default choice; never ask for IDs or silently switch providers. Model discovery sends no source or inference prompt.
+
+Save provider and model as one workspace-state selection only after both steps succeed. Cancellation preserves the prior selection and leaves a newly enabled checkbox off. Existing hidden provider/model values remain readable for older workspaces, but new choices never write hidden settings. Turning AI off cancels selection and analysis. Configure commands share one flow, serialize against running analysis, and invalidate old hints/cache controllers only after a successful choice. Show the chosen model in analysis status.
+
+Retain legacy aliases and existing source scopes, manual confirmations, evidence validation and sequential request limits. The user's existing deployment request applies to this correction; deliver a validated 0.1.88 release. Verify provider/model order, immediate setup with empty scope or unready index, cancellation at either step, one atomic saved selection, restart, model propagation into requests/cache, no free-form input, exclusive handoff and exactly one visible AI control. Exercise the real installed Codex catalog and native VS Code picker flow where available.

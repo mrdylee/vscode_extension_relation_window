@@ -2,7 +2,7 @@
   "name": "dynsight",
   "displayName": "Dynsight — C Code Explorer",
   "description": "Build-free C references, caller/callee graphs and a linked Context preview.",
-  "version": "0.1.87",
+  "version": "0.1.88",
   "publisher": "dylee",
   "author": "dylee",
   "license": "MIT",
@@ -23,12 +23,8 @@
   "contributes": {
     "commands": [
       {
-        "command": "dynsight.selectAiProvider",
-        "title": "Dynsight: Select AI Extension"
-      },
-      {
-        "command": "dynsight.selectAiModel",
-        "title": "Dynsight: Select AI Model"
+        "command": "dynsight.configureAi",
+        "title": "Dynsight: Configure Smart Analysis AI"
       },
       {
         "command": "dynsight.analyzeCallbacksWithAI",
@@ -49,10 +45,6 @@
       {
         "command": "dynsight.resumeLocalAnalysis",
         "title": "Dynsight: Resume Local Analysis"
-      },
-      {
-        "command": "dynsight.selectCopilotModel",
-        "title": "Dynsight: Select Copilot Model"
       },
       {
         "command": "dynsight.analyzeCallbacksWithCopilot",
@@ -345,6 +337,8 @@
           "type": "string",
           "default": "",
           "scope": "window",
+          "included": false,
+          "deprecationMessage": "Choose the extension and model together from Smart Analysis: AI. Existing saved values remain readable for compatibility.",
           "markdownDescription": "[Choose from available Copilot models](command:dynsight.selectAiModel) when Provider is Copilot. Choose from the account's model list instead of typing a value. Empty asks you to choose at startup. Claude Code and Codex use their default model automatically. Model selection does not enable AI; unavailable Copilot models are not replaced automatically."
         },
         "dynsight.smartAnalysis.ai": {
@@ -352,7 +346,7 @@
           "type": "boolean",
           "default": false,
           "scope": "window",
-          "markdownDescription": "Automatically request unresolved callback candidates using Smart Analysis: Provider, independently of Macro. Relevant indexed source snippets are sent through your selected account and account limits apply. Include must be nonempty. Requests run one at a time, reuse provider/model-specific cache and pause after failure. [Analyze Callbacks with AI](command:dynsight.analyzeCallbacksWithAI) resumes; Stop AI Analysis pauses. AI candidates are suggestions, not proven calls. Existing Copilot enable settings remain effective until this setting is explicitly saved."
+          "markdownDescription": "Check AI to choose an installed extension, then choose its model from a list. [Choose or change AI extension and model…](command:dynsight.configureAi). The complete choice is saved together; cancelling setup leaves a newly enabled checkbox off. Only the selected provider receives requests. Relevant source snippets are sent after setup when Smart Analysis Include is nonempty; account limits apply. Requests reuse provider/model-specific cache and pause after failure. [Analyze Callbacks with AI](command:dynsight.analyzeCallbacksWithAI) resumes; Stop AI Analysis pauses. AI candidates are suggestions, not proven calls."
         },
         "dynsight.smartAnalysis.provider": {
           "order": 34,
@@ -361,6 +355,8 @@
           "enumItemLabels": ["Auto (choose one installed extension)", "GitHub Copilot", "Claude Code", "Codex"],
           "default": "auto",
           "scope": "window",
+          "included": false,
+          "deprecationMessage": "Choose the extension and model together from Smart Analysis: AI. Existing saved values remain readable for compatibility.",
           "markdownDescription": "[Select AI Extension](command:dynsight.selectAiProvider). Uses one installed VS Code extension and its existing login. Auto selects the only installed extension; if several are installed, asks once and saves your choice. Only the selected extension receives Smart Analysis requests; failures never switch to another provider. Claude Code and Codex automatically use their bundled engine's default model, with no model ID, separate CLI or executable path to enter. Provider changes cancel the old request before starting the new one. Copilot offers its account's model list when a model choice is needed."
         },
         "dynsight.skipInactive": {
@@ -464,7 +460,7 @@
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
     "test:analysis-performance": "tsx test/analysis-performance.ts",
-    "test": "tsx --test test/relation-navigation.test.ts test/relation-slots.test.ts test/analysis-policy.test.ts test/analysis-budget.test.ts test/scoped-analysis.test.ts test/callback-overrides.test.ts test/copilot-single-site.test.ts test/core.test.ts test/analysis-notices.test.ts test/macros.test.ts test/pointer-calls.test.ts test/callback-effects.test.ts test/callback-uncertainty.test.ts test/callback-safety.test.ts test/callback-index-regressions.test.ts test/analysis-cache.test.ts test/incremental-analysis.test.ts test/copilot-callbacks.test.ts test/copilot-progress.test.ts test/explicit-callbacks.test.ts test/copilot-relations.test.ts test/copilot-service.test.ts test/cli-callback-provider.test.ts test/ai-extensions.test.ts test/panel-layout.test.ts test/function-arguments.test.ts test/members.test.ts test/syntax.test.ts test/updates.test.ts test/issue-report.test.ts test/issue-report-service.test.ts test/diagnostic-history.test.ts test/branding-migration.test.ts test/build-context.test.ts test/build-discovery.test.ts test/build-options.test.ts test/build-make-parser.test.ts test/build-context-cache.test.ts test/preprocessor-context.test.ts test/build-context-analysis.test.ts test/build-service.test.ts test/build-context-copilot.test.ts",
+    "test": "tsx --test test/relation-navigation.test.ts test/relation-slots.test.ts test/analysis-policy.test.ts test/analysis-budget.test.ts test/scoped-analysis.test.ts test/callback-overrides.test.ts test/copilot-single-site.test.ts test/core.test.ts test/analysis-notices.test.ts test/macros.test.ts test/pointer-calls.test.ts test/callback-effects.test.ts test/callback-uncertainty.test.ts test/callback-safety.test.ts test/callback-index-regressions.test.ts test/analysis-cache.test.ts test/incremental-analysis.test.ts test/copilot-callbacks.test.ts test/copilot-progress.test.ts test/explicit-callbacks.test.ts test/copilot-relations.test.ts test/copilot-service.test.ts test/cli-callback-provider.test.ts test/ai-extensions.test.ts test/ai-models.test.ts test/panel-layout.test.ts test/function-arguments.test.ts test/members.test.ts test/syntax.test.ts test/updates.test.ts test/issue-report.test.ts test/issue-report-service.test.ts test/diagnostic-history.test.ts test/branding-migration.test.ts test/build-context.test.ts test/build-discovery.test.ts test/build-options.test.ts test/build-make-parser.test.ts test/build-context-cache.test.ts test/preprocessor-context.test.ts test/build-context-analysis.test.ts test/build-service.test.ts test/build-context-copilot.test.ts",
     "test:extension": "npm run build && node scripts/test-extension.mjs",
     "test:scope-folders:host": "npm run build && node scripts/test-scope-folders.mjs",
     "test:worker": "npm run build && node --test test/analysis-worker.test.mjs test/analysis-cache-worker.test.mjs test/workspace.test.mjs test/scope-folders.test.mjs test/build-context-workspace.test.mjs",
@@ -474,7 +470,7 @@
     "test:freertos": "npm run build && node scripts/test-freertos.mjs",
     "test:ui": "npm run build && tsx test/create-ui-fixture.ts && node test/ui.mjs && node test/scoped-ui.mjs",
     "vscode:prepublish": "npm run build",
-    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license --out artifacts/dynsight-0.1.87.vsix",
+    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license --out artifacts/dynsight-0.1.88.vsix",
     "test:build-context-performance": "tsx test/build-context-performance.ts"
   },
   "dependencies": {

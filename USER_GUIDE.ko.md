@@ -135,8 +135,6 @@
 | **Smart Analysis: Exclude** · `dynsight.smartAnalysis.exclude` | **`[]`** — 추가 분석만 건너뛸 경로입니다. 일반 범위에서 제외하지 않으면 기본 탐색은 됩니다. |
 | **Smart Analysis: Macro** · `dynsight.smartAnalysis.macro` | **켜짐** — 지정 범위 안에서 로컬 매크로 확장과 콜백 전파를 수행합니다. |
 | **Smart Analysis: AI** · `dynsight.smartAnalysis.ai` | **꺼짐** — 미해결 콜백의 AI 후보를 요청합니다. Macro와 별도로 켤 수 있습니다. |
-| **Smart Analysis: Provider** · `dynsight.smartAnalysis.provider` | **`auto`** — 설치된 확장 하나를 선택합니다. 여러 개면 한 번 묻고 저장합니다. |
-| **Copilot Model** · `dynsight.copilotModel` | **비어 있음** — **Select AI Model**로 계정에서 사용할 모델을 고릅니다. |
 | **Skip Inactive** · `dynsight.skipInactive` | **켜짐** — 확실히 비활성인 조건부 분기를 숨깁니다. 판단 불가능한 분기는 남깁니다. |
 | **Callee Sort** · `dynsight.calleeSort` | **`name`** — Callees를 이름 또는 첫 호출 소스 위치(`source`)로 정렬합니다. 실행 순서가 아닙니다. |
 | **Include Function Arguments** · `dynsight.includeFunctionArguments` | **꺼짐** — 인자로 전달되는 함수를 표시합니다. 전달이 실행을 뜻하지는 않습니다. |
@@ -220,13 +218,13 @@ Relation에 포커스가 있을 때 **Backspace**를 누르면 최근 가지 확
 
 ### AI 후보 켜기
 
-**Settings → Smart Analysis: AI**를 켜면 VS Code에 설치된 **Copilot / Claude Code / Codex** 중 하나를 사용합니다. 하나만 설치돼 있으면 자동 선택하고, 여러 개면 한 번 선택해 저장합니다. **Dynsight: Select AI Extension**에서 바꿀 수 있습니다. **선택한 하나만 요청을 처리하며 다른 제공자로 자동 전환하지 않습니다.** 별도 CLI 설치나 실행 파일 경로 입력은 필요하지 않습니다. 선택한 확장을 열어 로그인하세요. Claude Code·Codex는 모델 ID 입력 없이 기본 모델을 바로 사용합니다. Copilot만 **Select AI Model**의 목록에서 고릅니다.
+**Settings → Smart Analysis: AI** 하나에서 설정합니다. 체크하면 **1/2: 설치된 Copilot / Claude Code / Codex 선택 → 2/2: 해당 모델 선택**이 이어집니다. 모델은 이름을 보고 목록에서 고르며, Claude Code·Codex에는 **Default model**도 있습니다. 두 단계를 마친 선택만 함께 저장합니다. 중간에 취소하면 새로 켠 체크가 꺼집니다. 같은 항목의 **Choose or change AI extension and model…** 링크나 **Dynsight: Configure Smart Analysis AI**로 다시 선택할 수 있습니다. **선택한 하나만 요청을 처리하며 다른 제공자로 자동 전환하지 않습니다.** 별도 CLI·경로·모델 ID 입력은 필요하지 않습니다. 선택한 확장에 로그인해 두세요.
 
 Copilot은 VS Code 모델 API를 사용하고, Claude Code·Codex는 설치된 확장에 포함된 실행 엔진을 자동으로 찾아 기존 로그인을 사용합니다. 기존 채팅창에 메시지를 입력하는 방식은 아닙니다. 제공자를 바꾸면 이전 요청이 끝난 뒤 새 요청을 시작합니다. WSL·SSH에서는 해당 환경에서 사용할 수 있는 확장이 필요합니다. 실패하면 선택한 확장의 로그인·업데이트 상태를 확인한 뒤 **Analyze Callbacks with AI**로 재개하세요. 기존 Copilot 사용 여부는 새 AI 설정을 명시적으로 저장하기 전까지 적용됩니다.
 
 1. **Smart Analysis: Include**에 분석할 폴더를 저장합니다.
-2. **Smart Analysis: AI**를 체크합니다. Auto에서 설치된 확장 하나를 고릅니다. 여러 개면 사용할 하나를 선택합니다.
-3. 선택한 확장에서 로그인합니다. Claude Code·Codex는 기본 모델을 바로 사용하며 ID를 묻지 않습니다. Copilot을 선택했다면 표시되는 모델 목록에서 고릅니다.
+2. **Smart Analysis: AI**를 체크한 뒤 첫 번째 목록에서 사용할 확장을 고릅니다.
+3. 바로 이어지는 두 번째 목록에서 모델 이름 또는 **Default model**을 고릅니다. ID를 입력하지 않습니다. 선택은 두 단계를 마친 뒤 저장합니다.
 4. 색인이 준비되면 미해결 콜백을 하나씩 분석합니다. 유효한 기존 결과는 재사용합니다. 저장·재색인·모델/범위 변경도 필요한 결과의 분석을 시작합니다.
 
 > **전송 범위:** 관련 소스 일부를 선택한 AI 제공자·모델로 보내며 계정 사용량 한도가 적용됩니다. 호출 위치는 Smart Analysis 범위 안이어야 하지만 근거 코드는 다른 색인 파일에서도 수집할 수 있습니다. 로컬 분석만 쓰려면 AI를 끄세요.

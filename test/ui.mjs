@@ -152,13 +152,14 @@ try {
   assert.match(await page.locator('.copilot-progress').textContent(),/5\/7 processed.*Remaining: 2/);
   assert.equal(await page.locator('.graph > .branch').getAttribute('data-ai-progress'),'retained','progress does not rerender the graph');
   for (const provider of ['Claude Code','Codex']) {
-    Object.assign(aiDiagnostics.copilot,{provider,state:'request-failed',error:'Sign in with the selected CLI'});
+    Object.assign(aiDiagnostics.copilot,{provider,model:'Balanced model',state:'request-failed',error:'Sign in with the selected CLI'});
     await page.evaluate(diagnostics=>window.dispatchEvent(new MessageEvent('message',{data:{type:'diagnostics',diagnostics}})),aiDiagnostics);
     assert.match(await page.locator('.copilot-progress').textContent(),new RegExp(`${provider}: request failed`));
     assert.match(await page.locator('.copilot-progress').textContent(),/Sign in with the selected CLI/);
+    assert.match(await page.locator('.copilot-progress').textContent(),/Model: Balanced model/);
     assert.doesNotMatch(await page.locator('.copilot-progress').textContent(),/Copilot/);
   }
-  delete aiDiagnostics.copilot.provider;delete aiDiagnostics.copilot.error;
+  delete aiDiagnostics.copilot.provider;delete aiDiagnostics.copilot.model;delete aiDiagnostics.copilot.error;
   assert.equal(await page.getByRole('button',{name:'Choose callback…',exact:true}).count(),0,'enabled analysis must not require choosing a callback');
   Object.assign(aiDiagnostics.copilot,{state:'analyzing',automatic:true});
   await page.evaluate(diagnostics=>window.dispatchEvent(new MessageEvent('message',{data:{type:'diagnostics',diagnostics}})),aiDiagnostics);

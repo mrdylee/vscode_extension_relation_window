@@ -28,6 +28,8 @@ async function harness(denied=false, timeoutMs?:number, siteCount=denied?2:1, re
   }};
   const calls:string[]=[],queries:unknown[]=[],messages:string[]=[],prompts:string[]=[];
   const cliSelections:{provider:string;model:string;executable:string}[]=[],cliSignals:AbortSignal[]=[];
+  const pickerCalls:{title:string;labels:string[]}[]=[],catalogCalls:string[]=[],stateWrites:{key:string;value:unknown}[]=[];
+  let picks:(string|undefined)[]|undefined;
   const uri = (value: string) => ({ path: new URL(value).pathname, toString: () => value });
   const folders = [{ uri: uri('file:///') }];
   const folderConfigs = new Map<string, Map<string, unknown>>();
@@ -57,16 +59,16 @@ async function harness(denied=false, timeoutMs?:number, siteCount=denied?2:1, re
       update:async(key:string,value:unknown,target?:number)=>{if(heldSetting?.key===key){const waiting=heldSetting;heldSetting=undefined;waiting.started();await waiting.promise;}if(target===3&&resource){const values=folderConfigs.get(resource.toString())??new Map();values.set(key,value);folderConfigs.set(resource.toString(),values);settings.fire({affectsConfiguration:(name:string,scope?:ReturnType<typeof uri>)=>name===`dynsight.${key}`&&(!scope||scope.toString()===resource.toString())});}else await update(key,value);}}),onDidChangeConfiguration:settings.event,
       getWorkspaceFolder:(value:ReturnType<typeof uri>)=>[...folders].reverse().find(folder=>value.toString().startsWith(folder.uri.toString())),
       asRelativePath:(value:ReturnType<typeof uri>)=>{const folder=[...folders].reverse().find(folder=>value.toString().startsWith(folder.uri.toString()));return decodeURIComponent(value.toString().slice(folder?.uri.toString().length ?? 0));}},
-    ConfigurationTarget:{Workspace:2,WorkspaceFolder:3},window:{showQuickPick:async(items:any[])=>{pickCount++;await waitHeld(pick,'picker');return items.find(item=>(item.value.id??item.value)===pick) ?? items[0];},showErrorMessage:async(value:string)=>{messages.push(value);},showInformationMessage:async(value:string)=>{messages.push(value);}},
+    ConfigurationTarget:{Workspace:2,WorkspaceFolder:3},window:{showQuickPick:async(items:any[],options:any)=>{pickCount++;pickerCalls.push({title:options.title,labels:items.map(item=>item.label)});const target=picks?.length?picks.shift():pick;if(target===undefined)return undefined;await waitHeld(target,'picker');return items.find(item=>(item.value.id??item.value)===target) ?? items[0];},showErrorMessage:async(value:string)=>{messages.push(value);},showInformationMessage:async(value:string)=>{messages.push(value);}},
     LanguageModelChatMessage:{User:(value:string)=>value},CancellationTokenSource:class{token={cancelled:false};cancel(){this.token.cancelled=true;}dispose(){}}
   };
-  const context={storageUri:{fsPath:storage},subscriptions:[]as{dispose():void}[],workspaceState:{get:(key:string)=>state.get(key),update:async(key:string,value:unknown)=>{state.set(key,value);}},languageModelAccessInformation:{canSendRequest:(model:{id:string})=>permissions.get(model.id)}};
+  const context={storageUri:{fsPath:storage},subscriptions:[]as{dispose():void}[],workspaceState:{get:(key:string)=>state.get(key),update:async(key:string,value:unknown)=>{stateWrites.push({key,value});state.set(key,value);}},languageModelAccessInformation:{canSendRequest:(model:{id:string})=>permissions.get(model.id)}};
   const workspace={index:new RelationIndex(),ready:Promise.resolve(),stable:true,generation:1,analysisKey:'key',hasDirtySources:false,
     copilotWaitReason:undefined as string|undefined,
     sourceChanged:new Emitter(),settled:new Emitter(),changed:new Emitter(),diagnosticsChanged:new Emitter(),whenIdle:async()=>{},copilotDiagnostics:undefined as any};
   workspace.index.update(file);
   function stop(){for(const item of context.subscriptions.splice(0))item.dispose();}
-  const cli={createCliCallbackProvider:async(options:{provider:string;model:string;executable:string})=>{cliSelections.push(options);return{modelKey:JSON.stringify(options),complete:async(prompt:string,signal:AbortSignal)=>{
+  const cli={listCliModels:async(options:{provider:string},signal:AbortSignal)=>{catalogCalls.push(options.provider);await Promise.race([waitHeld(options.provider,'models'),new Promise<never>((_,reject)=>signal.addEventListener('abort',()=>reject(new Error('cancelled')),{once:true}))]);return[{id:options.provider+'-balanced',label:'Balanced model'},{id:options.provider+'-fast',label:'Fast model'}];},createCliCallbackProvider:async(options:{provider:string;model:string;executable:string})=>{cliSelections.push(options);return{modelKey:JSON.stringify(options),complete:async(prompt:string,signal:AbortSignal)=>{
     calls.push(options.provider);prompts.push(prompt);cliSignals.push(signal);activeCli++;maxActiveCli=Math.max(maxActiveCli,activeCli);
     try {
       if(cliFailure)throw new Error('Selected extension request failed');
@@ -76,7 +78,8 @@ async function harness(denied=false, timeoutMs?:number, siteCount=denied?2:1, re
   }};}};
   function start(){const module={exports:{}as any};runInNewContext(bundle,{module,exports:module.exports,process,Buffer,URL,AbortController,setTimeout:(fn:()=>void,ms:number)=>setTimeout(fn,ms===60_000&&timeoutMs!==undefined?timeoutMs:ms),clearTimeout,setImmediate,require:(name:string)=>name==='vscode'?vscode:name==='./cli-callback-provider'?cli:name==='./ai-extensions'?aiExtensions:require(name)});return module.exports.registerCopilotCallbacks(context,workspace);}
   async function startPaused(){const api=start();await commands.get('dynsight.stopCopilotAnalysis')!();await api.ready;return api;}
-  return{start,startPaused,stop,config,commands,calls,prompts,queries,messages,workspace,update,state,tokens,folders,folderConfigs,cliSelections,cliSignals,vscode,
+  return{start,startPaused,stop,config,commands,calls,prompts,queries,messages,workspace,update,state,tokens,folders,folderConfigs,cliSelections,cliSignals,vscode,pickerCalls,catalogCalls,stateWrites,
+    picks:(values:(string|undefined)[])=>{picks=values;},
     installed:(ids:string[])=>{installed=ids;},failCli:()=>{cliFailure=true;},maxActiveCli:()=>maxActiveCli,
     setReply:(value:(prompt:string)=>string)=>{reply=value;},
     updateMany:async(values:Record<string,unknown>)=>{for(const [key,value]of Object.entries(values))config.set(key,value);settings.fire({affectsConfiguration:(name:string)=>Object.keys(values).some(key=>name===`dynsight.${key}`)});await new Promise<void>(done=>setImmediate(done));},
@@ -90,6 +93,46 @@ async function harness(denied=false, timeoutMs?:number, siteCount=denied?2:1, re
 const settle=()=>new Promise(done=>setTimeout(done,50));
 async function until(check:()=>boolean){const deadline=Date.now()+3000;while(!check()&&Date.now()<deadline)await new Promise(done=>setTimeout(done,10));assert.ok(check(),'service did not reach the expected state');}
 const firstSite=(h:Awaited<ReturnType<typeof harness>>)=>({siteKey:callbackContexts([...h.workspace.index.files.values()])[0].key});
+test('enabling the single AI checkbox immediately guides provider then model before any source request',async t=>{
+  const h=await harness();t.after(h.dispose);h.workspace.stable=false;h.config.set('smartAnalysis.include',[]);h.picks(['codex','codex-balanced']);
+  await h.start().ready;await h.update('smartAnalysis.ai',true);
+  await until(()=>!!h.state.get('smartAiSelection-v1'));
+  assert.match(h.pickerCalls[0].title,/1\/2/);assert.match(h.pickerCalls[1].title,/2\/2/);
+  assert.deepEqual(h.catalogCalls,['codex']);assert.deepEqual(h.calls,[]);
+  assert.equal((h.state.get('smartAiSelection-v1') as any).modelId,'codex-balanced');
+  assert.equal(h.stateWrites.filter(value=>value.key==='smartAiSelection-v1').length,1);
+  assert.equal(h.config.get('smartAnalysis.provider'),'copilot','hidden provider setting is never written');
+});
+for(const phase of [1,2])test(`cancelling AI setup step ${phase} leaves the checkbox off and saves no partial choice`,async t=>{
+  const h=await harness();t.after(h.dispose);h.picks(phase===1?[undefined]:['claude',undefined]);
+  await h.start().ready;await h.update('smartAnalysis.ai',true);
+  await until(()=>h.config.get('smartAnalysis.ai')===false);
+  assert.equal(h.state.get('smartAiSelection-v1'),undefined);assert.deepEqual(h.calls,[]);
+});
+test('guided model choice is persisted, passed to the selected provider and restored without another picker',async t=>{
+  const h=await harness();t.after(h.dispose);h.picks(['codex','codex-fast']);
+  await h.start().ready;await h.update('smartAnalysis.ai',true);
+  await until(()=>h.calls.length===1&&h.workspace.copilotDiagnostics.state==='ready');
+  assert.equal(h.cliSelections[0].model,'codex-fast');assert.equal(h.workspace.copilotDiagnostics.model,'Fast model');
+  h.stop();await h.start().ready;assert.equal(h.pickerCalls.length,2);assert.deepEqual(h.calls,['codex']);
+});
+test('reconfiguring the guided model uses separate caches and cancellation keeps the completed choice',async t=>{
+  const h=await harness();t.after(h.dispose);h.picks(['codex','codex-fast']);await h.start().ready;await h.update('smartAnalysis.ai',true);
+  await until(()=>h.calls.length===1&&h.workspace.copilotDiagnostics.state==='ready');
+  h.picks(['codex','codex-balanced']);await h.commands.get('dynsight.configureAi')!();await until(()=>h.calls.length===2&&h.workspace.copilotDiagnostics.state==='ready');
+  assert.deepEqual(h.cliSelections.map(value=>value.model),['codex-fast','codex-balanced']);
+  const before=JSON.stringify(h.state.get('smartAiSelection-v1'));
+  h.picks(['claude',undefined]);await h.commands.get('dynsight.configureAi')!();await settle();
+  assert.equal(JSON.stringify(h.state.get('smartAiSelection-v1')),before);assert.deepEqual(h.calls,['codex','codex']);
+  h.picks(['codex','codex-fast']);await h.commands.get('dynsight.configureAi')!();await until(()=>h.workspace.copilotDiagnostics.state==='ready');
+  assert.equal(h.calls.length,2,'returning to the first model reuses its own validated cache');assert.equal(h.maxActiveCli(),1);
+});
+test('turning AI off cancels model discovery and cannot commit a late selection',async t=>{
+  const h=await harness();t.after(h.dispose);h.picks(['codex','codex-fast']);const held=h.holdNext('codex','models');
+  await h.start().ready;await h.update('smartAnalysis.ai',true);await held.started;
+  await h.update('smartAnalysis.ai',false);held.release();await settle();
+  assert.equal(h.state.get('smartAiSelection-v1'),undefined);assert.deepEqual(h.calls,[]);assert.equal(h.pickerCalls.length,1);
+});
 for(const provider of ['claude','codex'])test(`Smart Analysis uses only the selected ${provider} extension when all three are installed`,async t=>{
   const h=await harness();t.after(h.dispose);
   h.config.set('smartAnalysis.ai',true);h.config.set('smartAnalysis.provider',provider);h.config.set('smartAnalysis.include',['**']);
@@ -104,14 +147,14 @@ test('Copilot alone handles requests when all three are installed and Copilot is
   const h=await harness();t.after(h.dispose);h.config.set('smartAnalysis.ai',true);h.config.set('copilotModel','model-a');
   await h.start().ready;assert.deepEqual(h.calls,['model-a']);assert.equal(h.cliSelections.length,0);
 });
-test('Auto uses the only installed extension without asking for paths or a provider',async t=>{
+test('first-time setup guides both steps even with one installed extension',async t=>{
   const h=await harness();t.after(h.dispose);h.installed(['codex']);h.config.set('smartAnalysis.ai',true);h.config.set('smartAnalysis.provider','auto');
-  await h.start().ready;assert.deepEqual(h.calls,['codex']);assert.equal(h.pickCount(),0);assert.equal(h.config.get('smartAnalysis.provider'),'codex');
+  await h.start().ready;assert.deepEqual(h.calls,['codex']);assert.equal(h.pickCount(),2);assert.equal((h.state.get('smartAiSelection-v1') as any).provider,'codex');
 });
 test('Auto asks once when all three are installed, saves one provider and only uses that provider',async t=>{
   const h=await harness();t.after(h.dispose);h.pick('codex');h.config.set('smartAnalysis.ai',true);h.config.set('smartAnalysis.provider','auto');
-  await h.start().ready;assert.deepEqual(h.calls,['codex']);assert.equal(h.config.get('smartAnalysis.provider'),'codex');assert.equal(h.pickCount(),1);
-  h.stop();await h.start().ready;assert.deepEqual(h.calls,['codex']);assert.equal(h.pickCount(),1);
+  await h.start().ready;assert.deepEqual(h.calls,['codex']);assert.equal((h.state.get('smartAiSelection-v1') as any).provider,'codex');assert.equal(h.pickCount(),2);
+  h.stop();await h.start().ready;assert.deepEqual(h.calls,['codex']);assert.equal(h.pickCount(),2);
 });
 test('selected extension failure does not try either of the other installed providers',async t=>{
   const h=await harness();t.after(h.dispose);h.failCli();h.config.set('smartAnalysis.ai',true);h.config.set('smartAnalysis.provider','codex');
@@ -153,17 +196,18 @@ for(const provider of ['claude','codex'])test(`${provider} model commands use th
   let inputCount=0;(h.vscode.window as any).showInputBox=async()=>{inputCount++;return 'typed-model';};
   await h.start().ready;
   for(const command of ['dynsight.selectAiModel','dynsight.selectCopilotModel']) {
+    h.picks([provider,'']);
     await h.commands.get(command)!();await settle();
     assert.equal(inputCount,0,'neither current nor legacy commands can open a model ID input');
   }
   assert.ok(h.cliSelections.every(value=>value.model===''));assert.deepEqual(h.calls,[provider]);
-  assert.match(h.messages.join(' '),/default model/i);
+  assert.equal(h.pickerCalls.length,4,'both aliases guide extension then model');
 });
 test('Copilot model command still uses the available model list without a text input',async t=>{
   const h=await harness();t.after(h.dispose);h.pick('model-b');
   (h.vscode.window as any).showInputBox=async()=>{throw new Error('No model ID input allowed');};
   await h.start().ready;await h.commands.get('dynsight.selectAiModel')!();
-  assert.equal(h.config.get('copilotModel'),'model-b');assert.equal(h.pickCount(),1);assert.equal(h.calls.length,0);
+  assert.equal((h.state.get('smartAiSelection-v1') as any).modelId,'model-b');assert.equal(h.pickCount(),2);assert.equal(h.calls.length,0);
 });
 for(const partial of [false,true])test(`selected ${partial?'partial':'empty'} Build preserves basic-index AI callback edges`,async t=>{
   const h=await harness();t.after(h.dispose);
@@ -209,7 +253,7 @@ test('enabling Copilot automatically processes all sites and startup, save and r
   assert.equal(h.calls.length,0);assert.equal(h.pickCount(),0);
   await h.update('copilotCallbacks',true);await settle();
   await until(()=>h.workspace.copilotDiagnostics.state==='ready'&&h.workspace.copilotDiagnostics.completed===8);
-  assert.equal(h.calls.length,8);assert.equal(h.pickCount(),1,'only the model is selected; callbacks need no picker');
+  assert.equal(h.calls.length,8);assert.equal(h.pickCount(),2,'extension and model are selected; callbacks need no picker');
   h.workspace.sourceChanged.fire('editor-save');h.workspace.generation++;h.workspace.settled.fire();await settle();
   await until(()=>h.workspace.copilotDiagnostics.state==='ready');
   assert.equal(h.calls.length,8);assert.equal(h.workspace.copilotDiagnostics.cacheHits,8);
