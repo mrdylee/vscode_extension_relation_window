@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.89 — 2026-10-31
+
+- Allow the guided AI setup to cancel and wait for an individual callback analysis, including its source preparation and model discovery, before changing providers or models. Keep setup and analysis mutually exclusive, and prevent a late picker if AI is turned off while waiting.
+- Restore an available Copilot model by its selected ID after a model version update. Invalidate the old version's controller/cache, reuse the new version's cache on subsequent runs, and keep unavailable IDs paused without switching models.
+
 ## 0.1.88 — 2026-10-31
 
 - Combine AI enable, provider and raw Copilot model settings into one Smart Analysis: AI control. Checking it immediately guides extension selection followed by model selection; changing the choice uses the same setting link.

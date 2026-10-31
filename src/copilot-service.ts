@@ -16,7 +16,7 @@ export interface CallbackActionHandle { siteKey: string; targetId?: string; over
 export interface CallbackTargetChoice { id: string; name: string; location: Location; compatibility: 'compatible' | 'unknown' | 'incompatible'; reason?: string }
 export interface CallbackActionResult { hint?: CallbackHint; suggestionId?: string; comparison?: 'agrees' | 'different' | 'insufficient' }
 interface SavedModel { id: string; version: string }
-interface AiSelection { provider: 'copilot' | CliProvider; modelId: string; modelLabel: string; modelVersion?: string }
+interface AiSelection { provider: 'copilot' | CliProvider; modelId: string; modelLabel: string }
 const selectionKey='smartAiSelection-v1';
 const storageKey = 'callbackOverrides-v1';
 export function registerCopilotCallbacks(context: vscode.ExtensionContext, workspace: WorkspaceIndex) {
@@ -26,7 +26,7 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
   let selection=context.workspaceState.get<AiSelection>(selectionKey);
   let configuring=false,setupAbort:AbortController|undefined,pickerCancellation:vscode.CancellationTokenSource|undefined;
   let overrides = new CallbackOverrideStore(context.workspaceState.get(storageKey));
-  let revision = 0, manualRevision = 0, disposed = false, selecting = false, starting = false, running: Promise<unknown> | undefined, timer: ReturnType<typeof setTimeout> | undefined;
+  let revision = 0, manualRevision = 0, disposed = false, selecting = false, running: Promise<unknown> | undefined, timer: ReturnType<typeof setTimeout> | undefined;
   let automaticPaused = false;
   const inspectAi=()=>{const value=vscode.workspace.getConfiguration('dynsight').inspect<boolean>('smartAnalysis.ai');return{globalValue:value?.globalValue,workspaceValue:value?.workspaceValue};};
   let aiScope=inspectAi();
@@ -87,7 +87,6 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
   async function pickSelection() {
     const abort=setupAbort=new AbortController(),cancellation=pickerCancellation=new vscode.CancellationTokenSource();
     const current=()=>!disposed&&!abort.signal.aborted&&vscode.workspace.isTrusted;
-    configuring=true;
     try {
       if(!current())return false;
       const choices=installedAiExtensions();
@@ -95,12 +94,11 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
       if(!choices.length)throw new Error('Install and sign in to Copilot, Claude Code or Codex in this VS Code environment.');
       const chosen=await vscode.window.showQuickPick(choices,{title:'Smart Analysis AI · 1/2: Choose an extension',placeHolder:'Only this extension will receive analysis requests.'},cancellation.token);
       if(!chosen||!current())return false;
-      type ModelChoice=AiModelChoice&{version?:string};
-      let choicesForModel:ModelChoice[];
+      let choicesForModel:AiModelChoice[];
       if(chosen.value==='copilot') {
         const available=await vscode.lm.selectChatModels({vendor:'copilot'});
         if(!current())return false;
-        choicesForModel=available.map(value=>({id:value.id,label:value.name,description:value.family,version:value.version}));
+        choicesForModel=available.map(value=>({id:value.id,label:value.name,description:value.family}));
         if(!choicesForModel.length)throw new Error('No Copilot models are available. Open Copilot and sign in, then choose again.');
       } else {
         const executable=await bundledAiEngine(chosen.value);
@@ -113,14 +111,14 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
       const chosenModel=await vscode.window.showQuickPick(choicesForModel.map(value=>({label:value.label,description:value.description,value})),
         {title:`Smart Analysis AI · 2/2: Choose a ${chosen.label} model`,placeHolder:'Choose a model from the list. No source is sent during setup.'},cancellation.token);
       if(!chosenModel||!current())return false;
-      const next:AiSelection={provider:chosen.value,modelId:chosenModel.value.id,modelLabel:chosenModel.value.label,modelVersion:chosenModel.value.version};
+      const next:AiSelection={provider:chosen.value,modelId:chosenModel.value.id,modelLabel:chosenModel.value.label};
       await context.workspaceState.update(selectionKey,next);
       if(!current()){await context.workspaceState.update(selectionKey,selection);return false;}
       selection=next;controller?.dispose();controller=undefined;cliProvider=undefined;model=undefined;hints.clear();suggestions.clear();activity.error=undefined;
       status(enabled()?'waiting-for-saved-index':'off');project();
       return true;
     } finally {
-      configuring=false;cancellation.dispose();
+      cancellation.dispose();
       if(setupAbort===abort){setupAbort=undefined;pickerCancellation=undefined;}
     }
   }
@@ -142,7 +140,7 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
     }
     const models = await vscode.lm.selectChatModels({vendor: 'copilot', id});
     if (disposed || epoch !== revision) return false;
-    const chosen = models.find(value => value.id === id&&(!selection?.modelVersion||value.version===selection.modelVersion));
+    const chosen = models.find(value => value.id === id);
     if (disposed || epoch !== revision) return false;
     if (!chosen) { status('model-unavailable'); return false; }
     if (savedModel?.id !== chosen.id || savedModel.version !== chosen.version) { controller?.dispose(); controller = undefined; }
@@ -193,7 +191,7 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
       }}});
   }
   async function analyzeAutomatically() {
-    if (disposed || running || starting || configuring) return;
+    if (disposed || running || configuring) return;
     if (automaticPaused) { project(); return; }
     if (!enabled()) { project(); status('off'); return; }
     if (!canAnalyze()) { activity.automatic = true; status('waiting-for-saved-index'); return; }
@@ -281,19 +279,18 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
     async removeOverride(action: CallbackActionHandle) { if (!action.overrideKey) throw new Error('No manual override selected.'); await persist(next => next.remove(action.overrideKey!)); },
     async analyze(action: CallbackActionHandle, recheck: boolean): Promise<CallbackActionResult> {
       if (!enabled()) throw new Error('Enable Smart Analysis: AI in Settings before requesting AI analysis.');
-      if (running || starting) throw new Error('Another callback analysis is running.');
+      if (running || configuring) throw new Error('Another callback analysis is running.');
       const startRevision = revision, startManualRevision = manualRevision;
-      starting=true;
-      try {
-      const {site, snapshot: value} = await siteFor(action);
-      if (!eligible(site.file.uri)) throw new Error('This callback is outside the Smart Analysis AI scope.');
-      const epoch = revision, confirmedRevision = manualRevision;
-      if (!await selectModel() || epoch !== revision) throw new Error('AI model selection cancelled.');
-      setup(); if (!controller) throw new Error('AI storage is unavailable.');
-      value.scopeRevision = revision;
-      if(action.overrideKey)value.preferredTargetId=resolvedOverrides().find(value=>value.record.key===action.overrideKey)?.target?.id;
-      const active = controller; status('analyzing');
       const task = (async () => {
+        const {site, snapshot: value} = await siteFor(action);
+        if(disposed||startRevision!==revision||startManualRevision!==manualRevision)throw new Error('The callback or selection changed during AI analysis.');
+        if (!eligible(site.file.uri)) throw new Error('This callback is outside the Smart Analysis AI scope.');
+        const epoch = revision, confirmedRevision = manualRevision;
+        if (!await selectModel() || epoch !== revision) throw new Error('AI model selection cancelled.');
+        setup(); if (!controller) throw new Error('AI storage is unavailable.');
+        value.scopeRevision = revision;
+        if(action.overrideKey)value.preferredTargetId=resolvedOverrides().find(value=>value.record.key===action.overrideKey)?.target?.id;
+        const active = controller; status('analyzing');
         const result = await active.analyzeSite(value, action.siteKey, {recheck});
         if (result.stale || epoch !== revision || confirmedRevision !== manualRevision) throw new Error('The callback or selection changed during AI analysis.');
         if (result.failures) { activity.failures += result.failures; status('request-failed'); throw new Error('Copilot could not analyze this callback.'); }
@@ -313,8 +310,7 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
         const suggestionId = randomUUID(); suggestions.set(action.siteKey, {id: suggestionId, result: hint, manualRevision});
         return {hint, suggestionId, comparison: hint.candidates.some(value => value.targetId === selected?.id) ? 'agrees' as const : hint.candidates.length ? 'different' as const : 'insufficient' as const};
       })(); running = task;
-      try { return await task; } finally { if (running === task) running = undefined; }
-      } finally {starting=false;if(startRevision!==revision||startManualRevision!==manualRevision)schedule();}
+      try { return await task; } finally { if (running === task) running = undefined;if(startRevision!==revision||startManualRevision!==manualRevision)schedule(); }
     },
     async useSuggestion(action: CallbackActionHandle, suggestionId: string, targetId: string) {
       const saved = suggestions.get(action.siteKey);
@@ -329,19 +325,20 @@ export function registerCopilotCallbacks(context: vscode.ExtensionContext, works
     await actions.analyze(action, recheck);
   }
   const configureAi=async(enabling?:vscode.ConfigurationTarget)=>{
-    if(starting)return;
-    const wasPaused=automaticPaused;
-    setupAbort?.abort();pickerCancellation?.cancel();stop('waiting-for-saved-index');automaticPaused=true;starting=true;
+    if(configuring)return;
+    const wasPaused=automaticPaused,wasEnabled=enabled();
+    configuring=true;setupAbort?.abort();pickerCancellation?.cancel();stop('waiting-for-saved-index');automaticPaused=true;
     const turnOff=async()=>{selecting=true;try{await vscode.workspace.getConfiguration('dynsight').update('smartAnalysis.ai',false,enabling??vscode.ConfigurationTarget.Workspace);}finally{aiScope=inspectAi();selecting=false;}status('off');};
     try {
       await running?.catch(()=>{});
+      if(disposed||wasEnabled&&!enabled())return;
       if(await pickSelection()){automaticPaused=false;return selection;}
       if(enabling)await turnOff();else automaticPaused=wasPaused;
     }catch(error){
       if(enabling)await turnOff();
       activity.error=error instanceof Error?error.message:'AI setup failed';status(enabled()?'request-failed':'off');
       await vscode.window.showErrorMessage(activity.error);
-    }finally{starting=false;if(!automaticPaused&&enabled())schedule();}
+    }finally{configuring=false;if(!automaticPaused&&enabled())schedule();}
   };
   context.subscriptions.push(
     vscode.commands.registerCommand('dynsight.configureAi',()=>configureAi()),

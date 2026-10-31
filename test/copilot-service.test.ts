@@ -191,6 +191,70 @@ test('changing provider cancels the old CLI request before the new provider star
   await until(()=>h.calls.includes('codex')&&h.workspace.copilotDiagnostics.state==='ready');
   assert.equal(h.cliSignals[0].aborted,true);assert.equal(h.maxActiveCli(),1,'old provider settles before the new provider starts');hold.release();
 });
+test('guided setup cancels a manual callback request before switching providers',async t=>{
+  const h=await harness();t.after(h.dispose);h.config.set('smartAnalysis.ai',true);h.config.set('smartAnalysis.provider','codex');
+  const api=await h.startPaused(),held=h.holdNext('codex');t.after(held.release);
+  const active=api.actions.analyze(firstSite(h),true).then(()=>false,()=>true);await held.started;
+  h.picks(['claude','claude-fast']);await h.commands.get('dynsight.configureAi')!();
+  assert.equal(h.cliSignals[0].aborted,true,'configure cancels the active manual request');
+  assert.equal(await active,true,'the old callback result is rejected');
+  await until(()=>h.calls.includes('claude')&&h.workspace.copilotDiagnostics.state==='ready');
+  assert.equal((h.state.get('smartAiSelection-v1') as any).provider,'claude');
+  assert.equal(h.pickerCalls.length,2);assert.equal(h.maxActiveCli(),1);
+});
+test('guided setup waits for manual model discovery and prevents its late source request',async t=>{
+  const h=await harness();t.after(h.dispose);h.config.set('smartAnalysis.ai',true);h.config.set('copilotModel','model-a');
+  const api=await h.startPaused(),held=h.holdNext('model-a','discovery');t.after(held.release);
+  const active=api.actions.analyze(firstSite(h),true).then(()=>false,()=>true);await held.started;
+  h.picks(['codex','codex-fast']);const setup=h.commands.get('dynsight.configureAi')!();
+  await settle();assert.equal(h.pickerCalls.length,0,'new setup waits until the old discovery settles');
+  held.release();await setup;assert.equal(await active,true);
+  await until(()=>h.calls.length===1&&h.workspace.copilotDiagnostics.state==='ready');
+  assert.deepEqual(h.calls,['codex']);assert.equal(h.pickerCalls.length,2);
+});
+test('guided setup invalidates a manual callback before source preparation finishes',async t=>{
+  const h=await harness();t.after(h.dispose);h.config.set('smartAnalysis.ai',true);h.config.set('copilotModel','model-a');
+  const api=await h.startPaused();
+  const active=api.actions.analyze(firstSite(h),true).then(()=>false,()=>true);
+  h.picks(['codex','codex-fast']);await h.commands.get('dynsight.configureAi')!();
+  assert.equal(await active,true);
+  await until(()=>h.calls.length===1&&h.workspace.copilotDiagnostics.state==='ready');
+  assert.deepEqual(h.calls,['codex']);assert.equal(h.pickerCalls.length,2);
+});
+test('turning AI off while setup waits for a manual task prevents a late picker',async t=>{
+  const h=await harness();t.after(h.dispose);h.config.set('smartAnalysis.ai',true);h.config.set('copilotModel','model-a');
+  const api=await h.startPaused(),held=h.holdNext('model-a','discovery');t.after(held.release);
+  const active=api.actions.analyze(firstSite(h),true).then(()=>false,()=>true);await held.started;
+  h.picks(['codex','codex-fast']);const setup=h.commands.get('dynsight.configureAi')!();
+  await h.update('smartAnalysis.ai',false);held.release();await setup;assert.equal(await active,true);
+  assert.equal(h.pickerCalls.length,0);assert.equal(h.state.get('smartAiSelection-v1'),undefined);assert.deepEqual(h.calls,[]);
+});
+test('manual callback analysis cannot start while guided setup is choosing a model',async t=>{
+  const h=await harness();t.after(h.dispose);h.config.set('smartAnalysis.ai',true);h.config.set('copilotModel','model-a');
+  const api=await h.startPaused(),held=h.holdNext('codex','models');t.after(held.release);
+  h.picks(['codex','codex-fast']);const setup=h.commands.get('dynsight.configureAi')!();await held.started;
+  await assert.rejects(api.actions.analyze(firstSite(h),true),/Another callback analysis/);
+  h.workspace.settled.fire();await settle();assert.deepEqual(h.calls,[]);
+  held.release();await setup;await until(()=>h.calls.length===1&&h.workspace.copilotDiagnostics.state==='ready');
+  assert.deepEqual(h.calls,['codex']);assert.equal(h.maxActiveCli(),1);
+});
+test('same Copilot model ID accepts a new version, refreshes cache and retains the saved choice',async t=>{
+  const h=await harness();t.after(h.dispose);h.picks(['copilot','model-a']);
+  await h.start().ready;await h.update('smartAnalysis.ai',true);
+  await until(()=>h.calls.length===1&&h.workspace.copilotDiagnostics.state==='ready');
+  const chosen=h.state.get('smartAiSelection-v1') as any;
+  h.state.set('smartAiSelection-v1',{...chosen,modelVersion:'1'});
+  for(const model of await h.vscode.lm.selectChatModels({}))model.version='2';
+  h.stop();await h.start().ready;
+  assert.equal(h.workspace.copilotDiagnostics.state,'ready');assert.equal(h.calls.length,2,'version changes miss the old cache');
+  assert.equal((h.state.get('copilotCallbackModel') as any).version,'2');
+  assert.equal((h.state.get('smartAiSelection-v1') as any).modelId,'model-a');assert.equal(h.pickerCalls.length,2);
+  h.stop();await h.start().ready;
+  assert.equal(h.calls.length,2,'the new version reuses its own cache');assert.equal(h.workspace.copilotDiagnostics.cacheHits,1);
+  h.available(['model-b']);h.stop();await h.start().ready;
+  assert.equal(h.workspace.copilotDiagnostics.state,'model-unavailable');assert.equal(h.calls.length,2,'a missing ID never falls back to another model');
+  assert.equal(h.pickerCalls.length,2);
+});
 for(const provider of ['claude','codex'])test(`${provider} model commands use the default model without asking for an ID`,async t=>{
   const h=await harness();t.after(h.dispose);h.config.set('smartAnalysis.ai',true);h.config.set('smartAnalysis.provider',provider);
   let inputCount=0;(h.vscode.window as any).showInputBox=async()=>{inputCount++;return 'typed-model';};
