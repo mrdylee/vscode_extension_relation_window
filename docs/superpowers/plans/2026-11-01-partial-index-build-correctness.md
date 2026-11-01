@@ -42,6 +42,6 @@ Files: release version manifests, `CHANGELOG.md`, `docs/releases/<next>.md`, imp
 
 - [x] Run typecheck, full unit/Worker/memory/performance/UI/native/large gates with logs under ignored artifacts. Validate actual147file baseline and Make projection separately, retaining source flags and partial reasons.
 - [x] Review source diff against approved scope and failed regressions. Build/package the next available patch version and verify extracted VSIX in isolated VS Code.
-- [ ] Check current remote main/latest release, commit task files explicitly, integrate main without overwriting concurrent work and push the source/tag through existing release workflow.
-- [ ] Wait for Windows/macOS/Ubuntu/release success. Download all5publicVSIX and checksums, compare all archive-entry contents with the locally verified package, and run the real updater checks.
-- [ ] Commit the publication receipt separately, verify remote state and report delivered behavior plus remaining partial/build limits.
+- [x] Check current remote main/latest release, commit task files explicitly, integrate main without overwriting concurrent work and push the source/tag through existing release workflow.
+- [x] Wait for Windows/macOS/Ubuntu/release success. Download all5publicVSIX and checksums, compare all archive-entry contents with the locally verified package, and run the real updater checks.
+- [x] Commit the publication receipt separately, verify remote state and report delivered behavior plus remaining partial/build limits.
