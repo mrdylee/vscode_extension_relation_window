@@ -28,10 +28,13 @@ export function createLocalProgress(send:(type:string,value?:Record<string,unkno
   function update(value?:Diagnostics,tick=false){
     diagnostics=value;const analysis=value?.index?.callbackAnalysis,progress=analysis?.progress;
     if(!tick){const next=JSON.stringify(analysis);if(next!==sample){sample=next;sampledAt=Date.now();}}
-    root.hidden=!analysis?.running&&!analysis?.paused&&!analysis?.limited&&!['cancelled','time','work','limited'].includes(progress?.outcome??'');
+    const fixed=!['cancelled','time','memory'].includes(progress?.outcome??'')&&(analysis?.limited||['work','limited'].includes(progress?.outcome??''));
+    root.hidden=!analysis?.running&&!analysis?.paused&&!analysis?.limited&&!['cancelled','time','memory','work','limited'].includes(progress?.outcome??'');
     stop.hidden=!analysis?.running;retry.hidden=!!analysis?.running;stop.disabled=!!analysis?.paused;stop.textContent=analysis?.paused?'Stopping…':'Stop local';
     const ms=(progress?.scopeElapsedMs??0)+(analysis?.running?Math.max(0,Date.now()-sampledAt):0);
-    text.textContent=analysis?.running?`Local · ${(ms/1000).toFixed(1)}s${ms>=5000?' · Taking longer':''} · `:analysis?.paused?'Local analysis paused':'Local analysis needs retry';
+    text.textContent=analysis?.running?`Local · ${(ms/1000).toFixed(1)}s${ms>=5000?' · Taking longer':''} · `:analysis?.paused?'Local analysis paused':fixed?'Local analysis limited':'Local analysis interrupted';
+    retry.textContent=analysis?.paused?'Resume local':fixed?'Re-run local':'Retry local';
+    retry.title=fixed?'Uses the same analysis limits. Review Analysis notices and narrow Smart Analysis Include/Exclude before re-running.':'Retry local analysis with the current source index.';
     name.hidden=!analysis?.running||!progress?.symbol;name.textContent=progress?.symbol??'';name.setAttribute('aria-label',`Function ${progress?.symbol??''}`);
     summary.title=`${progress?.stage??'Local analysis'} · ${progress?.functionsDone??0}/${progress?.functionsTotal??0} functions · ${progress?.scopeEvaluations??0} evaluations${progress?.workBatches ? ` · Work batch ${progress.workBatches}` : ''}`;
   }

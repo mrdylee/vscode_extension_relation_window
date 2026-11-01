@@ -44,9 +44,11 @@ export class BuildMetadataCache implements BuildFileSystem {
     if (!result) { result = extractStaticBuildOptions(this, entry, sourceUris, environment); this.profiles.set(key, result); if(this.profiles.size>8)this.profiles.delete(this.profiles.keys().next().value!); }
     return result;
   }
-  invalidate(uri: string) {
+  invalidate(uri: string, structure = false) {
     const parent = buildDirectory(uri), metadata = /(?:\/(?:GNUmakefile|[Mm]akefile)|\.(?:mk|sh|bat|cmd))$/i.test(uri);
-    if (!this.dependencies.has(uri) && !(metadata && this.directories.has(parent))) return false;
+    if (!this.dependencies.has(uri) && !((metadata || structure) && this.directories.has(parent))) return false;
+    if(structure&&this.directories.has(uri))for(const directory of this.directories.keys())
+      if(directory===uri||directory.startsWith(uri+'/'))this.directories.delete(directory);
     this.removeText(uri); this.directories.delete(parent); this.discoveries.clear(); this.profiles.clear();
     return true;
   }
@@ -71,7 +73,7 @@ export async function discoverBuildEntries(fs: BuildFileSystem, request: { rootU
     const name = decodeURIComponent(uri.split('/').pop()!);
     if (!explicit && !/^(?:GNUmakefile|[Mm]akefile)$|\.(?:sh|bat|cmd)$/i.test(name)) return;
     const dialect = /\.(?:bat|cmd)$/i.test(name) ? 'cmd' : /\.sh$/i.test(name) ? 'sh' : 'make';
-    result.entries.push({ id: fingerprintBuildInput([root, uri]), rootUri: root, entryUri: uri, cwdUri: root, dialect, args: [], evidence: [] });
+    result.entries.push({ id: fingerprintBuildInput([root, uri]), rootUri: root, entryUri: uri, cwdUri: dialect === 'make' ? buildDirectory(uri) : root, dialect, args: [], evidence: [] });
   };
   for (const directory of directories) {
     if (shouldCancel?.()) { result.issues.push({ code: 'cancelled', message: 'Build discovery cancelled' }); break; }

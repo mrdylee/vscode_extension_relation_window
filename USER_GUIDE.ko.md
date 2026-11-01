@@ -254,6 +254,8 @@ Copilot은 VS Code 모델 API를 사용하고, Claude Code·Codex는 설치된 �
 
 기본 탐색은 빌드 설정 없이 사용할 수 있습니다. 기존 Make/스크립트의 Define·Include를 반영하려면 Relation의 **Build** 또는 **Dynsight: Select Build Configuration**을 실행합니다.
 
+**No build selected · N found**는 빌드 후보만 발견했고 아직 적용하지 않았다는 뜻입니다. 하위 Makefile은 해당 폴더를 작업 디렉터리로 사용합니다. 변수 이름 조합, 바깥쪽 `eval(call …)` 모듈 include, `MAKEFILE_LIST`, 단순 파일명 wildcard를 실행 없이 읽습니다. call/foreach 안의 중첩 eval과 지원하지 않는 구문은 미해결로 남습니다. Diab 전용 옵션이나 생성 헤더를 확인하지 못하면 명령과 명시적 옵션이 추출돼도 `partial`을 유지합니다.
+
 1. 목록에서 기존 Makefile·셸·배치 빌드 항목을 고릅니다. 없으면 **Choose build entry file…** 항목으로 지정합니다.
 2. 스크립트 인자가 필요한 경우 입력합니다.
 3. 읽기 전용 미리보기에서 파일별 컴파일 명령, 작업 폴더와 미해결 이유를 확인합니다.
@@ -264,6 +266,8 @@ Copilot은 VS Code 모델 API를 사용하고, Claude Code·Codex는 설치된 �
 빌드 선택은 일반 Include/Exclude나 Smart Analysis 범위를 넓히지 않습니다. 필요한 헤더가 밖에 있으면 범위를 직접 조정하세요. 헤더 정의가 여러 소스 문맥에 속하면 해당 소스를 선택합니다. 빌드 설정 변경은 AI 문맥과 저장한 수동 대상의 재검토를 요구할 수 있습니다.
 
 ## 9. 문제 해결
+
+고정 한도에 도달하면 **Local analysis limited / Re-run local**을 표시합니다. 재실행에도 같은 한도가 적용됩니다. 중단된 분석은 **Retry local**, 사용자 일시정지는 **Resume local**로 이어갑니다. 생략된 매크로 후보와 작업 한도 뒤의 저장 위치 변경은 관련 콜백의 불완전성에 반영합니다. 분석 캐시 버전이17로 변경되어 이전 캐시에서는 **Rebuild index**가 필요합니다.
 
 | 증상 | 먼저 해볼 일 |
 | --- | --- |

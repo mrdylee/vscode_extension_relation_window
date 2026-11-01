@@ -548,6 +548,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
   }
   function write(slot: string, value: Value, state: State, ctx: Context, definite = true, summarize = true) {
     if (expired()) { state.incomplete = true; return; }
+    if(ctx.program.incomplete?.length)value=union(value,...ctx.program.incomplete.map(unknown));
     const weak = slot.includes('[*]') || !definite;
     memorySet(state.memory, slot, weak ? union(read(slot, state), value) : value);
     if (state.regions?.size) state.writes!.set(slot, { stamp: ++stamp, definite: !weak });
@@ -613,6 +614,12 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
   // translation units without connecting unrelated aggregate names.
   const scalarReads = new Set<string>(), scalarDependencies = new Map<string, Set<string>>();
   const ignoredStorage = new Set<string>();
+  const writeFootprints = new Map<string, { roots: Set<string>; calls: Set<string>; opaque: boolean }>();
+  function footprint(ctx: Context) {
+    let result=writeFootprints.get(ctx.program.id);
+    if(!result){result={roots:new Set(),calls:new Set(),opaque:false};writeFootprints.set(ctx.program.id,result);}
+    return result;
+  }
   const storageRecords = new Map<string, SymbolRecord>();
   function scalarKey(record: SymbolRecord) {
     const owner = record.memberOf && index.symbol(record.memberOf);
@@ -664,6 +671,12 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
       reads.add(record ? scalarKey(record) : 'unknown:' + (expr.kind === 'name' ? expr.name : expr.field));
       if (expr.kind === 'member') collect(expr.object);
     } else if (expr.kind === 'assign') {
+      const writes=footprint(ctx);
+      if(expr.left.kind==='name') {
+        if(expr.left.localId){if(ctx.locals.get(expr.left.localId)?.persistent)writes.roots.add(expr.left.localId);}
+        else for(const symbol of globalSymbols(expr.left))if(symbol.kind==='variable')writes.roots.add(symbol.id);
+      } else writes.opaque=true;
+      if(writes.roots.size>256){writes.roots.clear();writes.opaque=true;}
       const left = collect(expr.left), right = collect(expr.right);
       const record = valueType(expr.left, ctx), layouts = record ? index.layout(record) : [];
       linkScalar(record && expr.left.kind !== 'dereference' ? [scalarKey(record)] : left, right);
@@ -671,6 +684,9 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
       if (!layouts.length || layouts.some(layout => !layout.scalar)) for (const key of right) scalarReads.add(key);
     } else if (expr.kind === 'call') {
       const direct = expr.callee.kind === 'name' && !expr.callee.localId && globalSymbols(expr.callee).every(symbol => symbol.kind === 'function');
+      const writes=footprint(ctx),callees=direct&&expr.callee.kind==='name'?globalSymbols(expr.callee):[];
+      if(!callees.length||callees.some(symbol=>!byFunction.has(symbol.id)))writes.opaque=true;
+      for(const callee of callees)if(writes.calls.size<256)writes.calls.add(callee.id);else writes.opaque=true;
       collect(expr.callee, !direct);
       const args = expr.args.map(arg => collect(arg));
       if (expr.callee.kind === 'name' && !expr.callee.localId) for (const fn of globalSymbols(expr.callee)) {
@@ -731,6 +747,24 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
         else { collectBodyReads(statement.then, ctx); collectBodyReads(statement.otherwise, ctx); }
       }
     }
+  }
+  function omittedWrites(id: string, opaque: boolean): Set<string> {
+    const roots=new Set<string>(),pending=[id],seen=new Set<string>();
+    while(pending.length&&!expired()) {
+      const fn=pending.pop()!;if(seen.has(fn))continue;seen.add(fn);
+      if(seen.size>256){opaque=true;break;}
+      const writes=writeFootprints.get(fn);opaque ||= writes?.opaque??true;
+      for(const root of writes?.roots??[])if(roots.size<256)roots.add(root);else opaque=true;
+      for(const callee of writes?.calls??[])pending.push(callee);
+    }
+    if(opaque) {
+      for(const symbol of index.symbols())if(symbol.kind==='variable'&&symbol.storage!=='local'&&!symbol.memberOf) {
+        if(!roots.has(symbol.id)&&roots.size>=256){projectIncomplete=true;return new Set();}roots.add(symbol.id);
+      }
+      for(const [n,layouts] of (parameterLayouts.get(id)??[]).entries())
+        if(layouts.some(layout=>layout.layers.length||layout.fields.length))roots.add(paramRoot(id,n));
+    }
+    return roots;
   }
   function summarize(record: SymbolRecord | undefined) {
     if (!record || scalarReads.has(scalarKey(record)) || scalarReads.has('unknown:' + record.name)) return true;
@@ -1022,7 +1056,9 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
       return value;
     }
     if (expr.kind === 'call') {
-      const callee = evaluate(expr.callee, state, ctx), resolved = materialize(callee), args = expr.args.map(arg => evaluate(arg, state, ctx));
+      const callee = evaluate(expr.callee, state, ctx);
+      const resolved = materialize(callee);
+      const args = expr.args.map(arg => evaluate(arg, state, ctx));
       if (memoryBuiltin(expr)) return memoryWrite(expr, args, state, ctx);
       for (const [n, value] of args.entries()) {
         if (!value.targets.size && (!value.params.size || value.objects.size)) continue;
@@ -1037,7 +1073,8 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
       if (!direct) {
         dependencies?.observations.add(expr.key);
         const previous = observations.get(expr.key);
-        observations.set(expr.key, { value: previous ? union(previous.value, resolved) : resolved, expression: expressionText(expr.callee),
+        const observed=ctx.program.incomplete?.length?union(resolved,...ctx.program.incomplete.map(unknown)):resolved;
+        observations.set(expr.key, { value: previous ? union(previous.value, observed) : observed, expression: expressionText(expr.callee),
           kind: ['name', 'member', 'index', 'dereference'].includes(expr.callee.kind) ? 'variable' : 'unknown' });
       }
       const returns: Value[] = [], effects = new Map<string, { value: Value; count: number; definite: boolean }>();
@@ -1108,7 +1145,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     }
     if (expr.kind === 'initializer') return union(...expr.entries.map(entry => evaluate(entry.value, state, ctx)));
     if (expr.kind === 'unknown') for (const child of expr.children ?? []) evaluate(child, state, ctx);
-    return unknown('Unsupported value expression');
+    return unknown(expr.kind==='unknown'&&expr.reason?expr.reason:'Unsupported value expression');
   }
   function execute(body: FlowStatement[], state: State, ctx: Context): State {
     for (const statement of body) {
@@ -1224,7 +1261,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
           if (variants.length > 1) Object.assign(state, variants.slice(1).reduce(joinStates, variants[0]));
         });
         const end = execute(program.body, state, ctx); if (end.alive) ctx.exits.push(end);
-        exits.push(...ctx.exits); returned = union(returned, ctx.returned);
+        exits.push(...ctx.exits); returned = union(returned, ctx.returned, ...(program.incomplete??[]).map(unknown));
       }
       const exhausted = options.workBudget?.exhausted(id);
       if (exhausted) { returned = union(returned, unknown('Callback function work limit reached')); notice('Callback function work limit reached', undefined, true); }
@@ -1238,6 +1275,14 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
         if (target.omittedRegions.has(root)) return;
         if (target.omittedRegions.size >= 256) { projectIncomplete = true; return; }
         target.omittedRegions.add(root); target.version++; changed = true;
+      }
+      if(exhausted||list.some(program=>program.incomplete?.length)) {
+        for(const root of omittedWrites(id,list.some(program=>!!program.incomplete?.length))) {
+          omitSummaryRegion(root);
+          if(!root.startsWith('$arg:')&&!heapRegions.has(root)) {
+            heapRegions.add(root);registerRegion(heapRegions,root);changed=true;
+          }
+        }
       }
       for (const [root, exported] of all?.omittedRegions ?? []) {
         if (exported && !list.some(program => localSlot(root, { program, locals: new Map(program.locals.map(local => [local.id, local])), exits: [], returned: blank() })))

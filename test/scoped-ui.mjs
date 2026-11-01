@@ -79,7 +79,7 @@ try {
  assert.equal(await page.getByRole('dialog',{name:'Current function'}).getByText('Copied',{exact:true}).count(),0,'late replies must not mark a different popup as copied');
  await page.keyboard.press('Escape');
  await dispatch({type:'diagnostics',diagnostics:{...diagnostics,index:{...diagnostics.index,callbackAnalysis:{running:false,paused:false,limited:true}}}});
- await page.getByRole('button',{name:'Retry local',exact:true}).waitFor();
+ await page.getByRole('button',{name:'Re-run local',exact:true}).waitFor();
  await page.locator('[data-node-name="wrong"] .node-title').focus();
  await page.getByRole('button',{name:'Set manually',exact:true}).waitFor();
  await page.getByRole('button',{name:'Recheck with AI',exact:true}).waitFor();

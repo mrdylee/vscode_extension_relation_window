@@ -3,7 +3,7 @@ import * as path from 'node:path';
 import { Language, Node, Parser } from 'web-tree-sitter';
 import { BuildEvidence } from './build-context';
 
-export const MAKE_EXTRACTION_VERSION = 'tree-sitter-make-1.1.1-empty-replacement:1';
+export const MAKE_EXTRACTION_VERSION = 'tree-sitter-make-1.1.1-computed-eval:2';
 type Recipe = { text: string; evidence: BuildEvidence };
 type Branch = { operator?: 'ifeq' | 'ifneq' | 'ifdef' | 'ifndef'; left?: string; right?: string; body: MakeStatement[] };
 export type MakeStatement = { evidence: BuildEvidence } & (
@@ -11,6 +11,7 @@ export type MakeStatement = { evidence: BuildEvidence } & (
   { kind: 'condition'; branches: Branch[] } |
   { kind: 'include'; value: string; optional: boolean } |
   { kind: 'export'; names: string } |
+  { kind: 'expression'; value: string } |
   { kind: 'rule'; targets: string; prerequisites: string; orderOnly: string; recipes: Recipe[] } |
   { kind: 'unsupported'; code: string; message: string }
 );
@@ -60,11 +61,28 @@ export async function parseMakefile(text: string, uri: string): Promise<MakeStat
     try { parser.setLanguage(grammar); }
     catch (error) { language = undefined; return [unsupported(undefined, 'make-parser-unavailable', `Make grammar is incompatible: ${String(error)}`)]; }
     const started = performance.now();
-    tree = parser.parse(text.endsWith('\n') ? text : text + '\n', null, { progressCallback: () => performance.now() - started > 1000 });
+    // Mask unsupported name spelling/comments while retaining original offsets.
+    let comment = false, continued = false, recipe = false;
+    const lines=text.split(/(?<=\n)/);
+    const input = lines.map((line,n) => {
+      if(!continued)recipe=line.startsWith('\t');
+      continued=/\\\r?\n$/.test(line);
+      const hidden = comment || /^ *#/.test(line);
+      comment = hidden && /\\\r?\n$/.test(line);
+      if (hidden) return line.replace(/[^\r\n]/g, ' ');
+      if(recipe&&/^\s*$/.test(lines[n+1]??'')&&/\\\r?\n$/.test(line))line=line.replace(/\\(?=\r?\n$)/,' ');
+      if(/^\s*$/.test(line))return line.replace(/\t/g,' ');
+      line=line.replace(/^([^=\r\n\t]+?)([ \t]*:(?!=))/, (_all,targets,colon)=>targets.replace(/\$\([^)]*\)/g,(name:string)=>'N'.repeat(name.length))+colon);
+      line=line.replace(/^([ ]*)([^\s:=?+]+)([ \t]*(?:::?=|\+=|\?=|=))/, (all, space, name, operator) =>
+        name.includes('$') ? space + name.replace(/./g, 'N') + operator : all);
+      return line.replace(/^([ ]*[^\s:=?+]+[ \t]*(?:::?=|\+=|\?=|=))([^\r\n]*)/,(_all,head,rhs)=>head+rhs.replace(/[^\s\\]/g,'V'));
+    }).join('');
+    tree = parser.parse(input.endsWith('\n') ? input : input + '\n', null, { progressCallback: () => performance.now() - started > 1000 });
     if (!tree) return [unsupported(undefined, 'extraction-limited', 'Make syntax parsing time limit')];
     let visited = 0;
     const field = (node: Node, name: string) => node.childForFieldName(name);
-    const value = (node: Node | null) => node ? valueText(node.text) : '';
+    const original = (node: Node) => text.slice(node.startIndex, node.endIndex);
+    const value = (node: Node | null) => node ? valueText(original(node)) : '';
     function statements(nodes: Node[], depth: number): MakeStatement[] {
       const result: MakeStatement[] = [];
       for (const node of nodes) {
@@ -95,9 +113,11 @@ export async function parseMakefile(text: string, uri: string): Promise<MakeStat
         if (node.type === 'variable_assignment' || node.type === 'define_directive') {
           const definition = node.type === 'define_directive';
           result.push({ kind: 'assignment', name: value(field(node, 'name')), operator: field(node, 'operator')?.text ?? '=',
-            value: definition ? (field(node, 'value')?.text ?? '').replace(/\r?\n$/, '') : value(field(node, 'value')),
+            value: definition ? (field(node, 'value') ? original(field(node, 'value')!) : '').replace(/\r?\n$/, '') : value(field(node, 'value')),
             targets: field(node, 'target_or_pattern') ? value(field(node, 'target_or_pattern')) : undefined,
             exported: false, evidence: itemEvidence });
+        } else if (node.type === 'function_call' && /^\$\((?:eval|call|foreach)\s/.test(original(node))) {
+          result.push({kind:'expression',value:original(node),evidence:itemEvidence});
         } else if (node.type === 'include_directive') {
           result.push({ kind: 'include', value: value(field(node, 'filenames')), optional: node.firstChild?.text !== 'include', evidence: itemEvidence });
         } else if (node.type === 'export_directive') {
@@ -108,7 +128,8 @@ export async function parseMakefile(text: string, uri: string): Promise<MakeStat
           else result.push(unsupported(node, 'unsupported-statement', 'Export-all Make semantics are not evaluated'));
         } else if (node.type === 'rule') {
           const recipes: Recipe[] = [], recipe = node.namedChildren.find(n => n.type === 'recipe');
-          if (node.children.some(n => n.type === '::' || n.type === '&:') || field(node, 'target') || recipe?.namedChildren.some(n => n.type !== 'recipe_line' && n.type !== 'comment')) {
+          const trailing=recipe?.namedChildren.filter(n=>n.type==='conditional'&&[n,...n.namedChildren.filter(c=>c.type==='elsif_directive'||c.type==='else_directive')].every(branch=>branch.childrenForFieldName('consequence').every(c=>c.type!=='recipe_line')))??[];
+          if (node.children.some(n => n.type === '::' || n.type === '&:') || field(node, 'target') || recipe?.namedChildren.some(n => n.type !== 'recipe_line' && n.type !== 'comment'&&!trailing.includes(n))) {
             result.push(unsupported(node, 'unsupported-statement', 'Make rule semantics are not evaluated')); continue;
           }
           for (const line of recipe?.namedChildren ?? []) if (line.type === 'recipe_line') recipes.push({
@@ -116,6 +137,7 @@ export async function parseMakefile(text: string, uri: string): Promise<MakeStat
           });
           result.push({ kind: 'rule', targets: value(node.namedChildren.find(n => n.type === 'targets') ?? null).trim(),
             prerequisites: value(field(node, 'normal')).trim(), orderOnly: value(field(node, 'order_only')).trim(), recipes, evidence: itemEvidence });
+          result.push(...statements(trailing,depth+1));
         } else result.push(unsupported(node, 'unsupported-statement', `Make syntax is not evaluated: ${node.type}`));
       }
       return result;

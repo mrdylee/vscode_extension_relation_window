@@ -3,6 +3,12 @@ import assert from 'node:assert/strict';
 import { discoverBuildEntries } from '../src/build-discovery';
 import { buildFixture } from './build-fixtures';
 
+test('nested Make entries use their own working directory', async () => {
+  const f = buildFixture({'source/Makefile':'include make.cfg','source/app/a.c':''});
+  const result = await discoverBuildEntries(f.fs,{rootUri:'file:///p',sourceUris:['file:///p/source/app/a.c']});
+  assert.equal(result.entries.find(entry=>entry.entryUri==='file:///p/source/Makefile')?.cwdUri,'file:///p/source');
+});
+
 test('all module ancestors are inspected once without unrelated subtree traversal', async () => {
   const f = buildFixture({ 'build.bat': 'make -f Makefile', Makefile: 'include App/motor/module.mk App/battery/module.mk',
     'App/motor/module.mk': 'SOURCES += App/motor/src/a.c', 'App/motor/options.mk': 'CFLAGS += -DMOTOR',

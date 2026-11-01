@@ -59,13 +59,13 @@ export type FlowExpression = { location: Location } & (
   | { kind: 'assign'; left: FlowExpression; right: FlowExpression; operator: string }
   | { kind: 'call'; callee: FlowExpression; args: FlowExpression[]; key: string }
   | { kind: 'initializer'; entries: { path: (string | number)[]; value: FlowExpression }[] }
-  | { kind: 'unknown'; children?: FlowExpression[] });
+  | { kind: 'unknown'; children?: FlowExpression[]; reason?: string });
 export type FlowStatement =
   | { kind: 'expression' | 'return'; value: FlowExpression }
   | { kind: 'branch'; condition: FlowExpression; then: FlowStatement[]; otherwise: FlowStatement[] }
   | { kind: 'loop'; condition: FlowExpression; body: FlowStatement[] };
 export interface FlowLocal { id: string; name: string; type?: CType; location: Location; scope: { start: number; end: number }; parameter?: number; conditions?: string[]; persistent?: boolean }
-export interface FlowProgram { id: string; locals: FlowLocal[]; params: string[]; body: FlowStatement[] }
+export interface FlowProgram { id: string; locals: FlowLocal[]; params: string[]; body: FlowStatement[]; incomplete?: string[] }
 export interface GlobalInitializer { id: string; value: FlowExpression; location: Location }
 export interface MacroBranch { key: string; value: boolean; condition: string }
 export interface MacroDefinition {

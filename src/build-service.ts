@@ -58,7 +58,7 @@ export function registerBuildConfigurations(context: vscode.ExtensionContext, wo
         if (disposed || epoch !== revision) return;
       }
       const resolved = current?.units.filter(unit => unit.status === 'resolved').length ?? 0;
-      workspace.buildStatus = { label: selected ? decodeURIComponent(selected.entryUri.split('/').pop()!) : `${entries.length} build configuration${entries.length === 1 ? '' : 's'} found${discoveryIssues.length?' · Discovery incomplete':''}`,
+      workspace.buildStatus = { label: selected ? decodeURIComponent(selected.entryUri.split('/').pop()!) : `No build selected · ${entries.length} found${discoveryIssues.length?' · Discovery incomplete':''}`,
         state: discoveryIssues.length||current && (current.coverage !== 'complete' || current.units.length !== resolved) ? 'partial' : 'ready', candidates: entries.length, resolved, unresolved: (current?.units.length ?? 0) - resolved };
       changed();
     } catch (error) {
@@ -91,7 +91,8 @@ export function registerBuildConfigurations(context: vscode.ExtensionContext, wo
       const file = files?.[0]; if (!file) return;
       const folder = vscode.workspace.getWorkspaceFolder(file); if (!folder) { await vscode.window.showErrorMessage('Choose a build entry inside an open workspace folder.'); return; }
       const rootUri = folder.uri.toString().replace(/\/$/, ''), uri = file.toString();
-      entry = { id: fingerprintBuildInput([rootUri, uri]), rootUri, entryUri: uri, cwdUri: rootUri, dialect: /\.(bat|cmd)$/i.test(uri) ? 'cmd' : /\.sh$/i.test(uri) ? 'sh' : 'make', args: [], evidence: [] };
+      const dialect = /\.(bat|cmd)$/i.test(uri) ? 'cmd' : /\.sh$/i.test(uri) ? 'sh' : 'make';
+      entry = { id: fingerprintBuildInput([rootUri, uri]), rootUri, entryUri: uri, cwdUri: dialect === 'make' ? uri.slice(0, uri.lastIndexOf('/')) : rootUri, dialect, args: [], evidence: [] };
     }
     if (entry) {
       const preview = await cache.profile(entry, sources(), process.env);
@@ -109,8 +110,8 @@ export function registerBuildConfigurations(context: vscode.ExtensionContext, wo
     await refresh(); await report();
   }
   const watcher = vscode.workspace.createFileSystemWatcher('**/*');
-  const onMetadata = (uri: vscode.Uri) => { if (cache.invalidate(uri.toString())) { inputKey = ''; schedule(); } };
-  const subscriptions = [watcher, watcher.onDidCreate(onMetadata), watcher.onDidChange(onMetadata), watcher.onDidDelete(onMetadata),
+  const onMetadata = (uri: vscode.Uri, structure = false) => { if (cache.invalidate(uri.toString(),structure)) { inputKey = ''; schedule(); } };
+  const subscriptions = [watcher, watcher.onDidCreate(uri=>onMetadata(uri,true)), watcher.onDidChange(uri=>onMetadata(uri)), watcher.onDidDelete(uri=>onMetadata(uri,true)),
     workspace.changed.event(() => schedule()), vscode.workspace.onDidChangeWorkspaceFolders(() => schedule(true)),
     vscode.workspace.onDidChangeConfiguration(event => { if (['include', 'exclude'].some(key => event.affectsConfiguration('dynsight.' + key))) schedule(true); }),
     vscode.commands.registerCommand('dynsight.selectBuildConfiguration', () => select()),

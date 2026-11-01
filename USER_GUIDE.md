@@ -662,7 +662,9 @@ Hover for the round and function counts; rounds repeat until convergence, so the
 count is not an overall completion percentage.
 
 **Stop local** interrupts the busy Worker and retains discovered targets as
-incomplete. **Retry local** recomputes relationships using parsed sources; it does
+incomplete. **Resume local** resumes a paused analysis. Interrupted analysis offers
+**Retry local**; fixed bounds show **Local analysis limited** and **Re-run local**.
+Re-running uses the same limits. It recomputes relationships using parsed sources; it does
 not continue from the exact interrupted instruction. Both actions are also in the
 command palette as **Dynsight: Stop Local Analysis / Resume Local Analysis**.
 Stopped analysis remains paused across source edits until Retry or Rebuild.
@@ -829,6 +831,10 @@ The graph displays at most 300 nodes. Recursion stops expansion along that path.
 Run **Dynsight: Select Build Configuration**, or use the **Build** button in Relation, to choose an existing Makefile or shell/batch build entry. Discovery starts from the C/H files selected by general Include/Exclude and checks their parent directories up to the workspace root. It finds multiple module `.mk` files and follows actual include and script calls. A nearby `.mk` alone is not treated as proof that its options apply. Use **Choose build entry file…** when a nested entry was not discovered.
 
 The selected configuration is remembered for this workspace. A read-only preview shows each compile command, working directory, source locations and unresolved reasons. Required script arguments can be entered when selecting that script. Existing compiler commands are inspected without executing scripts, Make, or the compiler; no compilation database is required.
+
+**No build selected · N found** means discovery finished but no build context is applied. Nested Makefiles use their own directory. Bounded computed variable names, outer `eval(call …)` module includes, `MAKEFILE_LIST` and simple final-component wildcard source lists are read statically. Nested eval inside call/foreach scopes and unsupported wildcard forms remain unresolved. Creating/removing a wildcard source invalidates cached build metadata.
+
+Analysis cache compatibility17 requires **Rebuild index** after upgrading from compatibility16. Truncated macro alternatives and work-limited helper writes retain explicit uncertainty in dependent callback results; known candidates remain available.
 
 Supported static GCC Define/Include options affect preprocessing, macro expansion and callback candidates. Settings changes do not widen general or Smart Analysis scope. A required header outside the general scope is reported rather than indexed silently. Files whose build membership is unknown remain available through basic navigation. Header functions and static storage are distinguished by the source file that includes them; select that source context when prompted. Opening a contextual definition from Relation preserves its context.
 

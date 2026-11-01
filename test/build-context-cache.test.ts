@@ -10,6 +10,17 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { FileAnalysis } from '../src/model';
 
+test('new wildcard sources invalidate the cached directory and profile without source execution',async()=>{
+  const f=buildFixture({Makefile:'all: $(patsubst %.c,%.o,$(wildcard app/*.c))\n%.o: %.c\n\tgcc -c $<','app/a.c':''});
+  const cache=new BuildMetadataCache(f.fs),entry=(await cache.discover({rootUri:'file:///p',sourceUris:['file:///p/app/a.c']})).entries[0];
+  assert.equal((await cache.profile(entry,['file:///p/app/a.c'],{})).units.length,1);
+  f.texts.set('file:///p/app/b.c','');assert.equal(cache.invalidate('file:///p/app/b.c',true),true);
+  assert.equal((await cache.profile(entry,['file:///p/app/a.c'],{})).units.length,2);
+  f.texts.delete('file:///p/app/a.c');f.texts.delete('file:///p/app/b.c');
+  assert.equal(cache.invalidate('file:///p/app',true),true);
+  assert.equal((await cache.profile(entry,['file:///p/app/a.c'],{})).units.length,0);
+});
+
 test('warm source indexing reuses directory, file reads and resolved profile', async () => {
   const f = buildFixture({ Makefile: 'CC=gcc\na.o: a.c\n\t$(CC) -DMODE=1 -c $<' });
   const cache = new BuildMetadataCache(f.fs), request = { rootUri: 'file:///p', sourceUris: ['file:///p/a.c'] };

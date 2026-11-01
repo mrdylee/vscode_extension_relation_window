@@ -759,6 +759,18 @@ try {
     phases: { sources: { before: memory(20), after: memory(240) }, macros: { before: memory(240), after: memory(1100) }, callbacks: { before: memory(1100), after: memory(900) }, transfer: { before: memory(900), after: memory(900) } },
     counts: { files: 1820, sourceChars: 6000000, references: 82000, programs: 12000, macroFiles: 420 }
   } };
+  for(const [paused,limited,outcome,label,action] of [
+    [false,true,'work','Local analysis limited','Re-run local'],
+    [false,true,'completed','Local analysis limited','Re-run local'],
+    [false,false,'cancelled','Local analysis interrupted','Retry local'],
+    [false,true,'memory','Local analysis interrupted','Retry local'],
+    [true,false,'cancelled','Local analysis paused','Resume local']
+  ]) {
+    await configure({diagnostics:{...diagnostics,index:{callbackAnalysis:{paused,running:false,limited,progress:{outcome}}}}});
+    assert.equal(await page.getByText(label,{exact:true}).count(),1);
+    const actionButton=page.getByRole('button',{name:action,exact:true});assert.ok(await actionButton.isVisible());
+    if(action==='Re-run local')assert.match(await actionButton.getAttribute('title'),/same analysis limits/);
+  }
   diagnostics.index = { sessionStartedAt: at - 30000, rebuildCount: 5, sourceParses: 1820, relationPasses: 5,
     cache: { state: 'incompatible', reason: 'analysis-version', version: 2, savedVersion: 1, restored: 0, saved: 0 },
     lastSourceEvent: { at: at - 2000, kind: 'editor-close' },

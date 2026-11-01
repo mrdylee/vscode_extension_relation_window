@@ -10,7 +10,7 @@ export function makePattern(pattern: string, value: string): string | undefined 
 }
 // Deliberately evaluates data only. There is no shell, compiler or Make execution.
 export async function expandMake(text: string, variables: Map<string, MakeVariable>, automatic: Record<string,string>,
-  control: { step(): boolean; issue(message:string):void; read(path:string):Promise<string|undefined>; environment(name:string):void }, seen=new Set<string>(), nesting=0): Promise<string> {
+  control: { step(): boolean; issue(message:string):void; read(path:string):Promise<string|undefined>; environment(name:string):void; evaluate?(text:string):Promise<void>; wildcard?(pattern:string):Promise<string|undefined> }, seen=new Set<string>(), nesting=0): Promise<string> {
   const fail=(message:string)=>{control.issue(message);return unknownBuildValue;};
   if(!control.step()||seen.size>32||nesting>32||text.length>65_536)return fail('Build variable expansion limit');
   const expand=(value:string)=>expandMake(value,variables,automatic,control,seen,nesting+1);
@@ -22,6 +22,18 @@ export async function expandMake(text: string, variables: Map<string, MakeVariab
       const parts:string[]=[];let start=0,depth=0;
       for(let i=0;i<fn[2].length;i++){if(fn[2][i]==='('||fn[2][i]==='{')depth++;else if(fn[2][i]===')'||fn[2][i]==='}')depth--;else if(fn[2][i]===','&&!depth){parts.push(fn[2].slice(start,i));start=i+1;}}
       parts.push(fn[2].slice(start));
+      if(fn[1]==='eval'){
+        if(!control.evaluate)return fail('Make eval is unavailable in this context');
+        const value=await expand(fn[2]);if(value.includes(unknownBuildValue))return unknownBuildValue;
+        await control.evaluate(value);return '';
+      }
+      if(fn[1]==='call'){
+        const name=(await expand(parts[0]??'')).trim(),variable=variables.get(name);
+        if(!variable||seen.has(name))return fail(`Cannot statically evaluate Make call ${name}`);
+        const scoped=new Map(variables);scoped.set('0',{value:name,simple:true,origin:'file'});
+        for(let n=1;n<parts.length;n++)scoped.set(String(n),{value:await expand(parts[n]),simple:true,origin:'file'});
+        return expandMake(variable.value,scoped,automatic,{...control,evaluate:undefined},new Set([...seen,name]),nesting+1);
+      }
       if(fn[1]==='if'){const condition=await expand(parts[0]);if(condition.includes(unknownBuildValue))return unknownBuildValue;return expand(condition.trim()?parts[1]??'':parts[2]??'');}
       if(fn[1]==='foreach'){
         const name=(await expand(parts[0]??'')).trim(),list=await expand(parts[1]??'');
@@ -32,7 +44,7 @@ export async function expandMake(text: string, variables: Map<string, MakeVariab
         for(const word of words(list)){
           if(!control.step())return fail('Make foreach evaluation limit');
           scoped.set(name,{value:word,simple:true,origin:'file'});
-          const item=await expandMake(parts.slice(2).join(','),scoped,automatic,control,localSeen,nesting+1);
+          const item=await expandMake(parts.slice(2).join(','),scoped,automatic,{...control,evaluate:undefined},localSeen,nesting+1);
           if(item.includes(unknownBuildValue))return unknownBuildValue;
           if(result.length+item.length+1>65_536)return fail('Expanded build argument exceeds 64 KiB');
           result+=(first?'':' ')+item;first=false;
@@ -43,6 +55,16 @@ export async function expandMake(text: string, variables: Map<string, MakeVariab
       const args:string[]=[];for(const part of parts)args.push(await expand(part));
       if(args.some(a=>a.includes(unknownBuildValue)))return unknownBuildValue;
       const [a='',b='',c='']=args;
+      if(fn[1]==='wildcard') {
+        const result:string[]=[];
+        for(const pattern of words(a)) {
+          const matches=await control.wildcard?.(pattern);
+          if(matches===undefined)return fail('Cannot statically evaluate Make wildcard '+pattern);
+          if(result.join(' ').length+matches.length>65_536)return fail('Expanded build argument exceeds 64 KiB');
+          result.push(matches);
+        }
+        return result.filter(Boolean).join(' ');
+      }
       if(['addprefix','addsuffix'].includes(fn[1])&&words(b).reduce((n,v)=>n+v.length+a.length+1,0)>65_536||fn[1]==='subst'&&a&&c.length+(c.split(a).length-1)*(b.length-a.length)>65_536||fn[1]==='patsubst'&&words(c).length*b.length+c.length>65_536)return fail('Expanded build argument exceeds 64 KiB');
       switch(fn[1]){
         case 'strip':return words(a).join(' ');
@@ -74,7 +96,7 @@ export async function expandMake(text: string, variables: Map<string, MakeVariab
         if(result.length+next.length+1>65_536)return fail('Expanded build argument exceeds 64 KiB');result+=(result?' ':'')+next;
       }return result;}
     if(body.includes('$')){body=await expand(body);if(body.includes(unknownBuildValue))return unknownBuildValue;}
-    if(!/^[A-Za-z_][\w.-]*$/.test(body)||seen.has(body))return fail(`Cannot statically evaluate ${body}`);
+    if(!/^(?:[A-Za-z_][\w./-]*|\d+)$/.test(body)||seen.has(body))return fail(`Cannot statically evaluate ${body}`);
     const variable=variables.get(body);if(variable?.origin==='environment')control.environment(body);
     return !variable?'':variable.simple?variable.value:expandMake(variable.value,variables,automatic,control,new Set([...seen,body]),nesting+1);
   }

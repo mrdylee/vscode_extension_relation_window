@@ -4,6 +4,57 @@ import { discoverBuildEntries } from '../src/build-discovery';
 import { extractStaticBuildOptions } from '../src/build-options';
 import { buildFixture } from './build-fixtures';
 
+test('computed module variables and bounded eval-call includes supply compile options',async()=>{
+  const f=buildFixture({Makefile:'define INCLUDE_MODULE\ninclude $(1)/module.mk\nendef\nMODULE=APP_\n$(eval $(call INCLUDE_MODULE,app))\nCC=gcc\nall: $(APP_OBJS)\n%.o: %.c\n\t$(CC) $(FLAGS) -c $<',
+    'app/module.mk':'$(MODULE)OBJS := app/a.o\nFLAGS=-DMODE=7 -Iapp\n'});
+  const p=await extractStaticBuildOptions(f.fs,makeEntry,['file:///p/app/a.c'],{});
+  assert.equal(p.units.length,1,JSON.stringify(p.issues));
+  assert.equal(p.units[0].status,'resolved');
+  assert.equal(p.units[0].macroActions[0].replacement,'7');
+  assert.equal(p.units[0].includeSearch[0].uri,'file:///p/app');
+});
+test('shared target-specific immediate options do not multiply extraction work per object',async()=>{
+  const names=Array.from({length:600},(_,n)=>'a'+n);
+  const f=buildFixture({Makefile:'OBJS='+names.map(n=>n+'.o').join(' ')+'\nFLAGS=-DGLOBAL\n$(OBJS): FLAGS := $(FLAGS) -DLOCAL\nall: $(OBJS)\n%.o: %.c\n\tgcc $(FLAGS) -c $<\n'});
+  const p=await extractStaticBuildOptions(f.fs,makeEntry,names.map(n=>'file:///p/'+n+'.c'),{});
+  assert.equal(p.units.length,names.length,JSON.stringify(p.issues.slice(0,2)));
+  assert.ok(p.units.every(unit=>unit.status==='resolved'));
+  assert.ok(!p.issues.some(issue=>issue.code==='extraction-limited'));
+});
+test('unrelated target option groups do not consume the budget for every source prerequisite',async()=>{
+  const names=Array.from({length:800},(_,n)=>'a'+n);
+  const options=Array.from({length:30},(_,n)=>`unused${n}.o: FLAGS=-DUNUSED${n}`).join('\n');
+  const f=buildFixture({Makefile:options+'\nall: '+names.map(n=>n+'.o').join(' ')+'\n%.o: %.c\n\tgcc -DOK -c $<\n'});
+  const p=await extractStaticBuildOptions(f.fs,makeEntry,names.map(n=>'file:///p/'+n+'.c'),{});
+  assert.equal(p.units.length,names.length,JSON.stringify(p.issues.slice(0,2)));
+});
+test('MAKEFILE_LIST updates before evaluating each included module',async()=>{
+  const f=buildFixture({Makefile:'include app/module.mk\nCC=gcc\na.o: a.c\n\t$(CC) -DCOUNT=$(words $(MAKEFILE_LIST)) $(FLAGS) -c $<',
+    'app/module.mk':'FLAGS=-I$(dir $(word $(words $(MAKEFILE_LIST)),$(MAKEFILE_LIST)))'});
+  const p=await extractStaticBuildOptions(f.fs,makeEntry,['file:///p/a.c'],{});
+  assert.equal(p.units[0].macroActions[0].replacement,'2');
+  assert.equal(p.units[0].includeSearch[0].uri,'file:///p/app');
+});
+test('read-only wildcard source discovery supplies Make object lists',async()=>{
+  const f=buildFixture({Makefile:'SOURCES := $(wildcard app/*.c)\nall: $(SOURCES:.c=.o)\n%.o: %.c\n\tgcc -DMODE=1 -c $<', 'app/b.c':'','app/a.c':'','app/ignored.h':''});
+  const p=await extractStaticBuildOptions(f.fs,makeEntry,['file:///p/app/a.c','file:///p/app/b.c'],{});
+  assert.deepEqual(p.units.map(unit=>unit.sourceUri),['file:///p/app/a.c','file:///p/app/b.c']);
+  assert.ok(p.units.every(unit=>unit.status==='resolved'));
+  assert.ok(p.dependencies.some(dep=>dep.uri==='file:///p/app'));
+});
+test('recursive eval-call expansion remains bounded and cannot execute recipes',async()=>{
+  const f=buildFixture({Makefile:'define RECURSE\n$(eval $(call RECURSE))\nendef\n$(eval $(call RECURSE))\n'});
+  const p=await extractStaticBuildOptions(f.fs,makeEntry,[],{});
+  assert.ok(p.issues.some(issue=>/limit|expression/.test(issue.code)));
+  assert.equal(p.units.length,0);
+});
+test('eval inside call-local variable scope stays explicitly unsupported',async()=>{
+  const f=buildFixture({Makefile:'define SET_FLAGS\n$(eval FLAGS := -DVALUE=$$(1))\nendef\n$(call SET_FLAGS,7)\na.o: a.c\n\tgcc $(FLAGS) -c $<\n'});
+  const p=await extractStaticBuildOptions(f.fs,makeEntry,['file:///p/a.c'],{});
+  assert.ok(p.issues.some(issue=>issue.code==='unsupported-expression'));
+  assert.ok(p.units.every(unit=>unit.status==='partial'));
+});
+
 const makeEntry = { id: 'repair', rootUri: 'file:///p', entryUri: 'file:///p/Makefile', cwdUri: 'file:///p', dialect: 'make' as const, args: [], evidence: [] };
 for (const compiler of ['gcc', 'dcc']) {
   test(`${compiler}: quoted Make conditions select the active compile options`, async () => {

@@ -3,6 +3,44 @@ import assert from 'node:assert/strict';
 import { parseMakefile } from '../src/build-make-parser';
 
 const uri = 'file:///p/Makefile';
+test('top-level conditions following a recipe retain their global statements',async()=>{
+  const result=await parseMakefile('print_env:\n\techo flags\n\nifneq (A,B)\na.o: config.mk\nendif\n',uri);
+  assert.equal(result[0].kind,'rule');assert.equal(result[1].kind,'condition');
+  if(result[1].kind==='condition')assert.equal(result[1].branches[0].body[0].kind,'rule');
+});
+test('computed rule targets stay separate from the preceding recipe',async()=>{
+  const result=await parseMakefile('all:\n\techo done\n$(APP):\n\tgcc -c a.c\n',uri);
+  assert.equal(result.length,2);
+  assert.equal(result[1].kind,'rule');if(result[1].kind==='rule')assert.equal(result[1].targets,'$(APP)');
+});
+test('a recipe continuation ending in a tab-only line does not swallow the next target',async()=>{
+  const result=await parseMakefile('all:\n\t@echo done; \\\n\t\t\n$(APP):\n\tgcc -c a.c\n',uri);
+  assert.equal(result.length,2);
+  assert.equal(result[1].kind,'rule');if(result[1].kind==='rule')assert.equal(result[1].targets,'$(APP)');
+});
+test('assignment continuations through blank lines contain no literal slash argument',async()=>{
+  const result=await parseMakefile('OPTIONS := \\\n\t-DMODE=1 \\\n\nall:\n\techo $(OPTIONS)\n',uri);
+  assert.equal(result[0].kind,'assignment');
+  if(result[0].kind==='assignment')assert.equal(result[0].value.trim(),'-DMODE=1');
+});
+test('assignment expressions retain data for the bounded expression evaluator',async()=>{
+  const result=await parseMakefile('LOCAL_SRCS := $(foreach dir,$(DIRS),$(wildcard $(dir)/src/*.c))\n',uri);
+  assert.equal(result[0].kind,'assignment');
+  if(result[0].kind==='assignment')assert.equal(result[0].value,'$(foreach dir,$(DIRS),$(wildcard $(dir)/src/*.c))');
+});
+test('computed variable names preserve their original spelling and locations', async () => {
+  const result=await parseMakefile('MODULE=APP_\n$(MODULE)SRCS := a.c\nifeq (1,1)\n$(MODULE)OBJS += a.o\nendif\n',uri);
+  assert.equal(result[1].kind,'assignment');
+  if(result[1].kind==='assignment'){assert.equal(result[1].name,'$(MODULE)SRCS');assert.equal(result[1].value,'a.c');assert.equal(result[1].evidence.line,1);}
+  assert.equal(result[2].kind,'condition');
+  if(result[2].kind==='condition')assert.equal(result[2].branches[0].body[0].kind,'assignment');
+});
+test('continued non-recipe comments do not consume the following assignment', async () => {
+  const result=await parseMakefile('# DISABLED := \\\n\tignored \\\n\tignored\nFLAGS=-DOK\na.o: a.c\n\tgcc $(FLAGS) -c $<\n',uri);
+  assert.equal(result[0].kind,'assignment');
+  if(result[0].kind==='assignment')assert.equal(result[0].name,'FLAGS');
+  assert.equal(result[1].kind,'rule');
+});
 test('Make syntax preserves conditional branches, target selectors and definition flavor', async () => {
   const result = await parseMakefile('ifeq "$(MODE)" "A"\nX=1\nY=2\nelse ifneq ($(MODE),B)\nX=3\nelse\nX=4\nendif\na.o: FLAGS += -DLOCAL\ndefine FLAGS :=\n-DONE\n-DTWO\nendef\n', uri);
   assert.equal(result.length, 3);

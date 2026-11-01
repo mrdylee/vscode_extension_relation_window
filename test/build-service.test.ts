@@ -30,6 +30,7 @@ test('build configuration discovery stays read-only and selection applies only a
   const service = module.exports.registerBuildConfigurations(context, workspace);
   try {
     await service.ready; assert.equal(applied, undefined); assert.equal(saved.size, 0);
+    assert.match((workspace as any).buildStatus.label,/No build selected/);
     await commands.get('dynsight.selectBuildConfiguration')!();
     assert.equal((applied as any).units[0].sourceUri, 'file:///p/App/a.c');
     assert.equal((applied as any).units[0].macroActions[0].replacement, '1');

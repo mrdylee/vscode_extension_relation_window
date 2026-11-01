@@ -334,6 +334,7 @@ export function deriveMacroCalls(raw: FileAnalysis[], analyze: Analyze, parseCal
       const tokens = tokenizeC(activeText(file, init.location.start, init.location.end), (start, end) => sourceLocation(init.location.start + start, init.location.start + end));
       const expander = new MacroExpander(lookup, memoryPressure, shouldCancel, budget, init.id), variants = expander.expand(tokens);
       expander.issues.forEach(issue => issues.add(issue));
+      const incomplete = [...expander.issues, ...[...issues].filter(issue => issue.startsWith('Macro environment'))].filter(issue => /limit|budget/.test(issue));
       if (budget?.projectExhausted) return init;
       if (issues.has(macroMemoryLimit)) return init;
       if (!variants.some(variant => variant.changed)) return init;
@@ -351,6 +352,7 @@ export function deriveMacroCalls(raw: FileAnalysis[], analyze: Analyze, parseCal
         if (parsed.issues.length) issues.add('Macro-expanded initializer near line ' + (init.location.line + 1) + ' has unsupported syntax');
         return parsed.value;
       });
+      if(incomplete.length)values.push({kind:'unknown',reason:incomplete.join('; '),location:init.location});
       const value: FlowExpression = values.length === 1 ? values[0] : { kind: 'choice', values, location: init.location };
       return { ...init, value };
     });
@@ -364,10 +366,14 @@ export function deriveMacroCalls(raw: FileAnalysis[], analyze: Analyze, parseCal
       const tokens = tokenizeC(activeText(file, fn.body.start, fn.body.end), (start, end) => sourceLocation(fn.body.start + start, fn.body.start + end));
       const expander = new MacroExpander(lookup, memoryPressure, shouldCancel, budget, fn.id), variants = expander.expand(tokens);
       expander.issues.forEach(issue => issues.add(issue));
+      const incomplete = [...expander.issues, ...[...issues].filter(issue => issue.startsWith('Macro environment'))].filter(issue => /limit|budget/.test(issue));
       if (budget?.projectExhausted) return partial(macroWorkLimit);
       if (shouldCancel?.()) return partial(macroCancelled);
       if (issues.has(macroMemoryLimit)) return partial(macroMemoryLimit);
-      if (!variants.some(variant => variant.changed)) continue;
+      if (!variants.some(variant => variant.changed)) {
+        if(incomplete.length)programs=programs.map(program=>program.id===fn.id?{...program,incomplete}:program);
+        continue;
+      }
       const calls: ReferenceRecord[] = [], seen = new Set<string>();
       const generatedPrograms: FlowProgram[] = [];
       const generatedInitializers: GlobalInitializer[] = [];
@@ -428,7 +434,7 @@ export function deriveMacroCalls(raw: FileAnalysis[], analyze: Analyze, parseCal
             expansion, macroIds: token.unexpanded ? macroIds(ref.name, token.location.start) : [] });
         }
       }
-      programs = programs.filter(program => program.id !== fn.id).concat(generatedPrograms);
+      programs = programs.filter(program => program.id !== fn.id).concat(incomplete.length?generatedPrograms.map(program=>({...program,incomplete})):generatedPrograms);
       initializers = initializers.filter(init => !init.id.startsWith(fn.id + ':static:')).concat(generatedInitializers);
       // Retain source-level macro/address references, but replace effective calls.
       const replaced = new Set(calls.map(ref => `${ref.name}:${ref.location.start}`));

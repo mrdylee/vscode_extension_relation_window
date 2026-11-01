@@ -37,8 +37,20 @@ export async function extractStaticBuildOptions(fs: BuildFileSystem, entry: Buil
     if (text === undefined && !optional) issue('missing-build-input', `Build input unavailable: ${uri}`, evidence);
     return text;
   }
-  function expand(text: string, variables: Map<string, Variable>, evidence: BuildEvidence, automatic: Record<string, string> = {}, cwd=entry.cwdUri): Promise<string> {
-    return expandMake(text,variables,automatic,{step:()=>++operations<=20_000,issue:message=>issue(/limit|exceeds/.test(message)?'extraction-limited':'unsupported-expression',message,evidence),read:path=>read(resolveBuildUri(cwd,path),evidence),environment:name=>usedEnvironment.add(name)});
+  function expand(text: string, variables: Map<string, Variable>, evidence: BuildEvidence, automatic: Record<string, string> = {}, cwd=entry.cwdUri, evaluate?: (text:string)=>Promise<void>): Promise<string> {
+    return expandMake(text,variables,automatic,{step:()=>++operations<=20_000,issue:message=>issue(/limit|exceeds/.test(message)?'extraction-limited':'unsupported-expression',message,evidence),read:path=>read(resolveBuildUri(cwd,path),evidence),environment:name=>usedEnvironment.add(name),evaluate,
+      wildcard:async pattern=>{
+        const slash=pattern.lastIndexOf('/'),directory=pattern.slice(0,slash+1),name=pattern.slice(slash+1);
+        if(/[*?[\]]/.test(directory)||/[\[\]]/.test(name)||++operations>20_000)return;
+        const uri=resolveBuildUri(cwd,directory||'.');let entries:Awaited<ReturnType<BuildFileSystem['list']>>;
+        try{entries=await fs.list(uri);}catch{return;}
+        dependencies.set(uri,fingerprintBuildInput(entries.map(entry=>[entry.uri,entry.kind]).sort()));
+        const expression=new RegExp('^'+name.split(/([*?])/).map(part=>part==='*'?'.*':part==='?'?'.':part.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')).join('')+'$');
+        const found:string[]=[];
+        for(const entry of entries){if(++operations>20_000){issue('extraction-limited','Make wildcard traversal limit',evidence);return;}
+          const leaf=decodeURIComponent(entry.uri.split('/').pop()!);if(expression.test(leaf))found.push(directory+leaf);}
+        return found.sort().join(' ');
+      }});
   }
   function words(text: string, dialect: 'posix' | 'windows', evidence: BuildEvidence): string[] {
     const result = splitBuildWords(text, dialect);
@@ -72,9 +84,10 @@ export async function extractStaticBuildOptions(fs: BuildFileSystem, entry: Buil
       if (!filenames.length) { issue('missing-build-input', `No Makefile at ${cwd}`, chain.at(-1)); return; }
     }
     const rules: Rule[] = [], reading = new Set<string>(); let defaultTarget: string | undefined;
-    const targetVariables: {targets:string[];name:string;operator:string;raw:string;evidence:BuildEvidence}[]=[];
-    const matchingVariables=(name:string)=>targetVariables.filter(item=>++operations<=20_000&&item.targets.some(t=>makePattern(t,name)!==undefined)).sort((a,b)=>{
-      const priority=(item:typeof a)=>Math.max(...item.targets.map(t=>t.includes('%')?t.length:65_537));
+    type TargetVariable = {targets:string[];name:string;operator:string;raw:string;evidence:BuildEvidence};
+    const exactVariables=new Map<string,TargetVariable[]>(),patternVariables:TargetVariable[]=[];
+    const matchingVariables=(name:string)=>[...(exactVariables.get(name)??[]),...patternVariables.filter(item=>item.targets.some(t=>t.includes('%')&&makePattern(t,name)!==undefined))].filter(()=>++operations<=20_000).sort((a,b)=>{
+      const priority=(item:typeof a)=>item.targets.includes(name)?65_537:Math.max(...item.targets.filter(t=>makePattern(t,name)!==undefined).map(t=>t.length));
       return priority(a)-priority(b);
     });
     async function assign(vs:Map<string,Variable>,name:string,operator:string,raw:string,evidence:BuildEvidence,exported=false,literal=false){
@@ -107,21 +120,39 @@ export async function extractStaticBuildOptions(fs: BuildFileSystem, entry: Buil
             if (statement.optional && await read(next, evidence, true) === undefined) continue;
             await parse(next, nesting + 1);
           }
+        } else if (statement.kind === 'expression') {
+          const value=await expand(statement.value,variables,evidence,{},cwd,async text=>{
+            if(nesting>=32){issue('extraction-limited','Make eval nesting limit',evidence);return;}
+            await evaluate(await parseMakefile(text,evidence.uri),nesting+1);
+          });
+          if(value.trim()&&!value.includes(unknown))issue('unsupported-statement','Standalone Make expansion is not empty',evidence);
         } else if (statement.kind === 'assignment') {
+          const name=await expand(statement.name,variables,evidence,{},cwd);
+          if(!/^[A-Za-z_][\w./-]*$/.test(name)){issue('unsupported-expression','Unresolved Make variable name',evidence);continue;}
           if (statement.targets !== undefined) {
             const targets = words(await expand(statement.targets, variables, evidence, {}, cwd), 'posix', evidence);
+            const immediate=new Map<string,string>(),groups=new Map<string,TargetVariable>();
             for (const target of targets) {
               let raw = statement.value;
               const priorFailure = failed;
               if (statement.operator === ':=' || statement.operator === '::=') {
-                const vs = new Map(variables);
-                for (const prior of matchingVariables(target)) await assign(vs, prior.name, prior.operator, prior.raw, prior.evidence, false, true);
-                raw = await expand(raw, vs, evidence, {}, cwd);
+                const matching=matchingVariables(target),key=fingerprintBuildInput(matching.map(prior=>[prior.name,prior.operator,prior.raw]));
+                if(immediate.has(key))raw=immediate.get(key)!;
+                else {
+                  const vs = new Map(variables);
+                  for (const prior of matching) await assign(vs, prior.name, prior.operator, prior.raw, prior.evidence, false, true);
+                  raw = await expand(raw, vs, evidence, {}, cwd);immediate.set(key,raw);
+                }
               }
               failed = priorFailure;
-              targetVariables.push({ targets: [target], name: statement.name, operator: statement.operator, raw, evidence });
+              const groupKey=(target.includes('%')?'pattern:'+target:'literal')+'\u0000'+raw;
+              let group=groups.get(groupKey);
+              if(group)group.targets.push(target);
+              else {group={ targets: [target], name, operator: statement.operator, raw, evidence };groups.set(groupKey,group);}
+              if(target.includes('%')){if(!patternVariables.includes(group))patternVariables.push(group);}
+              else {const items=exactVariables.get(target)??[];if(!items.includes(group))items.push(group);exactVariables.set(target,items);}
             }
-          } else await assign(variables, statement.name, statement.operator, statement.value, evidence, statement.exported);
+          } else await assign(variables, name, statement.operator, statement.value, evidence, statement.exported);
         } else if (statement.kind === 'export') {
           for (const name of words(await expand(statement.names, variables, evidence, {}, cwd), 'posix', evidence)) {
             const old = variables.get(name);
@@ -141,6 +172,9 @@ export async function extractStaticBuildOptions(fs: BuildFileSystem, entry: Buil
       if (nesting > 32 || reading.has(uri)) { issue('include-cycle', `Make include cycle/depth at ${uri}`); return; }
       const text = await read(uri);
       if (text === undefined) return;
+      const relative=decodeURIComponent(uri.startsWith(cwd.replace(/\/$/,'')+'/')?uri.slice(cwd.replace(/\/$/,'').length+1):uri);
+      const prior=variables.get('MAKEFILE_LIST')?.value;
+      variables.set('MAKEFILE_LIST',{value:prior?prior+' '+relative:relative,simple:true,origin:'file'});
       reading.add(uri);
       try { await evaluate(await parseMakefile(text, uri), nesting); }
       finally { reading.delete(uri); }

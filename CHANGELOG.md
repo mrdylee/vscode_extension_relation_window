@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.91 — 2026-11-01
+
+- Preserve uncertainty when macro alternatives are truncated or a helper stops before writing a callback; retain known candidates and scope known omitted writes to their storage.
+- Resolve nested Makefile working directories, computed names/targets, bounded eval-call includes, Makefile lists and read-only wildcard sources. Reuse shared target options within existing extraction bounds.
+- Distinguish fixed analysis limits from interrupted/paused analysis and show when discovered build entries have not been selected.
+- Advance analysis cache compatibility to17. Existing caches require Rebuild index; unsupported Diab options and generated artifacts remain partial.
+
 ## 0.1.90 — 2026-11-01
 
 - Default Dynsight Help to a read-only plaintext guide without invoking the built-in Markdown preview or language service.
