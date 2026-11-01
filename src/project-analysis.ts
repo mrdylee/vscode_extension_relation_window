@@ -70,7 +70,8 @@ function timeline(file: FileAnalysis, files: Map<string, FileAnalysis>, issues: 
     if (includeKey && completedIncludes.get(includeKey) === definitionRevision) return;
     if (++visits > 40_000) { issues.add(includeLimit); return; }
     const visitId = String(visits), identities = new Map<string, string>();
-    if (current.guard && defined.has(current.guard.name)) return;
+    const guarded = current.guard && defined.has(current.guard.name);
+    if (guarded && current.guard!.end === undefined) return;
     const optionalGuard = referenceNames && current.guard && uncertainGuards.has(current.guard.name) ? current.guard : undefined;
     if (stack.has(current.uri)) return;
     if (stack.size >= 64 || result.length >= 40_000) { issues.add('Macro include/event limit reached'); return; }
@@ -78,6 +79,7 @@ function timeline(file: FileAnalysis, files: Map<string, FileAnalysis>, issues: 
     if (opaqueFiles.get(current)) { opaqueEnvironment = true; if (referenceNames) issues.add(unknownInclude); }
     const next = new Set(stack).add(current.uri);
     for (const event of current.preprocessor ?? []) {
+      if (guarded && event.location.start < current.guard!.end!) continue;
       if (shouldCancel?.()) { issues.add(macroCancelled); break; }
       if (issues.has(macroMemoryLimit)) break;
       if ((result.length & 255) === 0 && memoryPressure?.()) { issues.add(macroMemoryLimit); break; }
@@ -85,8 +87,10 @@ function timeline(file: FileAnalysis, files: Map<string, FileAnalysis>, issues: 
       if (result.length >= 40_000) { issues.add('Macro include/event limit reached'); break; }
       const name = event.kind === 'define' ? event.macro.name : event.kind === 'undef' ? event.name : undefined;
       if (referenceNames && name && !referenceNames.has(name) && !guards!.has(name)) continue;
-      const conditions = [...inherited, ...(optionalGuard ? [optionalGuard.condition] : []), ...event.conditions.filter(condition => condition !== current.guard?.condition)];
-      const branches = combineBranches(inheritedBranches, [...(optionalGuard ? [{key:`${visitId}:guard`,value:true,condition:optionalGuard.condition}] : []), ...(event.branches ?? []).filter(branch => branch.condition !== current.guard?.condition).map(branch => ({...branch, key: identity(branch, identities)}))]);
+      const eventGuard = current.guard && (current.guard.end === undefined || event.location.start < current.guard.end) ? current.guard : undefined;
+      const eventOptionalGuard = eventGuard && optionalGuard;
+      const conditions = [...inherited, ...(eventOptionalGuard ? [eventOptionalGuard.condition] : []), ...event.conditions.filter(condition => condition !== eventGuard?.condition)];
+      const branches = combineBranches(inheritedBranches, [...(eventOptionalGuard ? [{key:`${visitId}:guard`,value:true,condition:eventOptionalGuard.condition}] : []), ...(event.branches ?? []).filter(branch => branch.condition !== eventGuard?.condition).map(branch => ({...branch, key: identity(branch, identities)}))]);
       if (!branches) continue;
       if (event.kind !== 'include') {
         if (referenceNames) {

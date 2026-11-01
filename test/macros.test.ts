@@ -428,6 +428,24 @@ test('ordinary include guards do not create exponential undefined macro alternat
   assert.equal(calls(index).find(g => g.name === 'foo')!.sites.length, 8);
   assert.ok([...index.files.values()].every(file => !file.issues.some(issue => /alternative limit/.test(issue))));
 });
+
+test('a guarded header prefix is included once while its unguarded postlude runs again', () => {
+  const header = '#ifndef CFG_H\n#define CFG_H\n#if BOARD\n#define PICK() first()\n#else\n#define PICK() second()\n#endif\n#endif\n#undef TAIL\n#define TAIL() last()\n';
+  const source = '#include "cfg.h"\n' + '#include "cfg.h"\n'.repeat(12) +
+    'void first(void){}void second(void){}void last(void){}void run(void){PICK();TAIL();}';
+  const index = project({'main.c':source,'cfg.h':header});
+  assert.deepEqual(calls(index).map(group=>group.name).sort(),['first','last','second']);
+  assert.ok([...index.files.values()].every(file=>!file.issues.some(issue=>/limit/.test(issue))));
+  const main = [...index.files.values()].find(file=>file.uri.endsWith('/main.c'))!;
+  assert.equal(main.programs?.filter(program=>program.id===main.symbols.find(symbol=>symbol.name==='run')?.id).length,2);
+});
+
+test('a matching guard condition in the postlude is not stripped with the guarded prefix',()=>{
+  const index=project({'main.c':'#include "cfg.h"\nvoid target(void){}void run(void){TAIL();}',
+    'cfg.h':'#ifndef CFG_H\n#define CFG_H\n#endif\n#ifndef CFG_H\n#define TAIL() target()\n#endif\n'});
+  const target=calls(index).find(group=>group.name==='target')!;
+  assert.ok(target.sites.some(site=>site.conditions.includes('#ifndef CFG_H')));
+});
 test('effective direct calls are not duplicated in References after unrelated macro expansion', () => {
   const source = '#define VALUE 1\nvoid foo(void){} void run(void){int x=VALUE;foo();}';
   const index = project({ 'main.c': source });

@@ -231,8 +231,8 @@ for (const limit of ['region', 'mutation']) test(`Worker scopes ${limit}-limit w
     return { id, result: new Promise((resolve, reject) => { pending.set(id, { resolve, reject }); worker.postMessage({ ...data, id }); }) };
   };
   try {
-    const fields = Array.from({ length: 257 }, (_, n) => `CB status${n};`).join('');
-    const changes = Array.from({ length: 257 }, (_, n) => limit === 'region' ? `opaque(&data.status${n});` : `data.status${n}=target;`).join('');
+    const fields = Array.from({ length: 1025 }, (_, n) => `CB status${n};`).join('');
+    const changes = Array.from({ length: 1025 }, (_, n) => limit === 'region' ? `opaque(&data.status${n});` : `data.status${n}=target;`).join('');
     const uri = 'file:///limits.c';
     const source = request({ uri, skip: true, text: `typedef void(*CB)(void);static void target(void){}struct Ops{CB cb;};
       static const struct Ops registered={.cb=target};static const struct Ops *active;static CB selected;

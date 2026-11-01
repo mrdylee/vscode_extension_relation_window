@@ -593,7 +593,7 @@ the relevant getter, registration and table definitions when collecting a reprod
 
 - Explicit member initializers such as `.cb_preprocess = target` remain attached to their object even if the structure definition is unavailable. Getter returns, argument passing and stored pointers can carry that object to a callback invocation. Positional initializers such as `{target, other}` still require a known field layout.
 - Macro/callback analysis limits show **Partial index: analysis limits reached** in the status bar. Existing relations remain usable; inspect **Analysis notices** for the limit that left results incomplete.
-- **Callback region limit: 256 reachable objects** bounds abstract storage regions
+- **Callback region limit: 1024 reachable objects** bounds abstract storage regions
   tracked by local callback flow analysis. **Stage=propagation** means function
   parameter, return and mutation effects were being propagated. Passing callback
   storage addresses to functions with unavailable bodies, or importing many
@@ -635,7 +635,7 @@ struct Ops ops = { .run = target };
 void run(void) { ops.run(); }
 ```
 
-Analysis runs in the Worker. Macro expansion is bounded to 32 alternatives, 32 nested steps and 40,000 tokens per function. Callback propagation is bounded to 64 value/alias candidates, 256 mutation slots per function, 12 project passes and 4 loop passes. There is no project time cutoff; use **Stop local** to interrupt it. **Analysis notices** and unknown targets identify partial results; narrowing Include/Exclude scope can reveal more targets. Ordinary integer values are not propagated across functions, so array candidates may be broader; addresses stored in integer variables and converted back remain unknown. This is not a complete compiler preprocessor or a proof of every build/runtime path. A selected Make build configuration supports contextual header occurrences; computed include paths, unsupported options and compiler defaults can still leave them unresolved. See **Existing Make build configurations** below.
+Analysis runs in the Worker. Macro expansion is bounded to 32 alternatives, 32 nested steps and 40,000 tokens per function. Callback propagation is bounded to 64 value/alias candidates, 1,024 mutation slots and reachable regions per function, 12 project passes and 4 loop passes. There is no project time cutoff; use **Stop local** to interrupt it. **Analysis notices** and unknown targets identify partial results; narrowing Include/Exclude scope can reveal more targets. Ordinary integer values are not propagated across functions, so array candidates may be broader; addresses stored in integer variables and converted back remain unknown. This is not a complete compiler preprocessor or a proof of every build/runtime path. A selected Make build configuration supports contextual header occurrences; computed include paths, unsupported options and compiler defaults can still leave them unresolved. See **Existing Make build configurations** below.
 
 ## Skip inactive branches
 
@@ -670,7 +670,7 @@ command palette as **Dynsight: Stop Local Analysis / Resume Local Analysis**.
 Stopped analysis remains paused across source edits until Retry or Rebuild.
 Old fixed-deadline caches retain parsed sources but recompute relationships once.
 These controls do not enable AI. Memory, work and convergence limits
-remain, including cumulative function/project work bounds and the 256-slot function mutation limit. A function budget is not reset on each propagation visit.
+remain, including a 100,000-operation cumulative function allowance per phase, shared project work accounting and the 1,024-slot workspace mutation limit. Macro scanning and callback propagation have separate function allowances; neither resets on repeated visits within its phase.
 
 Mutation slots count distinct storage locations retained in a function summary,
 including effects imported from helpers. Repeated writes to the same exact slot

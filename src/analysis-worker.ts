@@ -146,6 +146,9 @@ parentPort!.on('message', (request: Request) => {
         const cancellation = request.cancellation && new Int32Array(request.cancellation);
         diagnostics.callbacks = undefined;
         const control = {
+          // Whole-project diagnostic tables can export hundreds of exact slots.
+          // Keep a finite bound alongside the existing work/cancellation/heap guards.
+          storageLimit: 1024,
           shouldCancel: cancellation ? () => Atomics.load(cancellation, 0) !== 0 : undefined,
           onProgress: (progress: NonNullable<WorkerDiagnostics['callbacks']>) => {
             diagnostics.callbacks = progress;
@@ -178,7 +181,7 @@ parentPort!.on('message', (request: Request) => {
           else buildFiles = buildIncremental.derive(prepared, dirty => parser.derive(dirty, memoryPressure, phase, request.analyzeCallbacks, { ...control, workBudget: budget }), request.analyzeCallbacks);
           if (!control.shouldCancel?.() && !memoryPressure()) await buildAnalysis.save(prepared, buildFiles);
         }
-        let derived = request.buildProfile || request.buildPending ? basic : incremental.derive(files, dirty => parser.derive(dirty, memoryPressure, phase, request.analyzeCallbacks, control), request.analyzeCallbacks);
+        let derived = buildFiles?.length || request.buildPending ? basic : incremental.derive(files, dirty => parser.derive(dirty, memoryPressure, phase, request.analyzeCallbacks, control), request.analyzeCallbacks);
         if(control.shouldCancel?.()||derived.some(file=>file.issues.some(issue=>/memory budget/i.test(issue)))){
           let remaining=64-basic.reduce((total,file)=>total+(file.callbackDiagnostics?.filter(detail=>detail.kind==='cancelled').length??0),0);
           derived=derived.map((file,n)=>{

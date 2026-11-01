@@ -34,7 +34,7 @@ function coalesceObjects(objects: ReadonlySet<string>): ReadonlySet<string> {
   if (!patterns.length) return objects;
   return new Set([...objects].filter(object => !patterns.some(other => other.object !== object && other.pattern.test(object))));
 }
-const projectCache = new WeakMap<object, { inputs: FileAnalysis[]; results: FileAnalysis[]; analyzeCallbacks: boolean; memoryLimited?: boolean; progress?: CallbackProgress }>();
+const projectCache = new WeakMap<object, { inputs: FileAnalysis[]; results: FileAnalysis[]; analyzeCallbacks: boolean; storageLimit: number; memoryLimited?: boolean; progress?: CallbackProgress }>();
 const callbackMemoryLimit = 'Callback analysis memory budget reached; targets may be incomplete. Narrow Include/Exclude scope.';
 const fileCaches = new WeakMap<object, WeakMap<FileAnalysis, { fingerprint: string; result: FileAnalysis }>>();
 export function clearPointerCache(owner: object) { projectCache.delete(owner); fileCaches.delete(owner); }
@@ -153,10 +153,11 @@ function uniqueCalls(refs: ReferenceRecord[]): ReferenceRecord[] {
 // Static may-target propagation. Every produced edge is labelled as inferred.
 export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => boolean, owner: object = files[0], analyzeCallbacks = true, options: CallbackAnalysisOptions = {}): FileAnalysis[] {
   if (!files.length) { if (owner) clearPointerCache(owner); return files; }
+  const storageLimit = options.storageLimit ?? 256;
   const now = options.now ?? (() => performance.now());
   const cached = projectCache.get(owner);
-  if (cached && cached.analyzeCallbacks !== analyzeCallbacks) clearPointerCache(owner);
-  if (cached && !['work','limited','cancelled'].includes(cached.progress?.outcome ?? '') && cached.analyzeCallbacks === analyzeCallbacks && !options.shouldCancel?.() && cached.inputs.length === files.length && files.every((file, n) => file === cached.inputs[n]) &&
+  if (cached && (cached.analyzeCallbacks !== analyzeCallbacks || cached.storageLimit !== storageLimit)) clearPointerCache(owner);
+  if (cached && !['work','limited','cancelled'].includes(cached.progress?.outcome ?? '') && cached.analyzeCallbacks === analyzeCallbacks && cached.storageLimit === storageLimit && !options.shouldCancel?.() && cached.inputs.length === files.length && files.every((file, n) => file === cached.inputs[n]) &&
     (!cached.memoryLimited || memoryPressure?.())) {
     if (cached.progress) options.onProgress?.({ ...cached.progress, elapsedMs: 0, cached: true });
     return cached.results;
@@ -187,7 +188,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     const progress: CallbackProgress = { stage: 'setup', elapsedMs: 0, round: 0, maxRounds: 12, functionsDone: 0,
       functionsTotal: byFunction.size, evaluations: 0, scopeElapsedMs: 0, scopeEvaluations: 0, outcome: memoryLimited ? 'memory' : 'completed' };
     options.onProgress?.(progress);
-    projectCache.set(owner, { inputs: files, results, analyzeCallbacks, memoryLimited, progress }); return results;
+    projectCache.set(owner, { inputs: files, results, analyzeCallbacks, storageLimit, memoryLimited, progress }); return results;
   }
   const heap = new Map<string, Value>(), summaries = new Map<string, Summary>();
   const started = now();
@@ -356,7 +357,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
   function omitRegion(root: string, state: State, exported = true) {
     state.omittedRegions ??= new Map();
     const previous = state.omittedRegions.has(root);
-    if (!previous && state.omittedRegions.size >= 256) { projectIncomplete = true; return; }
+    if (!previous && state.omittedRegions.size >= storageLimit) { projectIncomplete = true; return; }
     state.omittedRegions.set(root, exported || state.omittedRegions.get(root) === true);
     if (!previous) registerRegion(state.omittedRegions, root);
   }
@@ -374,9 +375,9 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     }
     const adding = !previous || previous.context !== context;
     const contextLimited = context !== undefined && !counts.has(context) && counts.size >= 65;
-    if (adding && ((counts.get(context) ?? 0) >= 256 || contextLimited)) {
+    if (adding && ((counts.get(context) ?? 0) >= storageLimit || contextLimited)) {
       state.incomplete = true; omitRegion(root, state, exported);
-      notice(contextLimited ? 'Callback caller-context limit: 64 supplies; targets may be incomplete' : 'Callback region limit: 256 reachable objects; targets may be incomplete', undefined, true,
+      notice(contextLimited ? 'Callback caller-context limit: 64 supplies; targets may be incomplete' : `Callback region limit: ${storageLimit} reachable objects; targets may be incomplete`, undefined, true,
         () => storageDetail('ordered-region', [...state.regions!].filter(([, change]) => change.context === context).map(([key]) => key), root, counts!.get(context) ?? 0)); return;
     }
     if (adding) {
@@ -404,7 +405,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
         visited = new Set(); seen.set(context, visited);
       }
       visited.add(identity); expanded.add(identity);
-      if (visited.size > 256) { state.incomplete = true; notice('Callback region limit: 256 reachable objects; targets may be incomplete', undefined, false,
+      if (visited.size > storageLimit) { state.incomplete = true; notice(`Callback region limit: ${storageLimit} reachable objects; targets may be incomplete`, undefined, false,
         () => storageDetail('reachable-regions', affected.filter(item => item.context === context).map(item => item.root), root, visited!.size - 1)); break; }
       affected.push({ root, exported, context });
       const paths = !shallow && !root.startsWith('$arg:') ? [root] :
@@ -555,9 +556,9 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     if (!localSlot(slot, ctx)) {
       // Global initializer effects are never consumed as a function summary.
       if (ctx.program.id !== 'global' && summarize) {
-        if (state.effects.has(slot) || state.effects.size < 256) state.effects.set(slot, { value: state.memory.get(slot)!, definite: !weak });
+        if (state.effects.has(slot) || state.effects.size < storageLimit) state.effects.set(slot, { value: state.memory.get(slot)!, definite: !weak });
         else {
-          state.incomplete = true; notice('Callback mutation limit: 256 slots per function; targets may be incomplete', 256, false, () => storageDetail('write', state.effects.keys(), slot, state.effects.size));
+          state.incomplete = true; notice(`Callback mutation limit: ${storageLimit} slots per function; targets may be incomplete`, storageLimit, false, () => storageDetail('write', state.effects.keys(), slot, state.effects.size));
           value = union(value, unknown('Callback mutation limit omitted this storage effect'));
           memorySet(state.memory, slot, value);
           invalidate([slot], state, ctx, false);
@@ -582,9 +583,9 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     }
     for (const key of new Set([...a.effects.keys(), ...b.effects.keys()])) {
       const x = a.effects.get(key), y = b.effects.get(key);
-      if (result.effects.size < 256) result.effects.set(key, { value: read(key, result), definite: !!x?.definite && !!y?.definite });
+      if (result.effects.size < storageLimit) result.effects.set(key, { value: read(key, result), definite: !!x?.definite && !!y?.definite });
       else {
-        result.incomplete = true; notice('Callback mutation limit: 256 slots per function; targets may be incomplete', 256, false, () => storageDetail('branch-join', result.effects.keys(), key, result.effects.size));
+        result.incomplete = true; notice(`Callback mutation limit: ${storageLimit} slots per function; targets may be incomplete`, storageLimit, false, () => storageDetail('branch-join', result.effects.keys(), key, result.effects.size));
         markRegion(key, result, false);
       }
     }
@@ -676,7 +677,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
         if(expr.left.localId){if(ctx.locals.get(expr.left.localId)?.persistent)writes.roots.add(expr.left.localId);}
         else for(const symbol of globalSymbols(expr.left))if(symbol.kind==='variable')writes.roots.add(symbol.id);
       } else writes.opaque=true;
-      if(writes.roots.size>256){writes.roots.clear();writes.opaque=true;}
+      if(writes.roots.size>storageLimit){writes.roots.clear();writes.opaque=true;}
       const left = collect(expr.left), right = collect(expr.right);
       const record = valueType(expr.left, ctx), layouts = record ? index.layout(record) : [];
       linkScalar(record && expr.left.kind !== 'dereference' ? [scalarKey(record)] : left, right);
@@ -754,12 +755,12 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
       const fn=pending.pop()!;if(seen.has(fn))continue;seen.add(fn);
       if(seen.size>256){opaque=true;break;}
       const writes=writeFootprints.get(fn);opaque ||= writes?.opaque??true;
-      for(const root of writes?.roots??[])if(roots.size<256)roots.add(root);else opaque=true;
+      for(const root of writes?.roots??[])if(roots.size<storageLimit)roots.add(root);else opaque=true;
       for(const callee of writes?.calls??[])pending.push(callee);
     }
     if(opaque) {
       for(const symbol of index.symbols())if(symbol.kind==='variable'&&symbol.storage!=='local'&&!symbol.memberOf) {
-        if(!roots.has(symbol.id)&&roots.size>=256){projectIncomplete=true;return new Set();}roots.add(symbol.id);
+        if(!roots.has(symbol.id)&&roots.size>=storageLimit){projectIncomplete=true;return new Set();}roots.add(symbol.id);
       }
       for(const [n,layouts] of (parameterLayouts.get(id)??[]).entries())
         if(layouts.some(layout=>layout.layers.length||layout.fields.length))roots.add(paramRoot(id,n));
@@ -1118,9 +1119,9 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
           const part = formal(key);
           const keys = [...coalesceObjects(new Set(part?.fn === fn ? [...(args[part.index]?.objects ?? [])].map(actual => physical(composeObject(actual, part.suffix))) : [key]))];
           for (const key of keys) {
-            if (!effects.has(key) && effects.size >= 256) {
+            if (!effects.has(key) && effects.size >= storageLimit) {
               // Only this omitted storage effect is uncertain, not every argument.
-              state.incomplete = true; notice('Callback mutation limit: 256 slots per function; targets may be incomplete', 256, false, () => storageDetail('call-effects', effects.keys(), key, effects.size));
+              state.incomplete = true; notice(`Callback mutation limit: ${storageLimit} slots per function; targets may be incomplete`, storageLimit, false, () => storageDetail('call-effects', effects.keys(), key, effects.size));
               regions.set(key, { count: 0, definite: false, shallow: false }); continue;
             }
             const value = instantiate(effect.value, fn, args), old = effects.get(key);
@@ -1273,7 +1274,7 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
       function omitSummaryRegion(root: string) {
         target.omittedRegions ??= new Set();
         if (target.omittedRegions.has(root)) return;
-        if (target.omittedRegions.size >= 256) { projectIncomplete = true; return; }
+        if (target.omittedRegions.size >= storageLimit) { projectIncomplete = true; return; }
         target.omittedRegions.add(root); target.version++; changed = true;
       }
       if(exhausted||list.some(program=>program.incomplete?.length)) {
@@ -1293,22 +1294,22 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
         if (list.some(program => localSlot(root, { program, locals: new Map(program.locals.map(local => [local.id, local])), exits: [], returned: blank() }))) continue;
         const previous = target.regions.get(root), shallow = change.shallow === true && previous?.shallow !== false;
         if (previous?.definite !== change.definite || previous?.shallow !== shallow) {
-          if (!target.regions.has(root) && target.regions.size >= 256) {
-            omitSummaryRegion(root); notice('Callback region limit: 256 reachable objects; targets may be incomplete', undefined, true,
+          if (!target.regions.has(root) && target.regions.size >= storageLimit) {
+            omitSummaryRegion(root); notice(`Callback region limit: ${storageLimit} reachable objects; targets may be incomplete`, undefined, true,
               () => storageDetail('function-regions', target.regions.keys(), root, target.regions.size)); target.incomplete = true; continue;
           }
           target.regions.set(root, { definite: change.definite, shallow }); target.version++; changed = true;
         }
       }
       for (const [key, effect] of all?.effects ?? []) {
-        if (!target.effects.has(key) && target.effects.size >= 256) {
+        if (!target.effects.has(key) && target.effects.size >= storageLimit) {
           if (!target.incomplete) { target.incomplete = true; target.version++; changed = true; }
           if (!target.regions.has(key)) {
-            if (target.regions.size < 256) { target.regions.set(key, { definite: false, shallow: false }); target.version++; changed = true; }
-            else { omitSummaryRegion(key); notice('Callback region limit: 256 reachable objects; targets may be incomplete', undefined, true,
+            if (target.regions.size < storageLimit) { target.regions.set(key, { definite: false, shallow: false }); target.version++; changed = true; }
+            else { omitSummaryRegion(key); notice(`Callback region limit: ${storageLimit} reachable objects; targets may be incomplete`, undefined, true,
               () => storageDetail('function-regions', target.regions.keys(), key, target.regions.size)); }
           }
-          notice('Callback mutation limit: 256 slots per function; targets may be incomplete', 256, false, () => storageDetail('function-effects', target.effects.keys(), key, target.effects.size)); continue;
+          notice(`Callback mutation limit: ${storageLimit} slots per function; targets may be incomplete`, storageLimit, false, () => storageDetail('function-effects', target.effects.keys(), key, target.effects.size)); continue;
         }
         const old = target.effects.get(key), finalValue = read(key, all!), value = old ? joined(old.value, finalValue) : finalValue;
         if (!old || signature(old.value) !== signature(value) || old.definite !== effect.definite) { changed = true; target.version++; }
@@ -1389,6 +1390,6 @@ export function inferPointerCalls(files: FileAnalysis[], memoryPressure?: () => 
     : kinds.has('memory') ? 'memory' : kinds.has('work') ? 'work' : notices.size ? 'limited' : 'completed';
   const finalProgress = progress(true, outcome);
   if (timedOut || [...notices].some(message => message.includes('work limit'))) projectCache.delete(owner);
-  else projectCache.set(owner, { inputs: files, results, analyzeCallbacks, progress: finalProgress });
+  else projectCache.set(owner, { inputs: files, results, analyzeCallbacks, storageLimit, progress: finalProgress });
   return results;
 }

@@ -760,8 +760,8 @@ export async function run() {
   await vscode.workspace.fs.delete(sparseUri);
   await new Promise(resolve=>setTimeout(resolve,500)); await api.workspace.whenIdle();
   const limitUri = vscode.Uri.joinPath(root, 'callback-limits.c');
-  await vscode.workspace.fs.writeFile(limitUri, Buffer.from('typedef void(*LimitCB)(void);void limit_target(void){}LimitCB data[300];void limit_update(void){\n' +
-    Array.from({length:270},(_,n)=>`data[${n}]=limit_target;`).join('\n') +
+  await vscode.workspace.fs.writeFile(limitUri, Buffer.from('typedef void(*LimitCB)(void);void limit_target(void){}LimitCB data[1100];void limit_update(void){\n' +
+    Array.from({length:1030},(_,n)=>`data[${n}]=limit_target;`).join('\n') +
     '\n}void limit_run(void){LimitCB cb=limit_target;cb();}'));
   const waitForLimit = async (expected:boolean) => {
     const deadline=Date.now()+10_000;

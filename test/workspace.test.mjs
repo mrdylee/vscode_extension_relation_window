@@ -136,13 +136,27 @@ test('cache startup validates content, additions and removals made while the edi
 });
 
 const latest = 'typedef void(*CB)(void);void new_target(void){}void task(void){CB cb=new_target;cb();}';
+test('whole-project analysis completes a 700-slot diagnostic table under the finite Worker storage budget',async t=>{
+  const file=uri('diagnostic-table.c'),source='typedef void(*CB)(void);void target(void){}struct Diag{CB check;};static struct Diag table[700];void configure(void){'+
+    Array.from({length:700},(_,n)=>`table[${n}].check=target;`).join('')+'}void run(void){configure();table[699].check();}';
+  const {workspace}=fixture(t,[file],{sources:new Map([[file.toString(),source]])});
+  await workspace.ready;await bounded(workspace.whenIdle());
+  assert.equal(workspace.status,'Index ready');assert.equal(workspace.index.files.size,1);
+  assert.deepEqual(workspace.index.files.get(file.toString()).issues,[]);
+  assert.ok(workspace.index.files.get(file.toString()).references.some(ref=>ref.callKind==='inferred'&&ref.name==='target'&&!ref.inference?.incomplete));
+});
 test('selected unresolved Build exposes the same basic callback index used by navigation',async t=>{
   const file=uri('fallback.c'),{workspace}=fixture(t,[file],{sources:new Map([[file.toString(),latest]])});
   await workspace.ready;await bounded(workspace.whenIdle());const basic=workspace.index;
   await workspace.setBuildProfile({id:'unknown-build',fingerprint:'unknown',entry:{id:'unknown-build',rootUri:'file:///review',entryUri:'file:///review/build.bat',cwdUri:'file:///review',dialect:'cmd',args:[],evidence:[]},units:[],coverage:'partial',dependencies:[],relevantEnvironment:[],issues:[]});
   await bounded(workspace.whenIdle());assert.equal(workspace.indexFor(file.toString()),basic);
+  assert.equal(workspace.index.files.size,1,'an unresolved build must retain the full source view');
+  assert.ok(workspace.index.files.get(file.toString()).references.some(ref=>ref.callKind==='inferred'&&ref.name==='new_target'),'detailed callback analysis must remain available');
   assert.ok(workspace.callbackIndexes?.includes(basic),'AI must see the same basic index as fallback navigation');
   assert.equal(workspace.buildMembership(file.toString()),'unknown');
+  await workspace.setBuildProfile({...workspace.buildProfile,fingerprint:'verified-empty',coverage:'complete'});
+  assert.equal(workspace.index.files.size,0,'a verified empty build remains an empty projection');
+  assert.equal(workspace.buildMembership(file.toString()),'excluded');
 });
 test('build profile changes discard a delayed previous result and preserve basic source navigation', async t => {
   const file = uri('build-main.c'), source = 'typedef void(*CB)(void);void first(void){}void second(void){}\n#if MODE==1\nCB saved=first;\n#else\nCB saved=second;\n#endif\nvoid run(void){saved();}';
@@ -823,8 +837,8 @@ test('Worker transfers located callback diagnostics and clears them when callbac
   const {workspace,adapter,configuration}=fixture(t);
   await workspace.ready;
   const file=uri('limits.c');
-  adapter.fs.readFile=async()=>Buffer.from('typedef void(*CB)(void);void target(void){}CB data[300];void update(void){'+
-    Array.from({length:270},(_,n)=>`data[${n}]=target;`).join('')+'}void run(void){CB cb=target;cb();}');
+  adapter.fs.readFile=async()=>Buffer.from('typedef void(*CB)(void);void target(void){}CB data[1100];void update(void){'+
+    Array.from({length:1030},(_,n)=>`data[${n}]=target;`).join('')+'}void run(void){CB cb=target;cb();}');
   await workspace.enqueue(file);await workspace.derive();
   const analysis=workspace.index.files.get(file.toString());
   assert.equal(analysis.callbackDiagnostics.find(d=>d.kind==='mutation').symbol,'update');

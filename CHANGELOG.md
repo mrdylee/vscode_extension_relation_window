@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.92 — 2026-11-01
+
+- Handle an include-guarded header prefix without repeatedly expanding it, while continuing to process directives after its guard.
+- Give macro scanning and callback propagation separate cumulative function allowances; retain the 100,000-operation limit per phase and shared project accounting.
+- Allow 1,024 callback storage slots/regions in whole-project analysis, preserving finite bounds, cancellation and heap protection for large diagnostic tables.
+- Retain detailed source analysis and file coverage when an incomplete selected build yields no usable contexts, instead of showing an empty ready index.
+- Advance analysis cache compatibility to 18. Actual RBMS verification retains all 147 files and completes local analysis with and without `Build_RBMS.bat` selected.
+
 ## 0.1.91 — 2026-11-01
 
 - Preserve uncertainty when macro alternatives are truncated or a helper stops before writing a callback; retain known candidates and scope known omitted writes to their storage.

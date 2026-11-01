@@ -88,6 +88,7 @@ export interface CallbackProgress {
   workBatches?: number;
 }
 export interface CallbackAnalysisOptions {
+  storageLimit?: number;
   workLimits?: import('./analysis-budget').AnalysisWorkLimits;
   workBudget?: import('./analysis-budget').AnalysisWorkBudget;
   shouldCancel?: () => boolean;
@@ -114,7 +115,7 @@ export interface FileAnalysis {
   splitStatements?: {start: number; end: number}[];
   inactive?: { start: number; end: number }[];
   directives?: { start: number; end: number }[];
-  guard?: { name: string; condition: string };
+  guard?: { name: string; condition: string; end?: number };
   projectScoped?: boolean;
   expandMacros?: boolean;
   programs?: FlowProgram[]; initializers?: GlobalInitializer[];

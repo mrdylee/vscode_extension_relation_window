@@ -159,10 +159,10 @@ export async function createAnalyzer(runtime: string, grammar: string) {
       }
     }
     const top = tree.rootNode.namedChildren.filter(node => node.type !== 'comment');
-    const guard = top.length === 1 && top[0].type === 'preproc_ifdef' && top[0].text.startsWith('#ifndef') ? top[0] : undefined;
+    const guard = top[0]?.type === 'preproc_ifdef' && top[0].text.startsWith('#ifndef') ? top[0] : undefined;
     const guardName = guard?.childForFieldName('name')?.text;
     if (guard && guardName && !guard.childForFieldName('alternative') && guard.namedChildren.some(node => node.type === 'preproc_def' && node.childForFieldName('name')?.text === guardName))
-      file.guard = { name: guardName, condition: guard.text.slice(0, guard.text.indexOf('\n')).trim() };
+      file.guard = { name: guardName, condition: guard.text.slice(0, guard.text.indexOf('\n')).trim(), ...(top.length > 1 ? {end:guard.endIndex} : {}) };
 
     function aggregateOwner(node: Node) {
       for (let parent = node.parent; parent; parent = parent.parent) {

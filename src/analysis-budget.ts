@@ -1,3 +1,4 @@
+// Each function phase has its own allowance; project usage includes both phases.
 export interface AnalysisWorkLimits { functionWork: number; projectWork: number }
 export const defaultWorkLimits: AnalysisWorkLimits = { functionWork: 100_000, projectWork: 1_000_000 };
 export interface AnalysisWorkUsage { macros: number; callbacks: number; total: number }
@@ -13,11 +14,11 @@ export class AnalysisWorkBudget {
     const work = this.functions.get(id) ?? {macros: 0, callbacks: 0, total: 0};
     this.functions.set(id, work); work[phase] += units; work.total += units;
     this.project[phase] += units; this.project.total += units;
-    return this.projectExhausted ? 'project-limit' : work.total > this.limits.functionWork ? 'function-limit' : 'ok';
+    return this.projectExhausted ? 'project-limit' : work[phase] > this.limits.functionWork ? 'function-limit' : 'ok';
   }
   get projectExhausted() { return !this.progressive && this.project.total > this.limits.projectWork; }
   get batches() { return Math.max(1, Math.ceil(this.project.total / this.limits.projectWork)); }
-  exhausted(id: string) { return (this.functions.get(id)?.total ?? 0) > this.limits.functionWork; }
+  exhausted(id: string) { return (this.functions.get(id)?.callbacks ?? 0) > this.limits.functionWork; }
   usage(id?: string): AnalysisWorkUsage { return {...(id === undefined ? this.project : this.functions.get(id) ?? {macros: 0, callbacks: 0, total: 0})}; }
   get maximum() { return {...this.limits}; }
 }

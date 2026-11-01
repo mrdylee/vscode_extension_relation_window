@@ -8,6 +8,28 @@ test('work is cumulative across repeated evaluations of a function', () => {
   assert.equal(budget.consume('other',1),'ok');
   assert.equal(budget.consume('run',2),'function-limit');
 });
+
+test('a larger bounded storage budget retains a 700-slot diagnostic table and late callback',async()=>{
+  const parser=await createAnalyzer('node_modules/web-tree-sitter/web-tree-sitter.wasm','node_modules/tree-sitter-c/tree-sitter-c.wasm');
+  const source='typedef void(*CB)(void);void first(void){}void second(void){}struct Diag{CB check;};static struct Diag table[700];void configure(void){'+
+    Array.from({length:700},(_,n)=>`table[${n}].check=second;`).join('')+'}void run(void){table[699].check=first;configure();table[699].check();}';
+  const raw=parser.analyze('file:///large-diagnostic-table.c',source,true,{expandMacros:false,propagateCallbacks:true});
+  const [result]=parser.derive([raw],undefined,undefined,true,{storageLimit:1024});
+  assert.deepEqual(result.issues,[]);
+  const site=result.references.filter(ref=>ref.kind==='call'&&ref.location.start===source.lastIndexOf('table[699].check()'));
+  assert.deepEqual(site.map(ref=>[ref.name,ref.inference?.incomplete]),[['second',false]]);
+  const [bounded]=parser.derive([raw],undefined,undefined,true,{storageLimit:256});
+  assert.ok(bounded.issues.some(issue=>/mutation limit: 256/.test(issue)),'budget changes must invalidate completed propagation');
+});
+
+test('the larger storage budget still reports omitted effects beyond its bound',async()=>{
+  const parser=await createAnalyzer('node_modules/web-tree-sitter/web-tree-sitter.wasm','node_modules/tree-sitter-c/tree-sitter-c.wasm');
+  const source='typedef void(*CB)(void);void target(void){}struct Diag{CB check;};static struct Diag table[1025];void configure(void){'+
+    Array.from({length:1025},(_,n)=>`table[${n}].check=target;`).join('')+'}void run(void){configure();table[1024].check();}';
+  const [result]=parser.derive([parser.analyze('file:///bounded-diagnostic-table.c',source)],undefined,undefined,true,{storageLimit:1024});
+  assert.ok(result.issues.some(issue=>/mutation limit: 1024/.test(issue)));
+  assert.ok(result.references.some(ref=>ref.callKind==='indirect'&&ref.inference?.incomplete));
+});
 test('project budget covers many independent functions', () => {
   const budget = new AnalysisWorkBudget({functionWork:10,projectWork:3});
   assert.equal(budget.consume('a',2),'ok');
@@ -47,6 +69,16 @@ test('work accounting separates macro scans from callback evaluations',()=>{
   budget.consume('run',3,'macros');budget.consume('run',2,'callbacks');budget.consume('other',4,'macros');
   assert.deepEqual(budget.usage('run'),{macros:3,callbacks:2,total:5});
   assert.deepEqual(budget.usage(),{macros:7,callbacks:2,total:9});
+});
+
+test('macro scanning does not spend the following callback phase function allowance',()=>{
+  const budget=new AnalysisWorkBudget({functionWork:10,projectWork:100});
+  assert.equal(budget.consume('run',9,'macros'),'ok');
+  assert.equal(budget.consume('run',9,'callbacks'),'ok');
+  assert.equal(budget.exhausted('run'),false);
+  assert.equal(budget.consume('run',2,'callbacks'),'function-limit');
+  assert.equal(budget.exhausted('run'),true);
+  assert.deepEqual(budget.usage('run'),{macros:9,callbacks:11,total:20});
 });
 test('an exhausted body is not repeatedly evaluated while independent callbacks remain',async()=>{
   const parser=await createAnalyzer('node_modules/web-tree-sitter/web-tree-sitter.wasm','node_modules/tree-sitter-c/tree-sitter-c.wasm');
