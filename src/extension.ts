@@ -8,6 +8,7 @@ import { migrateSettings, prepareUpgrade } from './branding-migration';
 import { registerCopilotCallbacks } from './copilot-service';
 import { registerScopeFolders } from './scope-folders';
 import { registerBuildConfigurations } from './build-service';
+import { registerMarkdownPreview } from './markdown-preview';
 
 export async function activate(context: vscode.ExtensionContext) {
   if (!await prepareUpgrade()) return;
@@ -24,8 +25,7 @@ export async function activate(context: vscode.ExtensionContext) {
   const view = new RelationView(workspace, context.extensionUri, copilot.actions, context.workspaceState);
   registerIssueReporting(context, workspace, view);
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const openGuide = (language: string) => vscode.commands.executeCommand(
-    'markdown.showPreview', vscode.Uri.joinPath(context.extensionUri, /^ko(?:-|$)/i.test(language) ? 'USER_GUIDE.ko.md' : 'USER_GUIDE.md'));
+  const openGuide = registerMarkdownPreview(context);
   context.subscriptions.push(workspace, view,
     vscode.window.registerWebviewViewProvider('dynsight.explorer', { resolveWebviewView: webview => view.resolveWebviewView(webview) }),
     vscode.window.registerWebviewViewProvider('dynsight.context', { resolveWebviewView: webview => view.resolveWebviewView(webview, true) }),

@@ -4,7 +4,7 @@
 
 > **New to Dynsight?** Follow [Quick start](#quick-start), then [Settings step by step](#settings-step-by-step). This manual is bundled with the extension and works offline.
 >
-> Open it anytime with **Help · 사용법** beside **Settings** in Relation. VS Code's display language selects the initial guide; use the language link above to switch.
+> Open it anytime with **Help · 사용법** beside **Settings** in Relation. VS Code's display language selects the initial guide. The default is read-only plain text; use **Dynsight: 사용 설명서 열기 (한국어)** or **Dynsight: Open User Guide (English)** to switch languages.
 
 ## Find what you need
 
@@ -83,6 +83,14 @@ Explicit Combined alignment also moves Terminal and other bottom-panel views bec
 
 **Source snippets are sent to the selected AI provider/model and account limits apply.** Supporting snippets can come from other indexed files. **AI candidate** is a suggestion. Use **Set manually → choose a function → Apply** to record your choice as **User confirmed**. Neither label proves runtime execution.
 
+### Recipe E — Choose Markdown preview and manage the built-in extension
+
+1. Find **Markdown Preview** (`dynsight.markdownPreview`). **Disabled (read-only text)** is the default: Dynsight Help opens a read-only `.txt` view without invoking Markdown preview or the Markdown language service.
+2. To render the guide, select **Markdown Preview Enhanced**. If it is unavailable in this window, choose **Open Extension** to install or enable it on its native extension page, then open Help again. The same setting includes an **Install or enable Markdown Preview Enhanced…** link. Selecting it does not automatically install anything.
+3. To disable VS Code's built-in Markdown language extension for this project, click **Manage built-in Markdown…**, then use the gear on **Markdown Language Features → Disable (Workspace)**. Click **Restart Extensions** if shown. Keep **Markdown Language Basics** enabled for syntax coloring.
+
+**The preview dropdown does not disable other extensions.** VS Code requires the actual disable action in its own Extensions UI. This preference only selects how Dynsight opens its guides; general Markdown shortcuts remain controlled by VS Code and your Markdown extensions. Enhanced failures or cancellation leave a readable text guide and never switch to the built-in preview. Large-workspace performance still depends on the chosen preview extension and documents.
+
 ## Settings at a glance
 
 Names below match the English Settings screen; exact keys work in any VS Code language.
@@ -100,6 +108,7 @@ Names below match the English Settings screen; exact keys work in any VS Code la
 | Skip Inactive · `dynsight.skipInactive` | **On** — Hides provably inactive branches; unknown conditions remain visible. |
 | Callee Sort · `dynsight.calleeSort` | **`name`** — Sorts Callees by name or first source location. |
 | Include Function Arguments · `dynsight.includeFunctionArguments` | **Off** — Shows functions passed as arguments, with a distinct dotted connector. |
+| Markdown Preview · `dynsight.markdownPreview` | **`disabled`** — Read-only text Help by default; optionally use Markdown Preview Enhanced. Includes native extension-management links. |
 | Automatic Updates · `dynsight.automaticUpdates` | **On** — Checks GitHub for releases; asks before installing. Requires internet. |
 
 For JSON users, open **Preferences: Open Workspace Settings (JSON)** and merge only the keys you need into the existing object. This example uses local analysis only:

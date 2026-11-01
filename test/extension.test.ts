@@ -437,6 +437,18 @@ export async function run() {
     assert.ok(api.workspace.index.files.has(file.toString()), 'removing picker exclusion restores the folder');
   }
   const rootBeforeHelp = api.view.state.graph?.root.symbolId;
+  assert.equal(vscode.extensions.getExtension('vscode.markdown-language-features')?.isActive ?? false, false, 'builtin Markdown starts inactive');
+  const assertPlainGuide = async (filename: string) => {
+    const active = vscode.window.tabGroups.activeTabGroup.activeTab;
+    assert.ok(active?.input instanceof vscode.TabInputText, 'default Help opens a text guide, not a Markdown preview');
+    assert.equal(active.input.uri.scheme, 'dynsight-guide');
+    assert.equal(active.input.uri.path, '/' + filename.replace(/\.md$/, '.txt'));
+    const document = await vscode.workspace.openTextDocument(active.input.uri);
+    assert.equal(document.languageId, 'plaintext', 'Help cannot activate onLanguage:markdown');
+    assert.equal(document.isDirty, false, 'Help does not create an unsaved copy');
+    assert.match(document.getText(), /Dynsight/);
+    assert.equal(vscode.extensions.getExtension('vscode.markdown-language-features')?.isActive ?? false, false, 'Help leaves builtin Markdown inactive');
+  };
   const guideUri = vscode.Uri.joinPath(ext.extensionUri, 'USER_GUIDE.md');
   const guide = Buffer.from(await vscode.workspace.fs.readFile(guideUri)).toString('utf8');
   assert.ok(guide.includes('Exclude always wins.') && guide.includes('dynsight.include'), 'bundled guide explains scope precedence');
@@ -445,17 +457,15 @@ export async function run() {
   assert.deepEqual([...legend.slice(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10], 'bundled icon legend is an accessible PNG');
   await api.view.handleMessage({ type: 'help' });
   await new Promise(resolve => setTimeout(resolve, 500));
-  assert.ok(vscode.window.tabGroups.all.flatMap(group => group.tabs).some(tab => tab.input instanceof vscode.TabInputWebview && /USER_GUIDE/.test(tab.label)), 'Help opens a rendered offline guide');
   const defaultGuide = /^ko(?:-|$)/i.test(vscode.env.language) ? 'USER_GUIDE.ko.md' : 'USER_GUIDE.md';
   console.log(`Offline guide: VS Code language=${vscode.env.language}, default=${defaultGuide}`);
-  assert.ok(vscode.window.tabGroups.activeTabGroup.activeTab?.label.includes(defaultGuide), 'Help follows the VS Code display language');
+  await assertPlainGuide(defaultGuide);
   assert.equal(api.view.state.graph?.root.symbolId, rootBeforeHelp, 'Help preserves Relation root');
   const helpState = JSON.stringify({ locked: api.view.state.locked, graph: api.view.state.graph, context: api.view.state.context, canGoBack: api.view.state.canGoBack });
   for (const [command, filename] of [['dynsight.helpKorean', 'USER_GUIDE.ko.md'], ['dynsight.helpEnglish', 'USER_GUIDE.md']]) {
     await vscode.commands.executeCommand(command);
     await new Promise(resolve => setTimeout(resolve, 500));
-    const active = vscode.window.tabGroups.activeTabGroup.activeTab;
-    assert.ok(active?.input instanceof vscode.TabInputWebview && active.label.includes(filename), `${command} renders ${filename}`);
+    await assertPlainGuide(filename);
     assert.equal(api.view.state.graph?.root.symbolId, rootBeforeHelp, 'language selection preserves Relation root');
     assert.equal(JSON.stringify({ locked: api.view.state.locked, graph: api.view.state.graph, context: api.view.state.context, canGoBack: api.view.state.canGoBack }), helpState, 'language selection preserves following, branches, Context and undo');
   }

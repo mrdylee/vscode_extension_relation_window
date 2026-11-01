@@ -80,9 +80,13 @@ Smart Analysis Include는 일반 Include에서 자동 복사되지 않으며 빈
 GitHub를 방문하지 않아도 Dynsight 상단의 두 버튼으로 사용할 수 있습니다.
 
 - **Settings**: 정렬·Context 레이아웃·Callers/Callees 좌우 배치와 Include/Exclude 등 확장의 모든 설정을 엽니다. 폴더를 열지 않은 경우 사용자 설정을 엽니다. 다중 폴더 워크스페이스에서는 설정 화면의 폴더 탭에서 개별 분석 범위를 지정할 수 있습니다.
-- **Help · 사용법**: VSIX에 포함된 [한국어 설명서](USER_GUIDE.ko.md) / [English User Guide](USER_GUIDE.md)를 엽니다. VS Code 표시 언어에 맞춰 열리며 문서 맨 위에서 언어를 바꿀 수 있습니다. 빠른 시작, Settings 단계별 사용법, 설정 기본값 표와 문제 해결을 인터넷 없이 읽을 수 있습니다. 현재 Relation은 유지됩니다.
+- **Help · 사용법**: VSIX에 포함된 [한국어 설명서](USER_GUIDE.ko.md) / [English User Guide](USER_GUIDE.md)를 VS Code 표시 언어에 맞춰 엽니다. 기본은 내장 Markdown 확장을 호출하지 않는 읽기 전용 텍스트입니다. 빠른 시작, Settings 단계별 사용법, 설정 기본값 표와 문제 해결을 인터넷 없이 읽을 수 있습니다. 현재 Relation은 유지됩니다.
 
 명령 팔레트에서도 **Dynsight: Open Settings**, **Dynsight: Open User Guide**를 실행할 수 있습니다. 언어를 직접 고르려면 **Dynsight: 사용 설명서 열기 (한국어)** 또는 **Dynsight: Open User Guide (English)**를 실행하세요. Settings 맨 위의 Context Layout 설명에도 두 언어 사용법 링크가 있습니다.
+
+**Settings → Markdown Preview**는 **Disabled (read-only text)**가 기본이며, **Markdown Preview Enhanced**를 선택하면 해당 확장으로 도움말을 미리 볼 수 있습니다. 설치·활성화가 필요하면 안내의 **Open Extension** 또는 설정의 **Install or enable Markdown Preview Enhanced…** 링크를 사용하세요. 선택만으로 자동 설치하지 않습니다.
+
+내장 **Markdown Language Features**를 이 프로젝트에서 끄려면 같은 설정의 **Manage built-in Markdown…** 링크에서 해당 확장의 톱니바퀴 → **Disable (Workspace)**를 누르고, 표시되는 **Restart Extensions**로 적용합니다. **Markdown Language Basics**는 켜두세요. Dynsight 설정 자체가 다른 확장을 비활성화하는 것은 아니며, 일반 Markdown 단축키도 바꾸지 않습니다. Enhanced를 사용할 수 없으면 읽기 전용 텍스트를 보여주고 내장 미리보기로 전환하지 않습니다.
 
 ## 분석 범위 설정: Include / Exclude
 

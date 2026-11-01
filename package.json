@@ -23,6 +23,14 @@
   "contributes": {
     "commands": [
       {
+        "command": "dynsight.manageBuiltinMarkdown",
+        "title": "Dynsight: Manage Built-in Markdown"
+      },
+      {
+        "command": "dynsight.manageMarkdownPreviewEnhanced",
+        "title": "Dynsight: Install or Enable Markdown Preview Enhanced"
+      },
+      {
         "command": "dynsight.configureAi",
         "title": "Dynsight: Configure Smart Analysis AI"
       },
@@ -422,6 +430,25 @@
           "included": false,
           "deprecationMessage": "Use Smart Analysis Include / Exclude and the Macro / Copilot switches. Saved legacy scopes remain active until Smart Analysis Include is explicitly saved."
         },
+        "dynsight.markdownPreview": {
+          "order": 80,
+          "type": "string",
+          "enum": [
+            "disabled",
+            "enhanced"
+          ],
+          "enumItemLabels": [
+            "Disabled (read-only text)",
+            "Markdown Preview Enhanced"
+          ],
+          "enumDescriptions": [
+            "Open Dynsight guides as read-only plain text without invoking Markdown preview.",
+            "Use Markdown Preview Enhanced for Dynsight guides. Install or enable it when prompted; unavailable previews use text."
+          ],
+          "default": "disabled",
+          "scope": "window",
+          "markdownDescription": "Choose how Dynsight opens its bundled guides. This setting does not disable VS Code extensions or change general Markdown shortcuts. [Manage built-in Markdown…](command:dynsight.manageBuiltinMarkdown): choose **Disable (Workspace)** on Markdown Language Features, then Restart Extensions if shown. Keep Markdown Language Basics enabled. [Install or enable Markdown Preview Enhanced…](command:dynsight.manageMarkdownPreviewEnhanced)."
+        },
         "dynsight.automaticUpdates": {
           "order": 90,
           "type": "boolean",
@@ -460,7 +487,7 @@
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
     "test:analysis-performance": "tsx test/analysis-performance.ts",
-    "test": "tsx --test test/relation-navigation.test.ts test/relation-slots.test.ts test/analysis-policy.test.ts test/analysis-budget.test.ts test/scoped-analysis.test.ts test/callback-overrides.test.ts test/copilot-single-site.test.ts test/core.test.ts test/analysis-notices.test.ts test/macros.test.ts test/pointer-calls.test.ts test/callback-effects.test.ts test/callback-uncertainty.test.ts test/callback-safety.test.ts test/callback-index-regressions.test.ts test/analysis-cache.test.ts test/incremental-analysis.test.ts test/copilot-callbacks.test.ts test/copilot-progress.test.ts test/explicit-callbacks.test.ts test/copilot-relations.test.ts test/copilot-service.test.ts test/cli-callback-provider.test.ts test/ai-extensions.test.ts test/ai-models.test.ts test/panel-layout.test.ts test/function-arguments.test.ts test/members.test.ts test/syntax.test.ts test/updates.test.ts test/issue-report.test.ts test/issue-report-service.test.ts test/diagnostic-history.test.ts test/branding-migration.test.ts test/build-context.test.ts test/build-discovery.test.ts test/build-options.test.ts test/build-make-parser.test.ts test/build-context-cache.test.ts test/preprocessor-context.test.ts test/build-context-analysis.test.ts test/build-service.test.ts test/build-context-copilot.test.ts",
+    "test": "tsx --test test/markdown-preview.test.ts test/relation-navigation.test.ts test/relation-slots.test.ts test/analysis-policy.test.ts test/analysis-budget.test.ts test/scoped-analysis.test.ts test/callback-overrides.test.ts test/copilot-single-site.test.ts test/core.test.ts test/analysis-notices.test.ts test/macros.test.ts test/pointer-calls.test.ts test/callback-effects.test.ts test/callback-uncertainty.test.ts test/callback-safety.test.ts test/callback-index-regressions.test.ts test/analysis-cache.test.ts test/incremental-analysis.test.ts test/copilot-callbacks.test.ts test/copilot-progress.test.ts test/explicit-callbacks.test.ts test/copilot-relations.test.ts test/copilot-service.test.ts test/cli-callback-provider.test.ts test/ai-extensions.test.ts test/ai-models.test.ts test/panel-layout.test.ts test/function-arguments.test.ts test/members.test.ts test/syntax.test.ts test/updates.test.ts test/issue-report.test.ts test/issue-report-service.test.ts test/diagnostic-history.test.ts test/branding-migration.test.ts test/build-context.test.ts test/build-discovery.test.ts test/build-options.test.ts test/build-make-parser.test.ts test/build-context-cache.test.ts test/preprocessor-context.test.ts test/build-context-analysis.test.ts test/build-service.test.ts test/build-context-copilot.test.ts",
     "test:extension": "npm run build && node scripts/test-extension.mjs",
     "test:scope-folders:host": "npm run build && node scripts/test-scope-folders.mjs",
     "test:worker": "npm run build && node --test test/analysis-worker.test.mjs test/analysis-cache-worker.test.mjs test/workspace.test.mjs test/scope-folders.test.mjs test/build-context-workspace.test.mjs",

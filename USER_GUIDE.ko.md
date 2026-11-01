@@ -4,7 +4,7 @@
 
 > **처음 사용하시나요?** [1. 빠른 시작](#1-빠른-시작) → [2. 설정 따라 하기](#2-설정-따라-하기) 순서로 보세요.
 >
-> Relation 상단의 **Help · 사용법**으로 언제든 다시 열 수 있습니다. 설명서는 확장에 포함되어 인터넷 없이도 읽을 수 있습니다. 처음 열리는 언어는 VS Code의 표시 언어를 따르며, 위의 링크로 바꿀 수 있습니다.
+> Relation 상단의 **Help · 사용법**으로 언제든 다시 열 수 있습니다. 설명서는 확장에 포함되어 인터넷 없이도 읽을 수 있습니다. 기본값은 읽기 전용 텍스트이며, 처음 열리는 언어는 VS Code의 표시 언어를 따릅니다. 명령 팔레트의 **Dynsight: 사용 설명서 열기 (한국어)** / **Dynsight: Open User Guide (English)**로 언어를 바꿀 수 있습니다.
 
 화면에서 찾기 쉽도록 버튼과 설정 이름은 실제 표시되는 **영어 이름**을 함께 적었습니다. 확장 ID는 `dylee.dynsight`, 설정 이름은 `dynsight.*`입니다.
 
@@ -123,6 +123,14 @@
 
 예시 폴더 이름은 실제 프로젝트 이름으로 바꾸세요. 이 예시는 Exclude를 새로 지정하지 않으므로 다른 범위에서 덮어쓰지 않았다면 기존 기본 제외를 사용합니다.
 
+### Markdown 미리보기 선택과 내장 확장 관리
+
+1. **Markdown Preview** (`dynsight.markdownPreview`)의 기본값은 **Disabled (read-only text)**입니다. Help를 읽기 전용 `.txt` 보기로 열어 Markdown 미리보기와 언어 기능을 호출하지 않습니다.
+2. 렌더링된 설명서가 필요하면 **Markdown Preview Enhanced**를 선택합니다. 현재 창에서 사용할 수 없다면 **Open Extension**을 눌러 VS Code 확장 화면에서 설치하거나 활성화한 뒤 Help를 다시 여세요. 같은 설정의 **Install or enable Markdown Preview Enhanced…** 링크로도 이동할 수 있습니다. 선택만으로 자동 설치하지는 않습니다.
+3. 이 프로젝트에서 내장 확장을 끄려면 **Manage built-in Markdown…** 링크 → **Markdown Language Features**의 톱니바퀴 → **Disable (Workspace)**를 누릅니다. **Restart Extensions**가 표시되면 누르세요. 문법 색상을 담당하는 **Markdown Language Basics**는 켜둡니다.
+
+**드롭다운 선택만으로 다른 확장이 꺼지지는 않습니다.** 실제 비활성화는 VS Code 확장 화면에서 한 번 직접 해야 합니다. 이 설정은 Dynsight 도움말의 표시 방식만 바꾸며 일반 Markdown 단축키는 VS Code와 해당 확장이 관리합니다. Enhanced 실행 실패나 취소 시에는 읽기 전용 텍스트를 보여주고 내장 미리보기로 전환하지 않습니다. 대형 작업공간에서의 성능은 선택한 미리보기 확장과 문서 크기에 따라 달라집니다.
+
 ## 3. 설정 한눈에 보기
 
 | 화면 이름과 정확한 설정 키 | 기본값과 용도 |
@@ -138,6 +146,7 @@
 | **Skip Inactive** · `dynsight.skipInactive` | **켜짐** — 확실히 비활성인 조건부 분기를 숨깁니다. 판단 불가능한 분기는 남깁니다. |
 | **Callee Sort** · `dynsight.calleeSort` | **`name`** — Callees를 이름 또는 첫 호출 소스 위치(`source`)로 정렬합니다. 실행 순서가 아닙니다. |
 | **Include Function Arguments** · `dynsight.includeFunctionArguments` | **꺼짐** — 인자로 전달되는 함수를 표시합니다. 전달이 실행을 뜻하지는 않습니다. |
+| **Markdown Preview** · `dynsight.markdownPreview` | **`disabled`** — 기본은 읽기 전용 텍스트 도움말이며 Markdown Preview Enhanced를 선택할 수 있습니다. 내장 확장 관리·Enhanced 설치 안내 링크를 제공합니다. |
 | **Automatic Updates** · `dynsight.automaticUpdates` | **켜짐** — GitHub 릴리스를 확인하고 설치 전에 묻습니다. User 설정이며 인터넷이 필요합니다. |
 
 ## 4. Relation과 Context 읽기
