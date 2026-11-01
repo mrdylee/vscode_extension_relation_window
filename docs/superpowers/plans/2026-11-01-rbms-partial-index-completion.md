@@ -10,3 +10,5 @@ Acceptance: preserve the same 147 source files and settings; complete local anal
 4. Publish a new patch only after actual-project acceptance. Verify CI/public assets/updater; install the verified extension for the user's active environment and confirm its version and project result where supported.
 
 Use the current isolated `codex/rbms-partial-index-completion` branch. Track progress/evidence in claude-mem work state. Do not mark this plan complete merely because the automated suite passes.
+
+Completed: actual source and extracted-package acceptance passed, including full BAT rebuild. Public 0.1.92, three-platform CI, public aliases/updater and active installation/rebuild were verified. See the implementation review and 0.1.92 delivery receipt.
