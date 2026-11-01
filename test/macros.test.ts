@@ -446,6 +446,42 @@ test('a matching guard condition in the postlude is not stripped with the guarde
   const target=calls(index).find(group=>group.name==='target')!;
   assert.ok(target.sites.some(site=>site.conditions.includes('#ifndef CFG_H')));
 });
+
+for(const [label,reset,expected] of [
+  ['conditional reset','#if RESET\n#undef CFG_H\n#endif\n',['first','second']],
+  ['unconditional reset','#undef CFG_H\n',['first']],
+  ['reset then unconditional definition','#if RESET\n#undef CFG_H\n#endif\n#define CFG_H\n',['second']],
+  ['definition of an already active guard','#if RESET\n#define CFG_H\n#endif\n',['second']],
+  ['no reset','',['second']]
+] as const)test(`guard re-entry preserves callback targets after ${label}`,()=>{
+  const source='#include "cfg.h"\n#undef PICK\n#define PICK second\n#include "cfg.h"\n'+
+    'typedef void(*CB)(void);void first(void){}void second(void){}void run(void){CB cb=PICK;cb();}';
+  const header='#ifndef CFG_H\n#define CFG_H\n#undef PICK\n#define PICK first\n#endif\n'+reset;
+  const index=project({'main.c':source,'cfg.h':header});
+  assert.deepEqual(calls(index).filter(group=>group.callKind==='inferred').map(group=>group.name).sort(),expected);
+  assert.ok([...index.files.values()].every(file=>!file.issues.some(issue=>/limit|cancelled/.test(issue))));
+});
+
+test('conditional guard re-entry is stable when warm and invalidates after header edits',()=>{
+  const source='#include "cfg.h"\n#undef PICK\n#define PICK second\n#include "cfg.h"\n'+
+    'typedef void(*CB)(void);void first(void){}void second(void){}void run(void){CB cb=PICK;cb();}';
+  const header='#ifndef CFG_H\n#define CFG_H\n#undef PICK\n#define PICK first\n#endif\n#if RESET\n#undef CFG_H\n#endif\n';
+  const main=analyzer.analyze('file:///warm-guards/main.c',source),initial=analyzer.analyze('file:///warm-guards/cfg.h',header);
+  const targets=(files:ReturnType<typeof analyzer.derive>)=>files[0].references.filter(ref=>ref.callKind==='inferred').map(ref=>ref.name).sort();
+  const cold=analyzer.derive([main,initial]),warm=analyzer.derive([main,initial]);
+  assert.deepEqual(targets(cold),['first','second']);assert.equal(warm[0],cold[0]);
+  for(const [reset,expected] of [['1',['first']],['0',['second']],['RESET',['first','second']]] as const){
+    const changed=analyzer.analyze(initial.uri,header.replace('#if RESET',`#if ${reset}`));
+    assert.deepEqual(targets(analyzer.derive([main,changed])),expected);
+  }
+});
+
+test('a conditional guard definition before inclusion preserves the skipped prefix path',()=>{
+  const source='#define PICK second\n#if FEATURE\n#define CFG_H\n#endif\n#include "cfg.h"\n'+
+    'typedef void(*CB)(void);void first(void){}void second(void){}void run(void){CB cb=PICK;cb();}';
+  const index=project({'main.c':source,'cfg.h':'#ifndef CFG_H\n#define CFG_H\n#undef PICK\n#define PICK first\n#endif\n'});
+  assert.deepEqual(calls(index).filter(group=>group.callKind==='inferred').map(group=>group.name).sort(),['first','second']);
+});
 test('effective direct calls are not duplicated in References after unrelated macro expansion', () => {
   const source = '#define VALUE 1\nvoid foo(void){} void run(void){int x=VALUE;foo();}';
   const index = project({ 'main.c': source });

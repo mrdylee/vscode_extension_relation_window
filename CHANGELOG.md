@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.93 — 2026-11-01
+
+- Preserve both header re-entry paths when a conditional `#undef` or `#define` makes include-guard state uncertain during macro expansion.
+- Keep known guard/reset behavior and invalidate derived callbacks after header edits, including disk-cache restoration.
+- Advance analysis cache compatibility to 19 so older omitted-target results require Rebuild index.
+
 ## 0.1.92 — 2026-11-01
 
 - Handle an include-guarded header prefix without repeatedly expanding it, while continuing to process directives after its guard.

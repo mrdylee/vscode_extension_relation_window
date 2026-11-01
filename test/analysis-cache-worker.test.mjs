@@ -214,3 +214,32 @@ test('conditional callback effects survive disk restore and a saved branch edit'
   const changed=await second.request({type:'derive',versions:[[input.uri,edit.id,-edit.id]],analyzeCallbacks:true}).promise;
   check(changed.files[0],'third');
 }));
+
+test('conditional guard re-entry survives Worker cache restore and a header edit',async()=>temporary(async(directory,spawn)=>{
+  const inputs=[
+    {uri:'file:///main.c',text:'#include "cfg.h"\n#undef PICK\n#define PICK second\n#include "cfg.h"\n'+
+      'typedef void(*CB)(void);void first(void){}void second(void){}void run(void){CB cb=PICK;cb();}',skip:true,expandMacros:true,propagateCallbacks:true},
+    {uri:'file:///cfg.h',text:'#ifndef CFG_H\n#define CFG_H\n#undef PICK\n#define PICK first\n#endif\n#if RESET\n#undef CFG_H\n#endif\n',skip:true,expandMacros:true,propagateCallbacks:true}
+  ];
+  const check=(file,expected)=>assert.deepEqual(file.references.filter(ref=>ref.callKind==='inferred').map(ref=>ref.name).sort(),expected);
+  const first=spawn();await first.request({type:'cache-init',directory,key:'guard-reset'}).promise;
+  const versions=[];
+  for(const input of inputs){const job=first.request(input);await job.promise;versions.push([input.uri,job.id,-job.id]);}
+  const cold=await first.request({type:'derive',versions,analyzeCallbacks:true}).promise;
+  check(cold.files.find(file=>file.uri===inputs[0].uri),['first','second']);
+  for(const [uri,stamp] of cold.versions)versions.find(entry=>entry[0]===uri)[2]=stamp;
+  assert.equal((await first.request({type:'cache-save',versions}).promise).saved,true);
+  await first.worker.terminate();
+  const second=spawn();await second.request({type:'cache-init',directory,key:'guard-reset'}).promise;
+  const restored=[];
+  for(const input of inputs){
+    const job=second.request({type:'cache-restore',...input}),result=await job.promise;
+    assert.equal(result.hit,true);if(input.uri===inputs[0].uri)check(result.file,['first','second']);
+    restored.push([input.uri,job.id,result.stamp]);
+  }
+  assert.equal((await second.request({type:'cache-validate',versions:restored,analyzeCallbacks:true}).promise).valid,true);
+  const edit=second.request({...inputs[1],text:inputs[1].text.replace('#if RESET','#if 1')});await edit.promise;
+  restored[1]=[inputs[1].uri,edit.id,-edit.id];
+  const changed=await second.request({type:'derive',versions:restored,analyzeCallbacks:true}).promise;
+  check(changed.files.find(file=>file.uri===inputs[0].uri),['first']);
+}));

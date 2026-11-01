@@ -51,7 +51,8 @@ function timeline(file: FileAnalysis, files: Map<string, FileAnalysis>, issues: 
   let definitionRevision = 0;
   const lastDefinitions = new Map<string, string>(), completedIncludes = new Map<string, number>();
   const byName = new Map<string, string[]>();
-  const guards = referenceNames && new Set([...files.values()].flatMap(file => file.guard ? [file.guard.name] : []));
+  // Conditional guard updates affect inclusion during expansion as well as binding.
+  const guards = new Set([...files.values()].flatMap(file => file.guard ? [file.guard.name] : []));
   for (const uri of files.keys()) { const name = uri.split('/').pop()!; const list = byName.get(name) ?? []; list.push(uri); byName.set(name, list); }
   function includeMatches(current: FileAnalysis, event: Extract<PreprocessorEvent,{kind:'include'}>) {
     const relative = new URL(event.path, current.uri).href;
@@ -72,7 +73,7 @@ function timeline(file: FileAnalysis, files: Map<string, FileAnalysis>, issues: 
     const visitId = String(visits), identities = new Map<string, string>();
     const guarded = current.guard && defined.has(current.guard.name);
     if (guarded && current.guard!.end === undefined) return;
-    const optionalGuard = referenceNames && current.guard && uncertainGuards.has(current.guard.name) ? current.guard : undefined;
+    const optionalGuard = current.guard && uncertainGuards.has(current.guard.name) ? current.guard : undefined;
     if (stack.has(current.uri)) return;
     if (stack.size >= 64 || result.length >= 40_000) { issues.add('Macro include/event limit reached'); return; }
     if (!opaqueFiles.has(current)) opaqueFiles.set(current, /^[\t ]*#[\t ]*(?:pragma[\t ]+(?:push_macro|pop_macro)|include_next)\b/m.test(current.text));
@@ -107,7 +108,7 @@ function timeline(file: FileAnalysis, files: Map<string, FileAnalysis>, issues: 
           bindings.set(name, {version: ++bindingVersion, dependencies, opaque: tokens.some(token => token.text === '#' || token.text === '##') || previous?.opaque === true});
         }
         if (!conditions.length) { if (event.kind === 'define') defined.add(event.macro.name); else defined.delete(event.name); uncertainGuards.delete(name!); }
-        else if (referenceNames && guards!.has(name!) && (event.kind === 'undef' ? defined.has(name!) : !defined.has(name!))) {
+        else if (guards.has(name!) && (event.kind === 'undef' ? defined.has(name!) : !defined.has(name!))) {
           defined.delete(name!); uncertainGuards.add(name!);
         }
         if (referenceNames && !referenceNames.has(name!)) continue;
