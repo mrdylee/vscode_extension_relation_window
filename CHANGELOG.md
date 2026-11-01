@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.90 — 2026-11-01
+
+- Default Dynsight Help to a read-only plaintext guide without invoking the built-in Markdown preview or language service.
+- Add one Markdown Preview dropdown with optional Markdown Preview Enhanced rendering, localized guides and text fallback when the selected preview is unavailable.
+- Link directly to native extension management for workspace-only built-in Markdown disabling and Enhanced installation/enablement. Extension enablement remains a manual VS Code action.
+
 ## 0.1.89 — 2026-10-31
 
 - Allow the guided AI setup to cancel and wait for an individual callback analysis, including its source preparation and model discovery, before changing providers or models. Keep setup and analysis mutually exclusive, and prevent a late picker if AI is turned off while waiting.
