@@ -3,7 +3,7 @@ import * as path from 'node:path';
 import { Language, Node, Parser } from 'web-tree-sitter';
 import { BuildEvidence } from './build-context';
 
-export const MAKE_EXTRACTION_VERSION = 'tree-sitter-make-1.1.1-computed-eval:2';
+export const MAKE_EXTRACTION_VERSION = 'tree-sitter-make-1.1.1-diab-patterns:5';
 type Recipe = { text: string; evidence: BuildEvidence };
 type Branch = { operator?: 'ifeq' | 'ifneq' | 'ifdef' | 'ifndef'; left?: string; right?: string; body: MakeStatement[] };
 export type MakeStatement = { evidence: BuildEvidence } & (

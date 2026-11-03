@@ -5,6 +5,7 @@ import { MAKE_EXTRACTION_VERSION, MakeStatement, parseMakefile } from './build-m
 type Variable = MakeVariable;
 interface Rule { targets: string[]; prerequisites: string[]; recipes: { text: string; evidence: BuildEvidence }[] }
 const unknown = '\u0000';
+const compilerValueOptions = new Set(['-D','-U','-I','-o','-x','-iquote','-isystem','-idirafter','-include','-imacros','-MF','-MT','-MQ']);
 function logicalLines(text: string, continuation = '\\') {
   const physical=text.split(/\r?\n/), result:{text:string;line:number}[]=[];
   for(let line=0;line<physical.length;line++) {
@@ -17,10 +18,15 @@ function logicalLines(text: string, continuation = '\\') {
 export async function extractStaticBuildOptions(fs: BuildFileSystem, entry: BuildEntry, sourceUris: readonly string[], environment: Record<string, string | undefined>): Promise<BuildProfile> {
   const profile: BuildProfile = { id: entry.id, entry, fingerprint: '', units: [], coverage: 'partial', dependencies: [], relevantEnvironment: [], issues: [] };
   const readCache = new Map<string, string | undefined>(), dependencies = new Map<string, string>(), usedEnvironment = new Set<string>();
+  const knownSources = new Set(sourceUris.map(uri=>canonicalBuildUri(uri))), prerequisiteDirectories = new Map<string, Set<string>>();
   let operations = 0, failed = false, bytesRead = 0;
   const overlay = new Map<string, string | undefined>();
   const metadataKey=(uri:string)=>canonicalBuildUri(uri,entry.dialect==='cmd'||process.platform==='win32');
-  const issue = (code: string, message: string, evidence?: BuildEvidence) => { failed = true; if (profile.issues.length < 128) profile.issues.push({ code, message, evidence }); };
+  const issue = (code: string, message: string, evidence?: BuildEvidence) => {
+    failed = true;
+    if (profile.issues.length < 128) profile.issues.push({ code, message, evidence });
+    else if(code==='extraction-limited'&&!profile.issues.some(issue=>issue.code===code))profile.issues[127]={code,message,evidence};
+  };
   async function read(uri: string, evidence?: BuildEvidence, optional = false) {
     if (overlay.has(metadataKey(uri))) { const text=overlay.get(metadataKey(uri)); if(text===undefined&&!optional)issue('missing-build-input',`Build input unavailable: ${uri}`,evidence); return text; }
     if (readCache.has(uri)) {
@@ -92,6 +98,7 @@ export async function extractStaticBuildOptions(fs: BuildFileSystem, entry: Buil
     });
     async function assign(vs:Map<string,Variable>,name:string,operator:string,raw:string,evidence:BuildEvidence,exported=false,literal=false){
       const old=vs.get(name);if(old?.origin==='command'||operator==='?='&&old)return;
+      if(literal&&operator==='+='&&old?.simple&&raw.includes('$'))issue('unsupported-expression','Target-specific append expansion is not resolved',evidence);
       const simple=(operator===':='||operator==='::=')||operator==='+='&&old?.simple===true;
       const next=simple&&!literal?await expand(raw,vs,evidence,{},cwd):raw;
       if(makeControls.has(name)&&next.trim())issue('unsupported-make-environment',`Make control variable is not interpreted: ${name}`,evidence);
@@ -180,6 +187,27 @@ export async function extractStaticBuildOptions(fs: BuildFileSystem, entry: Buil
       finally { reading.delete(uri); }
     }
     for(const filename of filenames)await parse(resolveBuildUri(cwd,filename),0);
+    const explicitTargets=new Set(rules.flatMap(rule=>rule.targets.filter(name=>!name.includes('%'))));
+    const patternRules=rules.flatMap(rule=>rule.recipes.length?[...new Set(rule.targets.filter(pattern=>pattern.includes('%')))].map(pattern=>({rule,pattern})):[]);
+    const prerequisiteName=(value:string,stem:string,directory:string)=>value.includes('%')?directory+value.replace(/%/g,stem):value;
+    async function available(name:string,explicitPrerequisites:Set<string>){
+      const uri=resolveBuildUri(cwd,name);
+      if(explicitTargets.has(name)||explicitPrerequisites.has(name)||knownSources.has(canonicalBuildUri(uri)))return true;
+      const directory=buildDirectory(uri);
+      let names=prerequisiteDirectories.get(directory);
+      if(!names){
+        if(++operations>20_000){issue('extraction-limited','Implicit prerequisite lookup limit');return false;}
+        let entries:Awaited<ReturnType<BuildFileSystem['list']>>;
+        try{entries=await fs.list(directory);}catch{issue('unsupported-pattern-rule',`Cannot inspect implicit prerequisite: ${name}`);return false;}
+        dependencies.set(directory,fingerprintBuildInput(entries.map(entry=>[entry.uri,entry.kind]).sort()));
+        names=new Set();prerequisiteDirectories.set(directory,names);
+        for(const entry of entries){
+          if(++operations>20_000){issue('extraction-limited','Implicit prerequisite traversal limit');return false;}
+          names.add(canonicalBuildUri(entry.uri));
+        }
+      }
+      return names.has(canonicalBuildUri(uri));
+    }
     const visited=new Set<string>(),visiting=new Set<string>();
     async function target(name:string,level:number,inherited:Map<string,Variable>){
       if(++operations>20_000){issue('extraction-limited','Build target evaluation limit');return;}
@@ -188,17 +216,33 @@ export async function extractStaticBuildOptions(fs: BuildFileSystem, entry: Buil
       for(const item of matchingVariables(name)){await assign(vs,item.name,item.operator,item.raw,item.evidence,false,true);if(item.raw.includes(unknown))failed=true;}
       const key=fingerprintBuildInput([name,[...vs]]);if(visited.has(key))return;
       if(level>64||visiting.has(name)){issue('target-cycle',`Target cycle/depth at ${name}`);return;}visiting.add(name);
-      let selectedRules=rules.filter(rule=>rule.targets.includes(name)),stem:string|undefined;
+      let selectedRules=rules.filter(rule=>rule.targets.includes(name)),stem:string|undefined,patternDirectory='';
       if(!selectedRules.some(r=>r.recipes.length)){
-        const pattern=rules.find(rule=>rule.recipes.length&&rule.targets.some(t=>t.includes('%')&&makePattern(t,name)!==undefined));
-        if(pattern){selectedRules=[...selectedRules,pattern];stem=makePattern(pattern.targets.find(t=>t.includes('%')&&makePattern(t,name)!==undefined)!,name);}
+        const candidates=patternRules.flatMap(({rule,pattern})=>{
+          const directory=pattern.includes('/')?'':name.slice(0,name.lastIndexOf('/')+1);
+          const stem=makePattern(pattern,name.slice(directory.length));if(!stem)return [];
+          if(++operations>20_000){issue('extraction-limited','Implicit pattern selection limit');return [];}
+          return [{rule,stem,directory}];
+        }).sort((a,b)=>a.directory.length+a.stem.length-b.directory.length-b.stem.length);
+        let selected=candidates[0];
+        if(candidates.length>1){
+          const explicitPrerequisites=new Set(selectedRules.flatMap(rule=>rule.prerequisites));
+          let matched=false;
+          for(const candidate of candidates){
+            let supported=true;
+            for(const prerequisite of candidate.rule.prerequisites.filter(p=>p!=='|'))if(!await available(prerequisiteName(prerequisite,candidate.stem,candidate.directory),explicitPrerequisites)){supported=false;break;}
+            if(supported){selected=candidate;matched=true;break;}
+          }
+          if(!matched)issue('unsupported-pattern-rule',`Implicit prerequisites cannot be verified for ${name}`);
+        }
+        if(selected){selectedRules=[...selectedRules,selected.rule];stem=selected.stem;patternDirectory=selected.directory;}
       }
       for(const rule of selectedRules){
-        const prerequisites=rule.prerequisites.map(p=>stem===undefined?p:p.replace(/%/g,stem));
+        const prerequisites=rule.prerequisites.map(p=>stem===undefined?p:prerequisiteName(p,stem,patternDirectory));
         for(const prerequisite of prerequisites.filter(p=>p!=='|'))await target(prerequisite,level+1,vs);
         const normal=prerequisites.slice(0,prerequisites.includes('|')?prerequisites.indexOf('|'):undefined);
         for(const recipe of rule.recipes){
-          const command=await expand(recipe.text.replace(/^[@+-]+/,''),vs,recipe.evidence,{'@':name,'<':normal[0]??'','^':normal.join(' '),'*':stem??'',MAKE:'make'},cwd);
+          const command=await expand(recipe.text.replace(/^[@+-]+/,''),vs,recipe.evidence,{'@':name,'<':normal[0]??'','^':normal.join(' '),'*':stem===undefined?'':patternDirectory+stem,MAKE:'make'},cwd);
           if(command.includes(unknown))continue;
           const argv=words(command,'posix',recipe.evidence);if(!argv.length)continue;
           const binary=argv[0].split(/[\\/]/).pop()!.replace(/\.exe$/,'');
@@ -216,10 +260,19 @@ export async function extractStaticBuildOptions(fs: BuildFileSystem, entry: Buil
             continue;
           }
           if(argv.some(v=>/[;&|<>`]/.test(v))){issue('unsupported-recipe','Shell operators in compile command',recipe.evidence);continue;}
-          const source=argv.find(arg=>/\.[cC]$/.test(arg));if(!source){if(argv.includes('-c'))issue('missing-source','Compile command has no resolved source',recipe.evidence);continue;}
-          const unit=await normalizeCompileContext({profileId:profile.id,sourceUri:resolveBuildUri(cwd,source),cwdUri:cwd,argv,dialect:'posix',evidence:[...chain,recipe.evidence]},fs);
-          if(failed){unit.status='partial';unit.membership='unknown';unit.issues.push(...profile.issues);}
-          profile.units.push(unit);
+          const inputs=new Set<string>();
+          for(let n=1;n<argv.length;n++){
+            const arg=argv[n];if(compilerValueOptions.has(arg)){n++;continue;}
+            if(!/^[-@]/.test(arg)&&/\.[cC]$/.test(arg))inputs.add(arg);
+          }
+          if(!inputs.size){if(argv.includes('-c'))issue('missing-source','Compile command has no resolved source',recipe.evidence);continue;}
+          let inputIndex=0;
+          for(const source of inputs){
+            if(inputIndex++&&(operations+=argv.length)>20_000){issue('extraction-limited','Multi-source normalization work limit',recipe.evidence);break;}
+            const unit=await normalizeCompileContext({profileId:profile.id,sourceUri:resolveBuildUri(cwd,source),cwdUri:cwd,argv,dialect:'posix',evidence:[...chain,recipe.evidence]},fs);
+            if(failed){unit.status='partial';unit.membership='unknown';unit.issues.push(...profile.issues);}
+            profile.units.push(unit);
+          }
         }
       }
       visiting.delete(name);visited.add(key);

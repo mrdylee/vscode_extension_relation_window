@@ -14,6 +14,23 @@ import { extractStaticBuildOptions } from '../src/build-options';
 
 let parser: Awaited<ReturnType<typeof createAnalyzer>>;
 before(async () => { parser = await createAnalyzer(path.resolve('node_modules/web-tree-sitter/web-tree-sitter.wasm'), path.resolve('node_modules/tree-sitter-c/tree-sitter-c.wasm')); });
+test('RBMS Diab options and shared-prefix rules preserve callbacks through cold, warm and debug refreshes',async()=>{
+  const make=(debug:boolean)=>'OBJS=out/\nSHARED=out/share/\nall: out/share/app/a.o\nout/share/app/a.o: CFLAGS := -tPPCE200Z4251N3VES:simple -g3 -Xsmall-data=0 -Xmake-dependency=4 -Xstop-on-warning -Iinc -DMODE='+(debug?'2 -DDEBUG_TEST':'1')+'\n$(OBJS)%.o $(SHARED)%.o: %.c\n\tdcc $(CFLAGS) -c $< -o $@\n';
+  const source='#include <ops.h>\nvoid first(void){}void second(void){}\nvoid run(void){CB cb=TARGET;cb();}';
+  const f=buildFixture({Makefile:make(false),'app/a.c':source,'inc/ops.h':'typedef void(*CB)(void);\n#if MODE==1\n#define TARGET first\n#else\n#define TARGET second\n#endif\n'});
+  const raw=[...f.texts].filter(([uri])=>/\.(c|h)$/.test(uri)).map(([uri,text])=>parser.analyze(uri,text,true,{expandMacros:true,propagateCallbacks:true}));
+  const entry={id:'rbms',rootUri:'file:///p',entryUri:'file:///p/Makefile',cwdUri:'file:///p',dialect:'make' as const,args:[],evidence:[]},build=new BuildAnalysis();
+  for(const debug of [false,false,true]){
+    f.texts.set('file:///p/Makefile',make(debug));
+    const profile=await extractStaticBuildOptions(f.fs,entry,['file:///p/app/a.c'],{});
+    assert.equal(profile.units[0].status,'resolved');
+    assert.equal(profile.units[0].macroActions.some(a=>a.name==='DEBUG_TEST'),debug);
+    const prepared=await build.prepare(parser,raw,profile,new AnalysisWorkBudget()),index=new RelationIndex();
+    parser.derive(prepared).forEach(file=>index.update(file));
+    const run=index.symbols().find(s=>s.name==='run'&&s.definition)!;
+    assert.deepEqual(index.relations(run.id,'callees').filter(r=>r.callKind==='inferred').map(r=>r.name),[debug?'second':'first']);
+  }
+});
 test('GCC and Diab Make target options select the correct callback cold, warm and after configuration edit',async()=>{
   for(const compiler of ['gcc','dcc']){
     const make=(mode:number)=>`CC=${compiler}\nOBJS := $(addprefix out/,a.o)\nall: $(OBJS)\nout/a.o: CFLAGS := -DMODE=${mode}\nout/%.o: %.c\n\t$(CC) $(CFLAGS) -c $< -o $@`;

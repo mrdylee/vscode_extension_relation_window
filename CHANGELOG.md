@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.94 — 2026-11-04
+
+- Recognize the explicit Diab 5.9.6.7 option forms used by RBMS while keeping compiler defaults, generators and unknown options uncertain.
+- Select overlapping Make object patterns using source prerequisites, preserve nested target paths, reject empty implicit stems and account for explicitly declared generated sources.
+- Invalidate build metadata after folder changes and Windows URI aliases; distinguish C inputs from compiler option values and retain bounded multi-source contexts.
+- Mark unresolved target-specific option appends partial and refresh previous build contexts using the updated extraction fingerprint.
+- Use the D-shaped call-graph icon for the Dynsight panel.
+
 ## 0.1.93 — 2026-11-01
 
 - Preserve both header re-entry paths when a conditional `#undef` or `#define` makes include-guard state uncertain during macro expansion.

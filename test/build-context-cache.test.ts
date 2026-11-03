@@ -9,6 +9,62 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { FileAnalysis } from '../src/model';
+import { canonicalBuildUri } from '../src/build-context';
+
+test('Windows parent-folder invalidation matches encoded drives and path case aliases',async()=>{
+  const name='file:///C:/Project/Cfg/flags.mk',f=buildFixture({[name]:'MODE=1'});
+  const cache=new BuildMetadataCache({...f.fs,readText:async uri=>[...f.texts].find(([path])=>canonicalBuildUri(path)===canonicalBuildUri(uri))?.[1]});
+  const encoded='file:///c%3A/Project/Cfg/flags.mk';
+  assert.equal(await cache.readText(encoded),'MODE=1');
+  f.texts.set(name,'MODE=2');
+  assert.equal(cache.invalidate('file:///C:/project/cfg',true),true);
+  assert.equal(await cache.readText(encoded),'MODE=2');
+  assert.equal(await cache.readText('file:///c:/PROJECT/CFG/FLAGS.MK'),'MODE=2');
+});
+
+for(const nested of ['','nested/'])test(`creating or deleting the parent of ${nested||'direct '}prerequisites invalidates directory observations`,async()=>{
+  const preferred='preferred/'+nested+'a.c';
+  const f=buildFixture({Makefile:'all: a.o\n%.o: preferred/'+nested+'%.c\n\tdcc -DPREFERRED -c $<\n%.o: fallback/%.c\n\tdcc -DFALLBACK -c $<\n','fallback/a.c':''});
+  const cache=new BuildMetadataCache(f.fs),entry={id:'parent-patterns',rootUri:'file:///p',entryUri:'file:///p/Makefile',cwdUri:'file:///p',dialect:'make' as const,args:[],evidence:[]};
+  assert.equal((await cache.profile(entry,[],{})).units[0].sourceUri,'file:///p/fallback/a.c');
+  f.texts.set('file:///p/'+preferred,'');
+  assert.equal(cache.invalidate('file:///p/preferred',true),true);
+  assert.equal((await cache.profile(entry,[],{})).units[0].sourceUri,'file:///p/'+preferred);
+  f.texts.delete('file:///p/'+preferred);
+  assert.equal(cache.invalidate('file:///p/preferred',true),true);
+  assert.equal((await cache.profile(entry,[],{})).units[0].sourceUri,'file:///p/fallback/a.c');
+});
+test('parent-folder events invalidate cached included Makefile contents and missing reads',async()=>{
+  const f=buildFixture({Makefile:'include cfg/flags.mk\na.o: a.c\n\tdcc $(FLAGS) -c $<\n','cfg/flags.mk':'FLAGS=-DMODE=1'});
+  const cache=new BuildMetadataCache(f.fs),entry={id:'parent-includes',rootUri:'file:///p',entryUri:'file:///p/Makefile',cwdUri:'file:///p',dialect:'make' as const,args:[],evidence:[]};
+  const sources=['file:///p/a.c'];
+  assert.equal((await cache.profile(entry,sources,{})).units[0].macroActions[0].replacement,'1');
+  f.texts.delete('file:///p/cfg/flags.mk');
+  assert.equal(cache.invalidate('file:///p/cfg',true),true);
+  const deleted=await cache.profile(entry,sources,{});
+  assert.ok(deleted.issues.some(i=>i.code==='missing-build-input'));
+  assert.equal(deleted.units[0].status,'partial');
+  f.texts.set('file:///p/cfg/flags.mk','FLAGS=-DMODE=2');
+  assert.equal(cache.invalidate('file:///p/cfg',true),true);
+  const created=await cache.profile(entry,sources,{});
+  assert.equal(created.units[0].status,'resolved');
+  assert.equal(created.units[0].macroActions[0].replacement,'2');
+});
+
+test('creating or deleting an implicit-rule prerequisite invalidates cached pattern selection',async()=>{
+  const f=buildFixture({Makefile:'all: a.o\n%.o: preferred/%.c\n\tdcc -DPREFERRED -c $<\n%.o: fallback/%.c\n\tdcc -DFALLBACK -c $<\n','fallback/a.c':''});
+  const cache=new BuildMetadataCache(f.fs),entry={id:'patterns',rootUri:'file:///p',entryUri:'file:///p/Makefile',cwdUri:'file:///p',dialect:'make' as const,args:[],evidence:[]};
+  const first=await cache.profile(entry,[],{});
+  assert.equal(first.units[0].sourceUri,'file:///p/fallback/a.c');
+  f.texts.set('file:///p/preferred/a.c','');
+  assert.equal(cache.invalidate('file:///p/preferred/a.c',true),true);
+  const second=await cache.profile(entry,[],{});
+  assert.equal(second.units[0].sourceUri,'file:///p/preferred/a.c');
+  assert.notEqual(second.fingerprint,first.fingerprint);
+  f.texts.delete('file:///p/preferred/a.c');
+  assert.equal(cache.invalidate('file:///p/preferred/a.c',true),true);
+  assert.equal((await cache.profile(entry,[],{})).units[0].sourceUri,'file:///p/fallback/a.c');
+});
 
 test('new wildcard sources invalidate the cached directory and profile without source execution',async()=>{
   const f=buildFixture({Makefile:'all: $(patsubst %.c,%.o,$(wildcard app/*.c))\n%.o: %.c\n\tgcc -c $<','app/a.c':''});

@@ -34,6 +34,14 @@ export interface BuildProfile {
 }
 export interface BuildEpoch { profileId: string; fingerprint: string; contextRevision: number; sourceRevision: number }
 export interface BuildSourceScope { rootUri: string; include: string[]; exclude: string[]; nocase?: boolean }
+// Observed RBMS Diab 5.9.6.7 option forms. Target/dialect builtins remain unknown.
+const diabCompileOptions = new Set([
+  '-tPPCE200Z4251N3VES:simple', '-Xdialect-ansi', '-XO', '-Xsize-opt',
+  '-Xsmall-data=0', '-Xaddr-sconst=0x11', '-Xaddr-sdata=0x11', '-Xno-common', '-Xnested-interrupts',
+  '-Xdebug-dwarf2', '-Xdebug-local-all', '-Xdebug-local-cie', '-Xdebug-struct-all', '-Xforce-declarations',
+  '-ee1481', '-ei1827', '-ei1711', '-ei1546', '-ei1606', '-ei1824', '-Xmacro-undefined-warn',
+  '-W:as:,-l', '-Wa,-Xisa-vle', '-Xmake-dependency=4', '-Xlint=0x50', '-Xstop-on-warning'
+]);
 export function fingerprintBuildInput(value: unknown): string {
   const normalize = (item: unknown): unknown => Array.isArray(item) ? item.map(normalize) : item && typeof item === 'object'
     ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b)).map(([key, child]) => [key, normalize(child)])) : item;
@@ -122,7 +130,7 @@ export async function normalizeCompileContext(invocation: CompileInvocation, fs:
       } else if (arg === '-o') { const output = args[++n]; if (output) unit.outputUri = resolveBuildUri(invocation.cwdUri, output); else issue('missing-option-value', 'Missing output path'); }
       else if (/^-M[FQT]/.test(arg)) {if(arg.length===3&&!args[++n])issue('missing-option-value',`Missing dependency output: ${arg}`);}
       else if (arg === '-x') { if (!args[++n]) issue('missing-option-value', 'Missing language'); }
-      else if (arg.startsWith('-') && !(compiler==='diab'?/^(?:-c|-S|-E|-g\d*|-O\d*|-w)$/ : /^(?:-c|-S|-E|-g\w*|-O[\w]*|-W[\w=,-]*|-std=[\w+]+|-f(?:no-)?(?:builtin|common|strict-aliasing|function-sections|data-sections|omit-frame-pointer|unwind-tables|asynchronous-unwind-tables)|-m[\w=.+-]+|-M(?:D|MD|P)?|-pipe)$/).test(arg))
+      else if (arg.startsWith('-') && !(compiler==='diab'&&diabCompileOptions.has(arg)) && !(compiler==='diab'?/^(?:-c|-S|-E|-g\d*|-O\d*|-w)$/ : /^(?:-c|-S|-E|-g\w*|-O[\w]*|-W[\w=,-]*|-std=[\w+]+|-f(?:no-)?(?:builtin|common|strict-aliasing|function-sections|data-sections|omit-frame-pointer|unwind-tables|asynchronous-unwind-tables)|-m[\w=.+-]+|-M(?:D|MD|P)?|-pipe)$/).test(arg))
         issue(compiler==='diab'?'unsupported-compiler-options':'unsupported-option', `Option semantics not resolved: ${arg}`);
     }
   }

@@ -3,6 +3,27 @@ import assert from 'node:assert/strict';
 import { fingerprintBuildInput, normalizeCompileContext, sameBuildEpoch } from '../src/build-context';
 import { buildFixture } from './build-fixtures';
 
+for(const [group,options]of Object.entries({
+  general:'-Xaddr-sconst=0x11 -Xaddr-sdata=0x11 -Xno-common -Xnested-interrupts -Xdebug-dwarf2 -Xdebug-local-all -Xdebug-local-cie -Xdebug-struct-all -Xforce-declarations -ee1481 -ei1827 -ei1711 -ei1546 -ei1606 -ei1824 -Xmacro-undefined-warn -W:as:,-l -Wa,-Xisa-vle -Xlint=0x50 -Xstop-on-warning',
+  mcal:'-Xdialect-ansi -XO -Xsize-opt -Xaddr-sconst=0x11 -Xaddr-sdata=0x11 -Xno-common -Xnested-interrupts -Xdebug-dwarf2 -Xdebug-local-all -Xdebug-local-cie -Xdebug-struct-all -Xforce-declarations -ee1481 -Xmacro-undefined-warn -W:as:,-l -Wa,-Xisa-vle',
+  safertos:'',
+  sox:'-Xaddr-sconst=0x11 -Xaddr-sdata=0x11 -Xno-common -Xnested-interrupts -Xdebug-dwarf2 -Xdebug-local-all -Xdebug-local-cie -Xdebug-struct-all -Xforce-declarations -ee1481 -ei1827 -ei1711 -ei1546 -ei1606 -ei1824 -Xmacro-undefined-warn -W:as:,-l -Wa,-Xisa-vle -Xlint=0x50'
+}))test(`RBMS Diab ${group} options preserve explicit preprocessing without inventing builtins`,async()=>{
+  const {fs}=buildFixture({});
+  const argv=['dcc','-tPPCE200Z4251N3VES:simple','-g3','-Xsmall-data=0','-Xmake-dependency=4',...options.split(/\s+/).filter(Boolean),'-DMODE=0','-UMODE','-DMODE=1','-Iinc','-c','a.c','-o','a.o'];
+  const unit=await normalizeCompileContext({profileId:'rbms',sourceUri:'file:///p/a.c',cwdUri:'file:///p',argv,dialect:'posix',evidence:[]},fs);
+  assert.equal(unit.status,'resolved',JSON.stringify(unit.issues));assert.equal(unit.builtins,'unknown');
+  assert.deepEqual(unit.macroActions,[{kind:'define',name:'MODE',replacement:'0'},{kind:'undef',name:'MODE'},{kind:'define',name:'MODE',replacement:'1'}]);
+  assert.deepEqual(unit.includeSearch,[{kind:'user',uri:'file:///p/inc'}]);assert.deepEqual(unit.argv,argv);
+});
+test('unrecognized Diab preprocessing options and values remain partial',async()=>{
+  const {fs}=buildFixture({});
+  for(const option of ['-Xpreinclude=config.h','-Xsmall-data=99','-tOTHER:simple','-@flags.cfg']){
+    const unit=await normalizeCompileContext({profileId:'rbms',sourceUri:'file:///p/a.c',cwdUri:'file:///p',argv:['dcc',option,'-DMODE=1','-c','a.c'],dialect:'posix',evidence:[]},fs);
+    assert.equal(unit.status,'partial');assert.ok(unit.issues.some(i=>i.code==='unsupported-compiler-options'));
+  }
+});
+
 test('GCC and Diab preserve the same ordered explicit macro and include options',async()=>{
   const {fs}=buildFixture({});
   for(const compiler of ['gcc','dcc']){

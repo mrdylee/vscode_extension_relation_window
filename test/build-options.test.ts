@@ -56,6 +56,134 @@ test('eval inside call-local variable scope stays explicitly unsupported',async(
 });
 
 const makeEntry = { id: 'repair', rootUri: 'file:///p', entryUri: 'file:///p/Makefile', cwdUri: 'file:///p', dialect: 'make' as const, args: [], evidence: [] };
+for(const pattern of ['%.o','foo-%.o'])test(`directory-less ${pattern} matches target basenames and restores prerequisite directories`,async()=>{
+  const target=pattern==='%.o'?'nested/a.o':'nested/foo-a.o';
+  const f=buildFixture({Makefile:'all: '+target+'\n'+pattern+': src/%.c config.h\n\tdcc -DSTEM=$* -c $< -o $@\n','nested/src/a.c':'','config.h':''});
+  const p=await extractStaticBuildOptions(f.fs,makeEntry,['file:///p/nested/src/a.c'],{});
+  assert.equal(p.units.length,1);
+  assert.equal(p.units[0].sourceUri,'file:///p/nested/src/a.c');
+  assert.equal(p.units[0].macroActions[0].replacement,'nested/a');
+  assert.equal(p.units[0].status,'resolved');
+});
+test('competing directory-less patterns check restored paths and keep fixed prerequisites unchanged',async()=>{
+  const f=buildFixture({Makefile:'all: nested/foo-a.o\nfoo-%.o: absent/%.c config.h\n\tdcc -DWRONG -c $<\nfoo-%.o: src/%.c config.h\n\tdcc -DVALID -c $<\n','nested/src/a.c':'','config.h':''});
+  const p=await extractStaticBuildOptions(f.fs,makeEntry,['file:///p/nested/src/a.c'],{});
+  assert.equal(p.units.length,1);assert.equal(p.units[0].status,'resolved');
+  assert.equal(p.units[0].sourceUri,'file:///p/nested/src/a.c');
+  assert.deepEqual(p.units[0].macroActions.map(a=>a.name),['VALID']);
+});
+for(const compiler of ['gcc','dcc']){
+  test(`${compiler}: option values ending in .c cannot become translation units`,async()=>{
+    const forced=compiler==='gcc'?' -include forced.c -imacros macros.c':'';
+    const f=buildFixture({Makefile:'a.o: app/a.c\n\t'+compiler+' -DPRIMARY=first.c -D SECOND=second.c -I includes.c'+forced+' -o output.c -c $<\n'});
+    const p=await extractStaticBuildOptions(f.fs,makeEntry,['file:///p/app/a.c'],{});
+    assert.deepEqual(p.units.map(u=>u.sourceUri),['file:///p/app/a.c']);
+    assert.equal(p.units[0].outputUri,'file:///p/output.c');assert.equal(p.units[0].status,'resolved');
+  });
+  test(`${compiler}: one invocation retains each C input as its own translation unit`,async()=>{
+    const f=buildFixture({Makefile:'all: app/a.c app/b.c\n\t'+compiler+' -DMODE=1 -c app/a.c app/b.c\n'});
+    const sources=['file:///p/app/a.c','file:///p/app/b.c'];
+    const p=await extractStaticBuildOptions(f.fs,makeEntry,sources,{});
+    assert.deepEqual(p.units.map(u=>u.sourceUri),sources);
+    assert.ok(p.units.every(u=>u.status==='resolved'&&u.macroActions[0].replacement==='1'));
+    assert.notEqual(p.units[0].id,p.units[1].id);
+  });
+}
+test('a GCC response-file name ending in .c is not a C input',async()=>{
+  const f=buildFixture({Makefile:'a.o: app/a.c\n\tgcc @flags.c -c $<\n','flags.c':'-DMODE=1'});
+  const p=await extractStaticBuildOptions(f.fs,makeEntry,['file:///p/app/a.c'],{});
+  assert.deepEqual(p.units.map(u=>u.sourceUri),['file:///p/app/a.c']);
+  assert.equal(p.units[0].macroActions[0].replacement,'1');
+});
+test('repeated normalization of multi-input commands consumes the existing extraction budget',async()=>{
+  const names=Array.from({length:600},(_,n)=>'a'+n+'.c');
+  const f=buildFixture({Makefile:'all:\n\tdcc -c '+names.join(' ')+'\n'});
+  const p=await extractStaticBuildOptions(f.fs,makeEntry,names.map(name=>'file:///p/'+name),{});
+  assert.ok(p.units.length>0&&p.units.length<names.length);
+  assert.ok(p.issues.some(i=>i.code==='extraction-limited'));
+});
+test('overlapping RBMS object prefixes select existing product and shared sources',async()=>{
+  const f=buildFixture({Makefile:'OBJS=out/\nSHARED=out/share/\nPRODUCT=out/rbms/board/\nall: out/share/sdk/os/a.o out/rbms/board/app/b.o\n$(OBJS)%.o $(PRODUCT)%.o $(SHARED)%.o: %.c\n\tdcc -DMODE=1 -c $< -o $@\n',
+    'sdk/os/a.c':'','app/b.c':''});
+  const sources=['file:///p/sdk/os/a.c','file:///p/app/b.c'];
+  const p=await extractStaticBuildOptions(f.fs,makeEntry,sources,{});
+  assert.deepEqual(p.units.map(u=>u.sourceUri),sources);
+  assert.ok(p.units.every(u=>u.status==='resolved'));
+});
+test('shared C and assembly patterns preserve every C unit within the extraction budget',async()=>{
+  const names=Array.from({length:1400},(_,n)=>'app/a'+n),sources=names.map(name=>'file:///p/'+name+'.c');
+  const f=buildFixture({Makefile:'OBJS=out/\nSHARED=out/share/\nall: '+names.map(name=>'out/share/'+name+'.o').join(' ')+' out/share/start.o\n$(OBJS)%.o $(SHARED)%.o $(SHARED)%.o: %.c\n\tdcc -c $<\n$(OBJS)%.o $(SHARED)%.o $(SHARED)%.o: %.s\n\tdcc -c $<\n','start.s':''});
+  const p=await extractStaticBuildOptions(f.fs,makeEntry,sources,{});
+  assert.deepEqual(p.units.map(u=>u.sourceUri),sources);
+  assert.ok(!p.issues.some(i=>i.code==='extraction-limited'));
+});
+test('extraction exhaustion stays visible after generated-artifact diagnostics fill the notice limit',async()=>{
+  const names=Array.from({length:3000},(_,n)=>'a'+n),artifacts=Array.from({length:130},(_,n)=>'generated'+n+'.h');
+  const f=buildFixture({Makefile:'all: '+[...artifacts,...names.map(name=>'out/share/'+name+'.o')].join(' ')+'\n'+artifacts.map(name=>name+':\n\tgenerator\n').join('')+'out/%.o out/share/%.o: %.c\n\tdcc -c $<\nout/%.o out/share/%.o: %.s\n\tdcc -c $<\n'});
+  const p=await extractStaticBuildOptions(f.fs,makeEntry,names.map(name=>'file:///p/'+name+'.c'),{});
+  assert.ok(p.issues.some(i=>i.code==='extraction-limited'));
+  assert.equal(p.issues.length,128);
+});
+test('an implicit rule with unavailable prerequisites cannot hide an available rule',async()=>{
+  const f=buildFixture({Makefile:'all: a.o\n%.o: missing/%.c\n\tdcc -DMODE=0 -c $<\n%.o: src/%.c\n\tdcc -DMODE=1 -c $<\n','src/a.c':''});
+  const p=await extractStaticBuildOptions(f.fs,makeEntry,['file:///p/src/a.c'],{});
+  assert.equal(p.units[0].sourceUri,'file:///p/src/a.c');
+  assert.equal(p.units[0].macroActions[0].replacement,'1');
+});
+test('an explicit prerequisite preserves the implicit rule for a generated C source',async()=>{
+  const f=buildFixture({Makefile:'all: a.o\na.o: generated/a.c\n%.o: generated/%.c\n\tdcc -DPRIMARY -c $< -o $@\n%.o: fallback/%.c\n\tdcc -DFALLBACK -c $< -o $@\ngenerated/%.c: template/%.in\n\tgenerate $< -o $@\n','template/a.in':'','fallback/a.c':''});
+  const p=await extractStaticBuildOptions(f.fs,makeEntry,[],{});
+  assert.deepEqual(p.units.map(unit=>unit.sourceUri),['file:///p/generated/a.c']);
+  assert.deepEqual(p.units[0].macroActions.map(action=>action.name),['PRIMARY']);
+  assert.ok(p.issues.some(issue=>issue.code==='unsupported-recipe'));
+  assert.ok(!p.issues.some(issue=>issue.code==='unsupported-pattern-rule'));
+});
+test('another target prerequisite cannot displace an available implicit source',async()=>{
+  const f=buildFixture({Makefile:'all: a.o\nother.o: generated/a.c\n%.o: generated/%.c\n\tdcc -DPRIMARY -c $< -o $@\n%.o: fallback/%.c\n\tdcc -DFALLBACK -c $< -o $@\ngenerated/%.c: template/%.in\n\tgenerate $< -o $@\n','template/a.in':'','fallback/a.c':''});
+  const p=await extractStaticBuildOptions(f.fs,makeEntry,[],{});
+  assert.deepEqual(p.units.map(unit=>unit.sourceUri),['file:///p/fallback/a.c']);
+  assert.deepEqual(p.units[0].macroActions.map(action=>action.name),['FALLBACK']);
+  assert.equal(p.units[0].status,'resolved');
+});
+for(const directory of ['','nested/'])test(`implicit rules require a nonempty stem for ${directory}foo.o`,async()=>{
+  const f=buildFixture({Makefile:'all: '+directory+'foo.o\n%.o: src/%.c\n\tdcc -DVALID -c $< -o $@\nfoo%.o: fallback.c\n\tdcc -DEMPTY -c $< -o $@\n',[directory+'src/foo.c']:'','fallback.c':''});
+  const p=await extractStaticBuildOptions(f.fs,makeEntry,[],{});
+  assert.deepEqual(p.units.map(unit=>unit.sourceUri),['file:///p/'+directory+'src/foo.c']);
+  assert.deepEqual(p.units[0].macroActions.map(action=>action.name),['VALID']);
+  assert.equal(p.units[0].status,'resolved');
+});
+test('Make text functions retain empty percent matches',async()=>{
+  const f=buildFixture({Makefile:'a.o: a.c\n\tdcc -DREPLACED=$(patsubst foo%,bar%,foo) -DFILTERED=$(filter foo%,foo) -c $<\n'});
+  const p=await extractStaticBuildOptions(f.fs,makeEntry,['file:///p/a.c'],{});
+  assert.deepEqual(p.units[0].macroActions,[{kind:'define',name:'REPLACED',replacement:'bar'},{kind:'define',name:'FILTERED',replacement:'foo'}]);
+  assert.equal(p.units[0].status,'resolved');
+});
+test('the most specific available implicit pattern takes precedence over an earlier generic rule',async()=>{
+  const f=buildFixture({Makefile:'all: out/a.o\n%.o: %.c\n\tdcc -DGENERIC -c $<\nout/%.o: src/%.c\n\tdcc -DSPECIFIC -c $<\n','out/a.c':'','src/a.c':''});
+  const p=await extractStaticBuildOptions(f.fs,makeEntry,['file:///p/out/a.c','file:///p/src/a.c'],{});
+  assert.equal(p.units[0].sourceUri,'file:///p/src/a.c');
+  assert.deepEqual(p.units[0].macroActions.map(a=>a.name),['SPECIFIC']);
+});
+test('unverified competing implicit rules retain uncertainty instead of resolving the first source',async()=>{
+  const f=buildFixture({Makefile:'all: a.o\n%.o: first/%.c\n\tdcc -c $<\n%.o: second/%.c\n\tdcc -c $<\n'});
+  const p=await extractStaticBuildOptions(f.fs,makeEntry,[],{});
+  assert.equal(p.units[0].status,'partial');assert.equal(p.units[0].membership,'unknown');
+  assert.ok(p.issues.some(i=>i.code==='unsupported-pattern-rule'));
+});
+test('recognized Diab options cannot bypass uncertainty from a pre-build generator',async()=>{
+  const f=buildFixture({'build.bat':'version-generator.exe\nmake\n',Makefile:'a.o: a.c\n\tdcc -tPPCE200Z4251N3VES:simple -Xsmall-data=0 -DMODE=1 -Iinc -c $<\n'});
+  const p=await extractStaticBuildOptions(f.fs,{...makeEntry,dialect:'cmd',entryUri:'file:///p/build.bat'},['file:///p/a.c'],{});
+  assert.equal(p.units[0].status,'partial');assert.equal(p.units[0].membership,'unknown');
+  assert.ok(p.issues.some(i=>i.code==='unsupported-statement'));
+});
+test('unresolved target-specific appends cannot resolve Diab options or poison sibling targets',async()=>{
+  const f=buildFixture({Makefile:'FLAGS := -DMODE=0\nEXTRA=-UMODE -DMODE=1\nall: a.o b.o\na.o: FLAGS += $(EXTRA)\nb.o: FLAGS := -DMODE=1\n%.o: %.c\n\tdcc -tPPCE200Z4251N3VES:simple $(FLAGS) -c $<\n'});
+  const p=await extractStaticBuildOptions(f.fs,makeEntry,['file:///p/a.c','file:///p/b.c'],{});
+  assert.equal(p.units[0].status,'partial');assert.equal(p.units[0].membership,'unknown');
+  assert.ok(p.units[0].issues.some(i=>i.code==='unsupported-expression'));
+  assert.equal(p.units[1].status,'resolved');assert.equal(p.units[1].membership,'included');
+  assert.equal(p.units[1].macroActions[0].replacement,'1');
+});
 for (const compiler of ['gcc', 'dcc']) {
   test(`${compiler}: quoted Make conditions select the active compile options`, async () => {
     const f = buildFixture({ Makefile: `CC=${compiler}\nMODE=A\nifeq "$(MODE)" "A"\nFLAGS=-DACTIVE\nelse\nFLAGS=-DWRONG\nendif\na.o: a.c\n\t$(CC) $(FLAGS) -c $<\n` });

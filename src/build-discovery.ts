@@ -1,4 +1,4 @@
-import { BuildDiscovery, BuildFileSystem, buildDirectory, fingerprintBuildInput } from './build-context';
+import { BuildDiscovery, BuildFileSystem, buildDirectory, canonicalBuildUri, fingerprintBuildInput } from './build-context';
 import { BuildEntry, BuildProfile } from './build-context';
 import { extractStaticBuildOptions } from './build-options';
 
@@ -12,24 +12,26 @@ export class BuildMetadataCache implements BuildFileSystem {
   private profiles = new Map<string, Promise<BuildProfile>>();
   constructor(private fs: BuildFileSystem) {}
   readText(uri: string) {
-    this.dependencies.add(uri);
-    let result = this.texts.get(uri);
+    const key=canonicalBuildUri(uri);
+    this.dependencies.add(key);
+    let result = this.texts.get(key);
     if (!result) {
       result = this.fs.readText(uri).then(text=>{
-        if(this.texts.get(uri)===result){
-          const bytes=text===undefined?0:Buffer.byteLength(text);this.sizes.set(uri,bytes);this.retainedBytes+=bytes;
+        if(this.texts.get(key)===result){
+          const bytes=text===undefined?0:Buffer.byteLength(text);this.sizes.set(key,bytes);this.retainedBytes+=bytes;
           while(this.retainedBytes>8*1024*1024||this.texts.size>128)this.removeText(this.texts.keys().next().value!);
         }
         return text;
       });
-      this.texts.set(uri, result);
+      this.texts.set(key, result);
     }
     return result;
   }
   private removeText(uri:string){this.retainedBytes-=this.sizes.get(uri)??0;this.sizes.delete(uri);this.texts.delete(uri);}
   list(uri: string) {
-    let result = this.directories.get(uri);
-    if (!result) { result = this.fs.list(uri); this.directories.set(uri, result); if(this.directories.size>20_000)this.directories.delete(this.directories.keys().next().value!); }
+    const key=canonicalBuildUri(uri);
+    let result = this.directories.get(key);
+    if (!result) { result = this.fs.list(uri); this.directories.set(key, result); if(this.directories.size>20_000)this.directories.delete(this.directories.keys().next().value!); }
     return result;
   }
   discover(request: { rootUri: string; sourceUris: readonly string[]; explicitEntryUri?: string }) {
@@ -45,10 +47,15 @@ export class BuildMetadataCache implements BuildFileSystem {
     return result;
   }
   invalidate(uri: string, structure = false) {
+    uri=canonicalBuildUri(uri);
     const parent = buildDirectory(uri), metadata = /(?:\/(?:GNUmakefile|[Mm]akefile)|\.(?:mk|sh|bat|cmd))$/i.test(uri);
-    if (!this.dependencies.has(uri) && !((metadata || structure) && this.directories.has(parent))) return false;
-    if(structure&&this.directories.has(uri))for(const directory of this.directories.keys())
-      if(directory===uri||directory.startsWith(uri+'/'))this.directories.delete(directory);
+    const within=(path:string)=>path===uri||path.startsWith(uri+'/');
+    const descendants=structure&&([...this.dependencies].some(within)||[...this.directories.keys()].some(within));
+    if (!this.dependencies.has(uri) && !((metadata || structure) && this.directories.has(parent)) && !descendants) return false;
+    if(structure){
+      for(const path of this.texts.keys())if(within(path))this.removeText(path);
+      for(const directory of this.directories.keys())if(within(directory))this.directories.delete(directory);
+    }
     this.removeText(uri); this.directories.delete(parent); this.discoveries.clear(); this.profiles.clear();
     return true;
   }
