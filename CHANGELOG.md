@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.94 — 2026-11-04
+## 0.1.95 — 2026-11-04
 
 - Recognize the explicit Diab 5.9.6.7 option forms used by RBMS while keeping compiler defaults, generators and unknown options uncertain.
 - Select overlapping Make object patterns using source prerequisites, preserve nested target paths, reject empty implicit stems and account for explicitly declared generated sources.
