@@ -87,3 +87,6 @@ Implementation was completed on `codex/build-cache-startup-restore` and prepared
 for release 0.1.96 after the user's deployment request. Validation used temporary
 cache files and isolated extension hosts; the user's original cache files and
 installed extension were not changed.
+
+Release 0.1.96 is now public after all three platform jobs passed. Its public VSIX
+and updater verification are recorded in the [delivery receipt](2026-11-04-release-0.1.96.md).
