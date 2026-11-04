@@ -9,6 +9,6 @@
 - [x] Cover out-of-order file reads, restored dirty buffers and unchanged selected-build restoration with real-Worker regressions, then apply minimal fixes.
 - [x] Run fresh unit/Worker/memory/type/build/performance/UI/native/large-workspace checks and review the final diff.
 - [x] Prepare 0.1.97 version metadata, changelog and release notes; package and test the extracted VSIX.
-- [ ] Commit authorized changes, update main without force, tag and push the verified source; wait for Windows/macOS/Ubuntu/release jobs.
-- [ ] Download every public VSIX alias and checksum manifest, validate archive contents against the verified package, and test the actual updater selection/download.
-- [ ] Record CI/public-artifact evidence and verify local main matches remote main.
+- [x] Commit authorized changes, update main without force, tag and push the verified source; wait for Windows/macOS/Ubuntu/release jobs.
+- [x] Download every public VSIX alias and checksum manifest, validate archive contents against the verified package, and test the actual updater selection/download.
+- [x] Record CI/public-artifact evidence and verify local main matches remote main.

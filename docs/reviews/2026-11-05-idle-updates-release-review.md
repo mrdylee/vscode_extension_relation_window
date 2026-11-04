@@ -1,5 +1,9 @@
 # Dynsight 0.1.97 release review
 
+Publication and public-asset/updater verification are complete in the
+[delivery receipt](2026-11-05-release-0.1.97.md). The local checks below record
+the release-candidate review; the immutable release source is identified there.
+
 Reviewed the complete local change set against the approved one-hour idle
 policy, live source navigation, affected-group analysis and cache compatibility
 19. The preceding implementation and evidence are documented in the
