@@ -25,14 +25,22 @@ export class BuildAnalysis {
   private cache = new Map<string, PreparedUnit>();
   private disk?: AnalysisCache;
   private restored = new Map<string, { raw: FileAnalysis; derived: FileAnalysis }>();
-  async setCache(directory: string, key: string) { this.disk = await AnalysisCache.open(directory, key); this.restored.clear(); }
+  private saved = new Map<string, { raw: FileAnalysis; derived: FileAnalysis }>();
+  async setCache(directory: string, key: string) { this.disk = await AnalysisCache.open(directory, key); this.restored.clear(); this.saved.clear(); }
   cachedDerived(files: FileAnalysis[]) {
     return this.disk?.matches(files.map(fileKey)) && files.every(file => this.restored.get(fileKey(file))?.raw === file)
       ? files.map(file => this.restored.get(fileKey(file))!.derived) : undefined;
   }
   async save(raw: FileAnalysis[], derived: FileAnalysis[]) {
     if (!this.disk || raw.length !== derived.length) return;
-    return this.disk.save(raw.map((file, n) => ({ raw: file, derived: derived[n], skip: true, expandMacros: file.expandMacros !== false })));
+    const records = raw.map((file, n) => ({ raw: file, derived: derived[n], skip: true, expandMacros: file.expandMacros !== false }));
+    const reusable = new Set(records.filter(record => {
+      const previous = this.saved.get(fileKey(record.raw)) ?? this.restored.get(fileKey(record.raw));
+      return previous?.raw === record.raw && previous.derived === record.derived;
+    }).map(record => fileKey(record.raw)));
+    const result = await this.disk.save(records, reusable);
+    if (result.saved) this.saved = new Map(records.map(record => [fileKey(record.raw), { raw: record.raw, derived: record.derived }]));
+    return result;
   }
   async prepare(parser: Awaited<ReturnType<typeof createAnalyzer>>, files: FileAnalysis[], profile: BuildProfile, budget: AnalysisWorkBudget,
     shouldCancel?: () => boolean, eligibleHeader: (uri: string) => boolean = () => true, scopeKey = '', memoryPressure?: () => boolean): Promise<FileAnalysis[]> {
@@ -78,5 +86,5 @@ export class BuildAnalysis {
     const active=new Set(result.map(fileKey));for(const key of this.restored.keys())if(!active.has(key))this.restored.delete(key);
     return [...new Map(result.map(file => [fileKey(file), file])).values()];
   }
-  clear() { this.cache.clear(); this.restored.clear(); }
+  clear() { this.cache.clear(); this.restored.clear(); this.saved.clear(); }
 }

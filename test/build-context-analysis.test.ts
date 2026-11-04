@@ -7,7 +7,8 @@ import { BuildProfile, normalizeCompileContext } from '../src/build-context';
 import { RelationIndex } from '../src/relations';
 import { AnalysisWorkBudget } from '../src/analysis-budget';
 import { IncrementalAnalysis } from '../src/incremental-analysis';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { FileAnalysis } from '../src/model';
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { buildFixture } from './build-fixtures';
 import { extractStaticBuildOptions } from '../src/build-options';
@@ -102,6 +103,30 @@ test('incremental derivation does not overwrite same-URI header variants', async
   assert.ok(warm.every((file, n) => file === derived[n]));
 });
 
+test('saving one unit does not reanalyze private callbacks in another unit using the same header', async () => {
+  const texts = new Map([
+    ['file:///p/a.c', 'static void target(void){}\n#include "ops.h"\nvoid run_a(void){invoke();}'],
+    ['file:///p/b.c', 'static void target(void){}\n#include "ops.h"\nvoid run_b(void){invoke();}'],
+    ['file:///p/inc/ops.h', 'typedef void(*CB)(void);struct Ops{CB cb;};static struct Ops saved={target};static void invoke(void){saved.cb();}']
+  ]);
+  const f = buildFixture(Object.fromEntries([...texts].map(([uri, text]) => [uri.slice('file:///p/'.length), text])));
+  const profile = (await fixture()).profile;
+  profile.units = await Promise.all(['a.c', 'b.c'].map(name => normalizeCompileContext({ profileId: 'A', sourceUri: 'file:///p/' + name, cwdUri: 'file:///p', argv: ['gcc', '-Iinc', '-c', name], dialect: 'posix', evidence: [] }, f.fs)));
+  const build = new BuildAnalysis(), incremental = new IncrementalAnalysis(), batches: FileAnalysis[][] = [];
+  const raw = [...texts].map(([uri, text]) => parser.analyze(uri, text, true, { expandMacros: true, propagateCallbacks: true }));
+  const derive = (inputs: FileAnalysis[]) => {
+    const expanded = parser.expand(inputs);
+    return incremental.derive(inputs, dirty => { batches.push(dirty); return parser.derive(dirty, undefined, undefined, true, {}, dirty.map(file => expanded[inputs.indexOf(file)])); }, true, expanded);
+  };
+  const first = derive(await build.prepare(parser, raw, profile, new AnalysisWorkBudget()));
+  const changed = raw.map(file => file.uri.endsWith('/a.c') ? parser.analyze(file.uri, file.text.replace('invoke();', 'invoke();int edited=1;'), true, file.analysisPolicy) : file);
+  const prepared = await build.prepare(parser, changed, profile, new AnalysisWorkBudget()), next = derive(prepared);
+  const otherUnit = profile.units[1].id;
+  assert.ok(batches[1].every(file => file.context?.unitId !== otherUnit));
+  for (const file of first.filter(file => file.context?.unitId === otherUnit)) assert.equal(next.find(current => current.context?.key === file.context!.key), file);
+  assert.deepEqual(next, parser.derive(prepared));
+});
+
 test('known build choices reduce macro variants while preserving expanded calls and registrations', async () => {
   const source = Array.from({ length: 6 }, (_, n) => `#if F${n}\n#define PICK${n}() yes${n}()\n#else\n#define PICK${n}() no${n}()\n#endif\n`).join('') +
     Array.from({ length: 6 }, (_, n) => `void yes${n}(void){}void no${n}(void){}`).join('') + 'void run(void){' + Array.from({ length: 6 }, (_, n) => `PICK${n}();`).join('') + '}';
@@ -191,6 +216,24 @@ test('real contextual raw and derived facts restore after reopening and reject a
     const updated=await second.prepare(parser,changed,profile,new AnalysisWorkBudget());
     assert.ok(parses>0);assert.equal(second.cachedDerived(updated),undefined);assert.ok(updated.some(file=>file.symbols.some(s=>s.name==='fresh')));
   }finally{parser.analyze=original;await rm(directory,{recursive:true,force:true});}
+});
+
+test('saving build facts rewrites changed records and reuses unrelated records on disk', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'dynsight-build-reuse-'));
+  try {
+    const build = new BuildAnalysis(); await build.setCache(directory, 'A');
+    const a = parser.analyze('file:///a.c', 'int alpha(void){return 1;}'), b = parser.analyze('file:///b.c', 'int beta(void){return 2;}');
+    const before = parser.derive([a, b]); assert.equal((await build.save([a, b], before))?.saved, true);
+    const previous = JSON.parse(await readFile(path.join(directory, 'manifest.json'), 'utf8'));
+    const changed = parser.analyze(a.uri, 'int alpha(void){return 3;}'), next = parser.derive([changed, b]);
+    assert.equal(next[1], before[1], 'the unrelated derived result is reusable');
+    assert.equal((await build.save([changed, b], next))?.saved, true);
+    const current = JSON.parse(await readFile(path.join(directory, 'manifest.json'), 'utf8'));
+    const oldEntry = previous.entries.find((entry: { uri: string }) => entry.uri === b.uri), newEntry = current.entries.find((entry: { uri: string }) => entry.uri === b.uri);
+    assert.equal(newEntry.digest, oldEntry.digest);
+    assert.equal((await stat(path.join(directory, previous.generation, oldEntry.name))).ino,
+      (await stat(path.join(directory, current.generation, newEntry.name))).ino, 'unchanged build facts use the existing record instead of serializing it again');
+  } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
 test('GCC and Diab build contexts preserve short-circuit callback alternatives across refreshes', async () => {

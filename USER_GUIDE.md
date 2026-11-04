@@ -192,11 +192,23 @@ settings, an older cache format and damaged files have separate Rebuild messages
 only damaged files use the word **damaged**. Pre-versioned caches need one Rebuild
 when adopting this format. Diagnostics shows current and saved analysis versions.
 
-Edits, discarded edits and external changes reparse only changed files. Relations
-are recomputed for conservatively connected files, including header and callback
-registration dependencies. Shared headers and token-pasting macros can connect
-many or all files; this is not a promise that every edit costs one file of analysis.
+Edits, discarded edits and external changes reparse only changed files. A pending
+relation update refreshes changed files and dependent relationships, reusing unrelated analysis,
+index entries and cache records. Sharing an unchanged header alone does not force
+other source files to be analyzed. Changes to a shared header, function or callback
+registration can affect several dependent files.
 Unsaved edits remain temporary and are not written into the disk generation.
+While typing, only the changed file's symbols and direct references are updated.
+Automatic project macro/callback analysis runs one hour after the last actual
+source change. Further changes reset the wait and accumulate affected files;
+duplicate save/watch notifications do not extend it. Saving reuses the parsed
+buffer and keeps the wait. **Relations pending** shows the changed-file count;
+**Update now** or **Dynsight: Resume Local Analysis** skips the wait without a full
+rebuild. Save all modified C/H files in scope before requesting detail. If the
+hour expires while they are unsaved, analysis waits for save or discard.
+Workspace storage retains the pending files and deadline across restart. Without
+workspace storage, the wait lasts only for this session. First indexing, deliberate
+analysis setting changes and explicit **Rebuild index** remain immediate.
 Scope changes reconcile selected files; only **Rebuild index** explicitly clears
 all local analysis. Diagnostics shows cache state and parse/relation counters.
 

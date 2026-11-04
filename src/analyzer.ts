@@ -398,7 +398,9 @@ export async function createAnalyzer(runtime: string, grammar: string) {
     return suggestExplicitCallbacks(files,facts,options);
   }, reset() {
     clearMacroCache(analyzer.analyze); clearPointerCache(analyzer.analyze);
-  }, derive(files: FileAnalysis[], memoryPressure?: () => boolean, phase?: (value: 'macros' | 'callbacks') => void, analyzeCallbacks = true, options: CallbackAnalysisOptions = {}): FileAnalysis[] {
+  }, expand(files: FileAnalysis[], memoryPressure?: () => boolean, analyzeCallbacks = true, options: CallbackAnalysisOptions = {}): FileAnalysis[] {
+    return deriveMacroCalls(files, analyzer.analyze, analyzer.calls, analyzer.initializer, memoryPressure, analyzeCallbacks, options.shouldCancel, options.workBudget);
+  }, derive(files: FileAnalysis[], memoryPressure?: () => boolean, phase?: (value: 'macros' | 'callbacks') => void, analyzeCallbacks = true, options: CallbackAnalysisOptions = {}, preparedMacros?: FileAnalysis[]): FileAnalysis[] {
     const now = options.now ?? (() => performance.now()), started = now();
     let outcome: CallbackProgress['outcome'];
     const observed = options.onProgress && ((value: CallbackProgress) => {
@@ -408,7 +410,7 @@ export async function createAnalyzer(runtime: string, grammar: string) {
     });
     const control = { ...options, workBudget: options.workBudget ?? new AnalysisWorkBudget(options.workLimits, options.workLimits === undefined), onProgress: observed };
     phase?.('macros');
-    const macros = deriveMacroCalls(files, analyzer.analyze, analyzer.calls, analyzer.initializer, memoryPressure, analyzeCallbacks, options.shouldCancel, control.workBudget);
+    const macros = preparedMacros ?? analyzer.expand(files, memoryPressure, analyzeCallbacks, control);
     const expanded = control.workBudget.projectExhausted ? macros : bindMacroReferences(macros, analyzer.analyze, options.shouldCancel, memoryPressure);
     phase?.('callbacks');
     const derived = inferPointerCalls(expanded, memoryPressure, analyzer.analyze, analyzeCallbacks, control);

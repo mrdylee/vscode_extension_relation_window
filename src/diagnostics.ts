@@ -7,6 +7,7 @@ export const copilotWaitMessages = {
   'indexing': 'Waiting for local indexing to finish.',
   'source-update': 'Waiting for source changes to finish indexing.',
   'relations': 'Waiting for local relation analysis to finish.',
+  'analysis-deferred': 'Detailed relations are waiting for one hour without source changes. Save modified files, or use Update now to skip the wait.',
   'cache-rebuild-required': 'Saved index is unavailable. Run Rebuild index.',
   'worker-unavailable': 'Analysis Worker stopped. Run Rebuild index.',
   'analysis-failed': 'Local relation analysis failed. Check Analysis notices, then Rebuild index.',
@@ -31,6 +32,7 @@ export interface RebuildRecord {
 }
 export interface IndexDiagnostics {
   basicReady?: boolean; detailedCurrent?: boolean;
+  deferredUpdate?: { at: number; files: number; persistenceError?: boolean };
   failedSources?: number; basicWaitReason?: CopilotWaitReason; fileLimitReached?: boolean;
   callbackAnalysis?: { paused: boolean; running: boolean; limited?: boolean; progress?: CallbackProgress };
   sessionStartedAt: number; rebuildCount: number; sourceParses: number; relationPasses: number;

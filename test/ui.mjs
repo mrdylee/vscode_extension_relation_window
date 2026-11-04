@@ -759,6 +759,17 @@ try {
     phases: { sources: { before: memory(20), after: memory(240) }, macros: { before: memory(240), after: memory(1100) }, callbacks: { before: memory(1100), after: memory(900) }, transfer: { before: memory(900), after: memory(900) } },
     counts: { files: 1820, sourceChars: 6000000, references: 82000, programs: 12000, macroFiles: 420 }
   } };
+  await configure({diagnostics:{...diagnostics,index:{deferredUpdate:{at:at+3_600_000,files:3},callbackAnalysis:{paused:false,running:false}}}});
+  assert.equal(await page.getByText('Relations pending · 3 changed C/H file(s)',{exact:true}).count(),1);
+  const updateNow=page.getByRole('button',{name:'Update now',exact:true});
+  assert.ok(await updateNow.isVisible());
+  assert.ok(await page.getByRole('button',{name:'Stop local',exact:true}).isHidden());
+  await updateNow.click();
+  assert.ok(await page.evaluate(()=>window.sent.some(message=>message.type==='localResume')));
+  for(const basicWaitReason of ['unsaved-sources','cache-rebuild-required','worker-unavailable']) {
+    await configure({diagnostics:{...diagnostics,index:{deferredUpdate:{at:at+3_600_000,files:3},basicWaitReason,callbackAnalysis:{paused:false,running:false}}}});
+    assert.ok(await updateNow.isDisabled(), 'Update now respects '+basicWaitReason);
+  }
   for(const [paused,limited,outcome,label,action] of [
     [false,true,'work','Local analysis limited','Re-run local'],
     [false,true,'completed','Local analysis limited','Re-run local'],

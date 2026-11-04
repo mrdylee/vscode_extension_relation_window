@@ -26,17 +26,18 @@ export function createLocalProgress(send:(type:string,value?:Record<string,unkno
   copy.onclick=()=>{copyId=crypto.randomUUID();send('copyFunctionName',{requestId:copyId,name:snapshot});};
   window.addEventListener('message',event=>{if(event.data?.type==='copyFunctionNameResult'&&event.data.requestId===copyId&&!popup.hidden)result.textContent=event.data.ok?'Copied':'Could not copy. Select the name and copy it manually.';});
   function update(value?:Diagnostics,tick=false){
-    diagnostics=value;const analysis=value?.index?.callbackAnalysis,progress=analysis?.progress;
+    diagnostics=value;const analysis=value?.index?.callbackAnalysis,progress=analysis?.progress,deferred=value?.index?.deferredUpdate;
     if(!tick){const next=JSON.stringify(analysis);if(next!==sample){sample=next;sampledAt=Date.now();}}
     const fixed=!['cancelled','time','memory'].includes(progress?.outcome??'')&&(analysis?.limited||['work','limited'].includes(progress?.outcome??''));
-    root.hidden=!analysis?.running&&!analysis?.paused&&!analysis?.limited&&!['cancelled','time','memory','work','limited'].includes(progress?.outcome??'');
+    root.hidden=!deferred&&!analysis?.running&&!analysis?.paused&&!analysis?.limited&&!['cancelled','time','memory','work','limited'].includes(progress?.outcome??'');
     stop.hidden=!analysis?.running;retry.hidden=!!analysis?.running;stop.disabled=!!analysis?.paused;stop.textContent=analysis?.paused?'Stopping…':'Stop local';
     const ms=(progress?.scopeElapsedMs??0)+(analysis?.running?Math.max(0,Date.now()-sampledAt):0);
-    text.textContent=analysis?.running?`Local · ${(ms/1000).toFixed(1)}s${ms>=5000?' · Taking longer':''} · `:analysis?.paused?'Local analysis paused':fixed?'Local analysis limited':'Local analysis interrupted';
-    retry.textContent=analysis?.paused?'Resume local':fixed?'Re-run local':'Retry local';
-    retry.title=fixed?'Uses the same analysis limits. Review Analysis notices and narrow Smart Analysis Include/Exclude before re-running.':'Retry local analysis with the current source index.';
+    text.textContent=analysis?.running?`Local · ${(ms/1000).toFixed(1)}s${ms>=5000?' · Taking longer':''} · `:analysis?.paused?'Local analysis paused':deferred?`Relations pending · ${deferred.files} changed C/H file(s)`:fixed?'Local analysis limited':'Local analysis interrupted';
+    retry.textContent=analysis?.paused?'Resume local':deferred?'Update now':fixed?'Re-run local':'Retry local';
+    retry.disabled=!!deferred&&['unsaved-sources','cache-rebuild-required','worker-unavailable','closed'].includes(value?.index?.basicWaitReason??'');
+    retry.title=deferred?retry.disabled?value?.index?.basicWaitReason==='unsaved-sources'?'Save modified C/H files before updating relations.':'Check the index status before updating relations.':'Update affected relations now without waiting one hour.':fixed?'Uses the same analysis limits. Review Analysis notices and narrow Smart Analysis Include/Exclude before re-running.':'Retry local analysis with the current source index.';
     name.hidden=!analysis?.running||!progress?.symbol;name.textContent=progress?.symbol??'';name.setAttribute('aria-label',`Function ${progress?.symbol??''}`);
-    summary.title=`${progress?.stage??'Local analysis'} · ${progress?.functionsDone??0}/${progress?.functionsTotal??0} functions · ${progress?.scopeEvaluations??0} evaluations${progress?.workBatches ? ` · Work batch ${progress.workBatches}` : ''}`;
+    summary.title=deferred&&!analysis?.running?`Updates one hour after the last source change · ${new Date(deferred.at).toLocaleTimeString()}${deferred.persistenceError?' · Pending update could not be saved for restart.':''}`:`${progress?.stage??'Local analysis'} · ${progress?.functionsDone??0}/${progress?.functionsTotal??0} functions · ${progress?.scopeEvaluations??0} evaluations${progress?.workBatches ? ` · Work batch ${progress.workBatches}` : ''}`;
   }
   setInterval(()=>{if(diagnostics?.index?.callbackAnalysis?.running)update(diagnostics,true);},500);
   return {element:root,update};

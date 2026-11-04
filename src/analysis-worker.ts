@@ -2,7 +2,7 @@ import { parentPort, threadId, workerData } from 'node:worker_threads';
 import path from 'node:path';
 import { getHeapStatistics } from 'node:v8';
 import { createAnalyzer } from './analyzer';
-import { FileAnalysis, ReferenceRecord } from './model';
+import { FileAnalysis, ReferenceRecord, fileKey } from './model';
 import { AnalysisPhase, WorkerDiagnostics } from './diagnostics';
 import { AnalysisCache, CachedAnalysis } from './analysis-cache';
 import { IncrementalAnalysis } from './incremental-analysis';
@@ -27,12 +27,12 @@ function retainFacts(current: ReferenceRecord[]|undefined, basic: ReferenceRecor
 }
 let cache: AnalysisCache | undefined;
 const incremental = new IncrementalAnalysis();
+const basicIncremental = new IncrementalAnalysis();
 const buildAnalysis = new BuildAnalysis(), buildIncremental = new IncrementalAnalysis();
 let activeBuildEpoch: BuildEpoch | undefined;
 let savedVersions = new Map<string, { id: number; stamp: number }>();
 type Snapshot = Map<string, { id: number; stamp: number; file: FileAnalysis }>;
 const restored: Snapshot = new Map();
-let basicSnapshot: { inputs: FileAnalysis[]; files: FileAnalysis[] } | undefined;
 let derivedSnapshot: Snapshot | undefined;
 function matches(versions: [string, number, number][], snapshot: Snapshot | undefined) {
   return !!snapshot && snapshot.size === versions.length && raw.size === versions.length && new Set(versions.map(([uri]) => uri)).size === versions.length &&
@@ -74,7 +74,6 @@ function count(file: FileAnalysis, sign: number) {
   counts.macroFiles += sign * Number(file.expandMacros !== false);
 }
 function remove(uri: string) {
-  basicSnapshot = undefined;
   const previous = raw.get(uri); if (previous) count(previous.file, -1);
   raw.delete(uri); restored.delete(uri); derivedSnapshot = undefined;
 }
@@ -93,7 +92,7 @@ parentPort!.on('message', (request: Request) => {
     if (request.type === 'diagnostics') { report(true); return; }
     try {
       const parser = await analyzer;
-      if (request.type === 'reset') { raw.clear(); restored.clear(); savedVersions.clear(); derivedSnapshot = undefined; basicSnapshot = undefined; incremental.clear(); buildAnalysis.clear(); buildIncremental.clear(); parser.reset(); diagnostics = freshDiagnostics(); report(true); return; }
+      if (request.type === 'reset') { raw.clear(); restored.clear(); savedVersions.clear(); derivedSnapshot = undefined; basicIncremental.clear(); incremental.clear(); buildAnalysis.clear(); buildIncremental.clear(); parser.reset(); diagnostics = freshDiagnostics(); report(true); return; }
       if (request.type === 'cache-init') {
         cache = await AnalysisCache.open(request.directory, request.key); cache.legacyRoots = request.legacyRoots ?? []; restored.clear(); savedVersions.clear(); derivedSnapshot = undefined;
         await buildAnalysis.setCache(path.join(request.directory, 'build-facts'), request.key);
@@ -115,6 +114,7 @@ parentPort!.on('message', (request: Request) => {
           derivedSnapshot = new Map(restored);
           savedVersions = new Map(request.versions.map(([uri, id, stamp]) => [uri, { id, stamp }]));
           incremental.seed(request.versions.map(([uri]) => raw.get(uri)!.file), request.versions.map(([uri]) => restored.get(uri)!.file), request.analyzeCallbacks);
+          basicIncremental.seed(request.versions.map(([uri]) => raw.get(uri)!.file), request.versions.map(([uri]) => restored.get(uri)!.file), false);
         }
         parentPort!.postMessage({ id: request.id, result: { valid } }); return;
       }
@@ -156,8 +156,14 @@ parentPort!.on('message', (request: Request) => {
             report();
           }
         };
-        const basic = basicSnapshot?.inputs.length===files.length && files.every((file,n)=>basicSnapshot!.inputs[n]===file) ? basicSnapshot.files : parser.basic(files,control,memoryPressure);
-        if(!control.shouldCancel?.())basicSnapshot={inputs:files,files:basic};
+        const basic = basicIncremental.derive(files, dirty => parser.basic(dirty, control, memoryPressure), false);
+        const derive = (inputs: FileAnalysis[], cache: IncrementalAnalysis, budget = new AnalysisWorkBudget(undefined, true)) => {
+          phase('macros');
+          const expanded = parser.expand(inputs, memoryPressure, request.analyzeCallbacks, { ...control, workBudget: budget });
+          const byKey = new Map(expanded.map(file => [fileKey(file), file]));
+          return cache.derive(inputs, dirty => parser.derive(dirty, memoryPressure, phase, request.analyzeCallbacks,
+            { ...control, workBudget: budget }, dirty.map(file => byKey.get(fileKey(file))!)), request.analyzeCallbacks, expanded);
+        };
         parentPort!.postMessage({type:'basic-result',requestId:request.id,buildEpoch:request.buildEpoch,inputs:request.versions.map(([uri,id])=>[uri,id]),
           files:basic.filter((file,n)=>file!==files[n]&&request.versions[n][2]<0).map(file=>({uri:file.uri,projectScoped:file.projectScoped,
             references:file.references.filter(ref=>ref.callKind==='registered'||ref.macroIds!==undefined),functionArguments:file.functionArguments,
@@ -178,10 +184,10 @@ parentPort!.on('message', (request: Request) => {
           const prepared = await buildAnalysis.prepare(parser, files, request.buildProfile, budget, control.shouldCancel, eligibleHeader, fingerprintBuildInput(scope), memoryPressure);
           const cached = buildAnalysis.cachedDerived(prepared);
           if (cached) { buildFiles = cached; buildIncremental.seed(prepared, cached, request.analyzeCallbacks); }
-          else buildFiles = buildIncremental.derive(prepared, dirty => parser.derive(dirty, memoryPressure, phase, request.analyzeCallbacks, { ...control, workBudget: budget }), request.analyzeCallbacks);
+          else buildFiles = derive(prepared, buildIncremental, budget);
           if (!control.shouldCancel?.() && !memoryPressure()) await buildAnalysis.save(prepared, buildFiles);
         }
-        let derived = buildFiles?.length || request.buildPending ? basic : incremental.derive(files, dirty => parser.derive(dirty, memoryPressure, phase, request.analyzeCallbacks, control), request.analyzeCallbacks);
+        let derived = buildFiles?.length || request.buildPending ? basic : derive(files, incremental);
         if(control.shouldCancel?.()||derived.some(file=>file.issues.some(issue=>/memory budget/i.test(issue)))){
           let remaining=64-basic.reduce((total,file)=>total+(file.callbackDiagnostics?.filter(detail=>detail.kind==='cancelled').length??0),0);
           derived=derived.map((file,n)=>{
@@ -209,7 +215,11 @@ parentPort!.on('message', (request: Request) => {
           if (stamp !== request.versions[i][2]) { changed.push(forIndex(file)); versions.push([file.uri, stamp]); }
         });
         restored.clear(); derivedSnapshot = snapshot;
-        parentPort!.postMessage({ id: request.id, result: { stale: false, files: changed, versions, buildFiles: buildFiles?.map(forIndex), buildEpoch: request.buildEpoch } });
+        const buildVersions = buildFiles?.map(file => {
+          let stamp = stamps.get(file); if (stamp === undefined) { stamp = ++serial; stamps.set(file, stamp); }
+          return [fileKey(file), stamp];
+        });
+        parentPort!.postMessage({ id: request.id, result: { stale: false, files: changed, versions, buildFiles: buildFiles?.map(forIndex), buildVersions, buildEpoch: request.buildEpoch } });
         phase('idle');
       } else {
         restored.clear(); derivedSnapshot = undefined;

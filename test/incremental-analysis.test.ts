@@ -77,12 +77,119 @@ test('macro bodies connect generated uses to providers', () => {
   assert.deepEqual(batches[1], [macro.uri, use.uri, target.uri]);
 });
 
-test('token-pasting macros conservatively invalidate the complete workspace', () => {
+test('an unused token-pasting definition does not invalidate unrelated source files', () => {
   const { derive, batches } = harness();
   const macro = source('macro.h', '#define JOIN(a,b) a##b\n'), a = source('a.c', 'int alpha;'), b = source('b.c', 'int beta;');
   derive([macro, a, b]);
-  derive([macro, source('a.c', 'int alpha=1;'), b]);
-  assert.deepEqual(batches[1], [macro.uri, a.uri, b.uri]);
+  const first = derive([macro, a, b]);
+  const next = derive([macro, source('a.c', 'int alpha=1;'), b]);
+  assert.deepEqual(batches[1], [a.uri]);
+  assert.equal(next[0], first[0]);
+  assert.equal(next[2], first[2]);
+});
+
+test('editing a source reuses other consumers of an unchanged common header', () => {
+  const { derive, batches } = harness();
+  const header = source('common.h', 'typedef unsigned int Value;\n#define ANSWER 1\n');
+  const a = source('a.c', '#include "common.h"\nValue alpha(void){return ANSWER;}');
+  const b = source('b.c', '#include "common.h"\nValue beta(void){return ANSWER;}');
+  const first = derive([header, a, b]);
+  const changed = source('a.c', a.text.replace('return ANSWER;', 'return ANSWER+1;'));
+  const next = derive([header, changed, b]);
+  assert.deepEqual(batches[1], [header.uri, a.uri]);
+  assert.equal(next[0], first[0], 'header output is reused while its declarations supply context');
+  assert.equal(next[2], first[2], 'the other consumer is not analyzed');
+  assert.deepEqual(next, parser.derive([header, changed, b]));
+});
+
+test('same-named private functions and locals do not connect independent files', () => {
+  const { derive, batches } = harness();
+  const a = source('a.c', 'static void helper(void){}void alpha(void){int state=1;helper();}');
+  const b = source('b.c', 'static void helper(void){}int state;void beta(void){helper();}');
+  const first = derive([a, b]);
+  const changed = source('a.c', a.text.replace('state=1', 'state=2'));
+  const next = derive([changed, b]);
+  assert.deepEqual(batches[1], [a.uri]);
+  assert.equal(next[1], first[1]);
+  assert.deepEqual(next, parser.derive([changed, b]));
+});
+
+test('identical private typedef names in independent source files do not force both to reanalyze', () => {
+  const { derive, batches } = harness();
+  const a = source('a.c', 'typedef void(*CB)(void);static void alpha_target(void){}void alpha(void){CB cb=alpha_target;cb();}');
+  const b = source('b.c', 'typedef void(*CB)(void);static void beta_target(void){}void beta(void){CB cb=beta_target;cb();}');
+  const first = derive([a, b]);
+  const changed = source('a.c', a.text.replace('cb();', 'cb();int n=1;')), next = derive([changed, b]);
+  assert.deepEqual(batches[1], [a.uri]);
+  assert.equal(next[1], first[1]);
+  assert.deepEqual(next, parser.derive([changed, b]));
+});
+
+test('comments and string contents do not connect unrelated providers', () => {
+  const { derive, batches } = harness();
+  const a = source('a.c', 'void alpha(void){/* beta ## */const char *message="beta";}');
+  const b = source('b.c', 'void beta(void){}');
+  const first = derive([a, b]);
+  const next = derive([source('a.c', a.text.replace('message=', 'text=')), b]);
+  assert.deepEqual(batches[1], [a.uri]);
+  assert.equal(next[1], first[1]);
+});
+
+test('an unrelated edit retains a limited component until that component changes or is explicitly retried', () => {
+  const cache = new IncrementalAnalysis(), a = source('a.c', 'int alpha;'), b = source('b.c', 'int beta;');
+  const batches: string[][] = [];
+  const derive = (files: FileAnalysis[]) => cache.derive(files, dirty => {
+    batches.push(dirty.map(file => file.uri));
+    return dirty.map(file => file.uri === b.uri ? { ...file, issues: ['Callback analysis work limit reached'] } : file);
+  });
+  const first = derive([a, b]);
+  const changed = source('a.c', 'int alpha=1;');
+  const next = derive([changed, b]);
+  assert.deepEqual(batches[1], [a.uri]);
+  assert.equal(next[1], first[1]);
+  derive([changed, b]);
+  assert.deepEqual(batches[2], [b.uri], 'an explicit retry with unchanged inputs retries the limited component');
+});
+
+test('prepared macro dependencies follow target changes, additions and deletions without touching unrelated outputs', () => {
+  const cache = new IncrementalAnalysis(), batches: string[][] = [];
+  const header = source('select.h', '#define PICK(name) name##1\n');
+  const consumer = source('consumer.c', '#include "select.h"\ntypedef void(*CB)(void);void run(void){CB cb=PICK(target);cb();}');
+  const first = source('first.c', 'void target1(void){}'), second = source('second.c', 'void target2(void){}');
+  const other = source('other.c', 'void unrelated(void){}');
+  const derive = (files: FileAnalysis[]) => {
+    const expanded = parser.expand(files), byKey = new Map(expanded.map(file => [file.uri, file]));
+    return cache.derive(files, dirty => { batches.push(dirty.map(file => file.uri)); return parser.derive(dirty, undefined, undefined, true, {}, dirty.map(file => byKey.get(file.uri)!)); }, true, expanded);
+  };
+  const original = derive([header, consumer, first, second, other]);
+  const changedFirst = source('first.c', 'void target1(void){int edited=1;}');
+  let files = [header, consumer, changedFirst, second, other], next = derive(files);
+  assert.equal(next[4], original[4]);
+  assert.equal(batches[1].includes(other.uri), false);
+  assert.deepEqual(next, parser.derive(files));
+  const changedHeader = source('select.h', '#define PICK(name) name##2\n');
+  for (const candidates of [[changedHeader, consumer, changedFirst, second, other], [changedHeader, consumer, changedFirst, other], [changedHeader, consumer, changedFirst, second, other]]) {
+    files = candidates; next = derive(files);
+    assert.equal(next.at(-1), original[4]);
+    assert.equal(batches.at(-1)!.includes(other.uri), false);
+    assert.deepEqual(next, parser.derive(files));
+  }
+});
+
+test('basic relation groups do not follow function names that occur only in a shared macro definition', () => {
+  const cache = new IncrementalAnalysis(), batches: string[][] = [];
+  const header = source('api.h', '#define TARGET target\ntypedef void(*CB)(void);\n');
+  const a = source('a.c', '#include "api.h"\nvoid alpha(void){CB cb=TARGET;cb();}');
+  const b = source('b.c', '#include "api.h"\nvoid beta(void){}');
+  const target = source('target.c', 'void target(void){}');
+  const derive = (files: FileAnalysis[]) => cache.derive(files, dirty => { batches.push(dirty.map(file => file.uri)); return parser.basic(dirty); }, false);
+  const first = derive([header, a, b, target]);
+  const changed = source('a.c', a.text.replace('cb();', 'cb();int edited=1;'));
+  const next = derive([header, changed, b, target]);
+  assert.deepEqual(batches[1], [header.uri, a.uri]);
+  assert.equal(next[2], first[2]);
+  assert.equal(next[3], first[3]);
+  assert.deepEqual(next, parser.basic([header, changed, b, target]));
 });
 
 test('configuration changes and clear discard previous derived generations', () => {

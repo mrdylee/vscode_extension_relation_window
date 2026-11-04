@@ -45,6 +45,11 @@ export async function run() {
   } finally { clearTimeout(indexTimeout!); }
   await api.workspace.whenIdle();
   globalThis.fetch = originalFetch;
+  const updateRelations = async () => {
+    await api.workspace.whenIdle();
+    if (api.workspace.diagnostics.index.deferredUpdate) await api.workspace.resumeAnalysis();
+    await api.workspace.whenIdle(); api.view.refresh();
+  };
   assert.equal(automaticReleaseChecks, 0, 'test-mode activation never checks GitHub automatically');
   assert.ok((await vscode.commands.getCommands()).includes('dynsight.checkForUpdates'));
   assert.ok((await vscode.commands.getCommands()).includes('dynsight.openSettings'), 'scope settings command registered');
@@ -219,10 +224,25 @@ export async function run() {
   await api.workspace.whenIdle();
   const disabledOff = api.workspace.index.relations(selected.graph.root.symbolId, 'callers').find((g: any) => g.name === 'background_task').sites.length;
   assert.equal(disabledOff, 2);
+  const beforeTyping = api.workspace.diagnostics.index;
   await editor.edit(edit => edit.replace(new vscode.Range(document.positionAt(offset), document.positionAt(offset + 'check_fault(1)'.length)), 'check_fault(10)'));
   await new Promise(resolve => setTimeout(resolve, 300));
   await api.workspace.whenIdle();
   assert.ok(api.workspace.index.files.get(document.uri.toString()).text.includes('check_fault(10)'));
+  assert.equal(document.isDirty, true);
+  assert.equal(api.workspace.diagnostics.index.sourceParses, beforeTyping.sourceParses + 1, 'typing reparses only the edited source');
+  assert.equal(api.workspace.diagnostics.index.relationPasses, beforeTyping.relationPasses, 'native typing does not restart project relations');
+  assert.equal(api.workspace.diagnostics.index.callbackAnalysis.running, false);
+  api.view.refresh(false);
+  assert.match(api.view.state.status, /Unsaved.*Save/i, 'the bottom status explains deferred detail without restarting progress');
+  await document.save();
+  await new Promise(resolve => setTimeout(resolve, 300)); await api.workspace.whenIdle();
+  assert.equal(api.workspace.diagnostics.index.sourceParses, beforeTyping.sourceParses + 1, 'save reuses the parsed buffer');
+  assert.equal(api.workspace.diagnostics.index.relationPasses, beforeTyping.relationPasses, 'save keeps project relations deferred for one hour');
+  assert.match(api.workspace.status, /Relations pending/);
+  assert.equal(api.workspace.diagnostics.index.deferredUpdate.files, 1);
+  await api.view.handleMessage({ type: 'localResume' }); await api.workspace.whenIdle();
+  assert.equal(api.workspace.diagnostics.index.relationPasses, beforeTyping.relationPasses + 1, 'Update now derives relations once without reparsing');
   const tempUri = vscode.Uri.joinPath(root, 'delete-me.c');
   await vscode.workspace.fs.writeFile(tempUri, Buffer.from('void extra(void){check_fault(1);}'));
   await new Promise(resolve => setTimeout(resolve, 500));
@@ -419,6 +439,8 @@ export async function run() {
   assert.ok(api.workspace.index.files.has(outsideUri.toString()), 'empty include restores the full scope');
   assert.ok(api.workspace.index.files.get(faultDocument.uri.toString()).text.includes('outside include'), 'restored scope uses unsaved content');
   assert.equal(api.workspace.index.files.has(excludedUri.toString()), false, 'empty include still respects exclude');
+  await faultDocument.save(); await excludedDocument.save();
+  await api.workspace.whenIdle();
   await api.workspace.reindex();
   assert.equal(api.workspace.diagnostics.index.rebuilds.at(-1).files.searchResults, api.workspace.index.files.size, 'root picker discovery returns C/H files, not non-source assets');
   for (const file of [bracketUri, commaUri]) {
@@ -552,7 +574,7 @@ export async function run() {
     await new Promise(resolve => setTimeout(resolve, 500));
     let timeout: ReturnType<typeof setTimeout>;
     try {
-      await Promise.race([api.workspace.whenIdle(), new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('Repeated includes blocked editor indexing')), 10000); })]);
+      await Promise.race([updateRelations(), new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('Repeated includes blocked editor indexing')), 10000); })]);
     } finally { clearTimeout(timeout!); }
     await new Promise(resolve => setTimeout(resolve, 100));
   };
@@ -594,7 +616,7 @@ export async function run() {
   await vscode.workspace.fs.writeFile(macroHeader, Buffer.from('#define CALL(x) macro_target(x)\n#define WRAP(x) CALL(x)\n'));
   const macroSource = '#include "macro-review.h"\nvoid leaf(void){} void macro_target(int x){leaf();} void changed_target(int x){}\nvoid macro_run(void){WRAP(7);}\n';
   await vscode.workspace.fs.writeFile(macroUri, Buffer.from(macroSource));
-  await new Promise(resolve => setTimeout(resolve, 500)); await api.workspace.whenIdle();
+  await new Promise(resolve => setTimeout(resolve, 500)); await updateRelations();
   const macroDocument = await vscode.workspace.openTextDocument(macroUri);
   const macroEditor = await vscode.window.showTextDocument(macroDocument);
   const macroPosition = macroDocument.positionAt(macroSource.indexOf('macro_run'));
@@ -608,41 +630,41 @@ export async function run() {
   assert.equal(api.view.state.context.location.start, macroSource.indexOf('WRAP(7)'));
   assert.equal(api.view.state.graph.root.children.find((node: any) => node.name === 'macro_target').children[0].name, 'leaf');
   await vscode.workspace.fs.writeFile(macroHeader, Buffer.from('#define WRAP(x) changed_target(x)\n'));
-  await new Promise(resolve => setTimeout(resolve, 500)); await api.workspace.whenIdle();
+  await new Promise(resolve => setTimeout(resolve, 500)); await updateRelations();
   assert.deepEqual(api.view.state.graph.root.children.map((node: any) => node.name), ['changed_target']);
   const macroSettings = vscode.workspace.getConfiguration('dynsight');
   const indexedBeforePolicy = [...api.workspace.index.files.keys()].sort();
   await macroSettings.update('smartAnalysis.include', ['control.c'], vscode.ConfigurationTarget.Workspace);
-  await new Promise(resolve => setTimeout(resolve, 500)); await api.workspace.whenIdle();
+  await new Promise(resolve => setTimeout(resolve, 500)); await updateRelations();
   assert.deepEqual([...api.workspace.index.files.keys()].sort(), indexedBeforePolicy, 'macro folder policy does not change base source scope');
   assert.equal(api.workspace.index.files.get(macroUri.toString()).expandMacros, false);
   assert.equal(api.workspace.index.files.get(macroUri.toString()).references.some((ref: any) => ref.expansion), false);
   assert.equal(api.workspace.index.files.has(excludedUri.toString()), false, 'macro folder policy never restores excluded files');
   const uncheckedMacroUri = vscode.Uri.joinPath(root, 'unchecked-macro.c');
   await vscode.workspace.fs.writeFile(uncheckedMacroUri, Buffer.from('#include "macro-review.h"\nvoid unchecked_run(void){WRAP(1);leaf();}'));
-  await new Promise(resolve => setTimeout(resolve, 500)); await api.workspace.whenIdle();
+  await new Promise(resolve => setTimeout(resolve, 500)); await updateRelations();
   const unchecked = api.workspace.index.files.get(uncheckedMacroUri.toString());
   assert.equal(unchecked.expandMacros, false, 'new source uses the current macro policy');
   assert.equal(unchecked.references.some((ref: any) => ref.expansion), false);
   assert.ok(unchecked.references.some((ref: any) => ref.name === 'leaf' && ref.kind === 'call'));
   await macroSettings.update('smartAnalysis.include', ['macro-review.c'], vscode.ConfigurationTarget.Workspace);
-  await new Promise(resolve => setTimeout(resolve, 500)); await api.workspace.whenIdle();
+  await new Promise(resolve => setTimeout(resolve, 500)); await updateRelations();
   assert.equal(api.workspace.index.files.get(macroHeader.toString()).expandMacros, false);
   assert.ok(api.workspace.index.files.get(macroUri.toString()).references.some((ref: any) => ref.name === 'changed_target' && ref.expansion), 'selected source expands macros from unchecked headers');
   await macroSettings.update('smartAnalysis.include', [], vscode.ConfigurationTarget.Workspace);
-  await new Promise(resolve => setTimeout(resolve, 500)); await api.workspace.whenIdle();
+  await new Promise(resolve => setTimeout(resolve, 500)); await updateRelations();
   assert.ok([...api.workspace.index.files.values()].every((file: any) => file.expandMacros === false && !file.references.some((ref: any) => ref.expansion)), 'empty macro scope disables expansion across the index');
   assert.ok(api.workspace.index.files.get(document.uri.toString()).references.some((ref: any) => ref.kind === 'call'), 'basic calls remain with expansion off');
   await macroSettings.update('smartAnalysis.include', ['**'], vscode.ConfigurationTarget.Workspace);
-  await new Promise(resolve => setTimeout(resolve, 500)); await api.workspace.whenIdle();
+  await new Promise(resolve => setTimeout(resolve, 500)); await updateRelations();
   assert.ok(api.workspace.index.files.get(macroUri.toString()).references.some((ref: any) => ref.name === 'changed_target' && ref.expansion), 'all-folder policy restores expansion automatically');
   await vscode.workspace.fs.delete(macroHeader);
-  await new Promise(resolve => setTimeout(resolve, 500)); await api.workspace.whenIdle();
+  await new Promise(resolve => setTimeout(resolve, 500)); await updateRelations();
   assert.equal(api.view.state.graph.root.children.some((node: any) => node.name === 'changed_target'), false);
   const pointerUri = vscode.Uri.joinPath(root, 'pointer-review.c');
   const pointerSource = '#define POINTER_CHECK(x) (x)\ntypedef void (*CB)(void);\nvoid pointer_leaf(void){} void pointer_target(void){pointer_leaf();} void pointer_changed(void){}\nstruct ReviewOps{CB run;};struct ReviewOps review_ops={.run=pointer_target};\nvoid pointer_run(void){if(POINTER_CHECK(1))review_ops.run();}\n';
   await vscode.workspace.fs.writeFile(pointerUri, Buffer.from(pointerSource));
-  await new Promise(resolve=>setTimeout(resolve,500)); await api.workspace.whenIdle();
+  await new Promise(resolve=>setTimeout(resolve,500)); await updateRelations();
   const pointerDocument = await vscode.workspace.openTextDocument(pointerUri);
   const pointerEditor = await vscode.window.showTextDocument(pointerDocument);
   const parsesBeforeCallbackNavigation = api.workspace.diagnostics.index.sourceParses;
@@ -653,7 +675,7 @@ export async function run() {
     'selecting a callback member exposes its inferred target');
   for (const enabled of [false, true]) {
     await vscode.workspace.getConfiguration('dynsight').update('smartAnalysis.macro', enabled, vscode.ConfigurationTarget.Workspace);
-    await new Promise(resolve => setTimeout(resolve, 100)); await api.workspace.whenIdle();
+    await new Promise(resolve => setTimeout(resolve, 100)); await updateRelations();
     api.view.track(pointerEditor, true); api.view.refresh();
     assert.equal(api.view.state.analyzeCallbacks, enabled);
     assert.equal(!!api.view.state.callback, enabled, 'callback selection follows its independent setting');
@@ -694,30 +716,30 @@ export async function run() {
   assert.equal(api.view.state.context.location.start,inferred.sites[0].inference.evidence[0].location.start);
   assert.equal(vscode.window.activeTextEditor,pointerEditor,'evidence preview preserves the main editor');
   await vscode.workspace.fs.writeFile(pointerUri,Buffer.from(pointerSource.replace('.run=pointer_target','.run=pointer_changed')));
-  await new Promise(resolve=>setTimeout(resolve,500)); await api.workspace.whenIdle();
+  await new Promise(resolve=>setTimeout(resolve,500)); await updateRelations();
   assert.deepEqual(api.view.state.graph.root.children.map((node:any)=>node.name),['pointer_changed']);
   await vscode.workspace.fs.delete(pointerUri);
-  await new Promise(resolve=>setTimeout(resolve,500)); await api.workspace.whenIdle();
+  await new Promise(resolve=>setTimeout(resolve,500)); await updateRelations();
   assert.equal(api.workspace.index.symbols().some((symbol:any)=>symbol.name==='pointer_target'),false);
   const shortCircuitUri=vscode.Uri.joinPath(root,'conditional-review.c');
   const shortCircuitSource='typedef void(*CB)(void);void short_circuit_first(void){}void short_circuit_second(void){}void short_circuit_run(int flag){CB cb=short_circuit_first;flag && (cb=short_circuit_second);cb();}';
   await vscode.workspace.fs.writeFile(shortCircuitUri,Buffer.from(shortCircuitSource));
   const shortCircuitDocument=await vscode.workspace.openTextDocument(shortCircuitUri);
   const shortCircuitEditor=await vscode.window.showTextDocument(shortCircuitDocument);
-  await new Promise(resolve=>setTimeout(resolve,500));await api.workspace.whenIdle();
+  await new Promise(resolve=>setTimeout(resolve,500));await updateRelations();
   const shortCircuitPosition=shortCircuitDocument.positionAt(shortCircuitSource.indexOf('cb();'));
   shortCircuitEditor.selection=new vscode.Selection(shortCircuitPosition,shortCircuitPosition);
   api.view.track(shortCircuitEditor,true);
   assert.deepEqual(api.view.state.callback?.targets.map((symbol:any)=>symbol.name).sort(),['short_circuit_first','short_circuit_second'],'packaged callback selection preserves both short-circuit paths');
   await vscode.workspace.fs.delete(shortCircuitUri);
-  await new Promise(resolve=>setTimeout(resolve,500));await api.workspace.whenIdle();
+  await new Promise(resolve=>setTimeout(resolve,500));await updateRelations();
   const registeredUri = vscode.Uri.joinPath(root, 'registered-review.c');
   const registeredSource = 'void registered_target(void){}struct Registered{void(*cb_preprocess)(void);};' +
     'static const struct Registered bbb={.cb_preprocess=registered_target};' +
     'void registered_run(void){const struct Registered *ccc=&bbb;ccc->cb_preprocess();}';
   await vscode.workspace.getConfiguration('dynsight').update('smartAnalysis.macro', false, vscode.ConfigurationTarget.Workspace);
   await vscode.workspace.fs.writeFile(registeredUri, Buffer.from(registeredSource));
-  await new Promise(resolve => setTimeout(resolve, 500)); await api.workspace.whenIdle();
+  await new Promise(resolve => setTimeout(resolve, 500)); await updateRelations();
   const registeredDocument = await vscode.workspace.openTextDocument(registeredUri);
   const registeredEditor = await vscode.window.showTextDocument(registeredDocument);
   const registeredPosition = registeredDocument.positionAt(registeredSource.indexOf('ccc->cb_preprocess') + 5);
@@ -729,7 +751,7 @@ export async function run() {
   assert.equal(api.view.state.graph.root.name, 'registered_target');
   await vscode.workspace.fs.delete(registeredUri);
   await vscode.workspace.getConfiguration('dynsight').update('smartAnalysis.macro', true, vscode.ConfigurationTarget.Workspace);
-  await new Promise(resolve => setTimeout(resolve, 500)); await api.workspace.whenIdle();
+  await new Promise(resolve => setTimeout(resolve, 500)); await updateRelations();
   const sparseUri = vscode.Uri.joinPath(root, 'callback-effects.c');
   const sparseSource = 'typedef unsigned int uint32_t;typedef void(*SparseCB)(void);void sparse_target(void){}' +
     'struct Sparse{' + Array.from({length:270},(_,n)=>`uint32_t status${n};`).join('') + 'SparseCB cb;};static struct Sparse sparse __attribute__((section(".data"))),sparse_copy;' +
@@ -739,7 +761,7 @@ export async function run() {
     'void sparse_run(unsigned offset){sparse_configure(&sparse_bytes[offset]);sparse.cb();}' +
     'void sparse_opaque(void*);void sparse_array(void){struct Sparse items[2];sparse_opaque(items);items[0].cb=sparse_target;items[0].cb();}';
   await vscode.workspace.fs.writeFile(sparseUri, Buffer.from(sparseSource));
-  await new Promise(resolve=>setTimeout(resolve,500)); await api.workspace.whenIdle();
+  await new Promise(resolve=>setTimeout(resolve,500)); await updateRelations();
   const sparseDocument = await vscode.workspace.openTextDocument(sparseUri);
   const sparseEditor = await vscode.window.showTextDocument(sparseDocument);
   await api.view.handleMessage({type:'mode',value:'both'});
@@ -758,7 +780,7 @@ export async function run() {
   assert.ok(registration.sites.length > 0);
   assert.ok(registration.sites.every((site:any)=>site.callKind === 'registered' && site.kind !== 'call'));
   await vscode.workspace.fs.delete(sparseUri);
-  await new Promise(resolve=>setTimeout(resolve,500)); await api.workspace.whenIdle();
+  await new Promise(resolve=>setTimeout(resolve,500)); await updateRelations();
   const limitUri = vscode.Uri.joinPath(root, 'callback-limits.c');
   await vscode.workspace.fs.writeFile(limitUri, Buffer.from('typedef void(*LimitCB)(void);void limit_target(void){}LimitCB data[1100];void limit_update(void){\n' +
     Array.from({length:1030},(_,n)=>`data[${n}]=limit_target;`).join('\n') +
@@ -766,7 +788,7 @@ export async function run() {
   const waitForLimit = async (expected:boolean) => {
     const deadline=Date.now()+10_000;
     do {
-      await api.workspace.whenIdle();
+      await updateRelations();
       // Worker idle does not include the file watcher or the View's 70ms refresh timer.
       api.view.refresh();
       const detail=api.view.state.callbackDiagnostics.find((item:any)=>item.symbol==='limit_update');
@@ -787,7 +809,7 @@ export async function run() {
   const layoutUri = vscode.Uri.joinPath(root, 'layout-review.c');
   const layoutSource = 'void layout_leaf(void){} void layout_a(void){layout_leaf();} void layout_z(void){} void layout_pivot(void){layout_z();layout_a();layout_z();} void layout_entry(void){layout_pivot();}';
   await vscode.workspace.fs.writeFile(layoutUri, Buffer.from(layoutSource));
-  await new Promise(resolve => setTimeout(resolve, 500)); await api.workspace.whenIdle();
+  await new Promise(resolve => setTimeout(resolve, 500)); await updateRelations();
   const layoutDocument = await vscode.workspace.openTextDocument(layoutUri);
   const layoutEditor = await vscode.window.showTextDocument(layoutDocument);
   const layoutPosition = layoutDocument.positionAt(layoutSource.indexOf('layout_pivot(void)'));
@@ -841,7 +863,7 @@ export async function run() {
   const argumentsUri = vscode.Uri.joinPath(root, 'function-arguments.c');
   const argumentsSource = 'typedef void (*CB)(void);\nvoid arg_leaf(void){}\nvoid arg_target(void){arg_leaf();}\nvoid arg_changed(void){}\nint arg_svc(CB cb);\nvoid arg_origin(void){arg_svc(arg_target);}\n';
   await vscode.workspace.fs.writeFile(argumentsUri, Buffer.from(argumentsSource));
-  await new Promise(resolve => setTimeout(resolve, 500)); await api.workspace.whenIdle();
+  await new Promise(resolve => setTimeout(resolve, 500)); await updateRelations();
   const argumentsDocument = await vscode.workspace.openTextDocument(argumentsUri);
   const argumentsEditor = await vscode.window.showTextDocument(argumentsDocument);
   const selectArgumentSymbol = (name: string) => {
@@ -873,7 +895,7 @@ export async function run() {
   assert.deepEqual(api.view.state.graph.root.children.map((node: any) => node.name), ['arg_svc']);
   assert.equal(api.workspace.index.files.get(argumentsUri.toString()), argumentAnalysis);
   await vscode.workspace.fs.delete(argumentsUri);
-  await new Promise(resolve => setTimeout(resolve, 500)); await api.workspace.whenIdle();
+  await new Promise(resolve => setTimeout(resolve, 500)); await updateRelations();
   assert.equal(api.workspace.index.files.has(argumentsUri.toString()), false);
   const failedWorker = api.workspace.worker, originalRequest = api.workspace.request;
   let injectedWorkerFailure = false;
@@ -1022,6 +1044,35 @@ export async function run() {
     assert.equal(JSON.stringify(reloadedSlots.state.graph), slotExpanded, 'reloaded view restores persisted branches');
     assert.equal(reloadedSlots.state.context!.label, 'slot_B');
   } finally { reloadedSlots.dispose(); }
+  const savedHeader = vscode.Uri.joinPath(root, 'saved-shared.h');
+  const savedAlpha = vscode.Uri.joinPath(root, 'saved-alpha.c'), savedBeta = vscode.Uri.joinPath(root, 'saved-beta.c');
+  await vscode.workspace.fs.writeFile(savedHeader, Buffer.from('typedef void(*SaveCB)(void);\n#define SAVE_JOIN(a,b) a##b\n'));
+  await vscode.workspace.fs.writeFile(savedAlpha, Buffer.from('#include "saved-shared.h"\nstatic void save_alpha_target(void){}void saved_alpha(void){SaveCB cb=SAVE_JOIN(save_alpha,_target);cb();int n=1;}'));
+  await vscode.workspace.fs.writeFile(savedBeta, Buffer.from('#include "saved-shared.h"\nstatic void save_beta_target(void){}void saved_beta(void){SaveCB cb=save_beta_target;cb();}'));
+  await new Promise(resolve => setTimeout(resolve, 500)); await api.workspace.whenIdle();
+  await api.workspace.resumeAnalysis(); await api.workspace.whenIdle();
+  const savedDocument = await vscode.workspace.openTextDocument(savedAlpha), savedEditor = await vscode.window.showTextDocument(savedDocument);
+  const savedBefore = api.workspace.diagnostics.index, untouchedBeta = api.workspace.sourceFiles.get(savedBeta.toString());
+  const savedOffset = savedDocument.getText().indexOf('n=1') + 2;
+  await savedEditor.edit(edit => edit.replace(new vscode.Range(savedDocument.positionAt(savedOffset), savedDocument.positionAt(savedOffset + 1)), '2'));
+  await api.workspace.whenIdle();
+  assert.equal(api.workspace.diagnostics.index.relationPasses, savedBefore.relationPasses);
+  const savedProgress: any[] = [], savedWorker = api.workspace.worker;
+  const collectSavedProgress = (message: any) => { if (message.type === 'callback-progress') savedProgress.push(message.progress); };
+  savedWorker.on('message', collectSavedProgress);
+  try {
+    await savedDocument.save(); await new Promise(resolve => setTimeout(resolve, 300)); await api.workspace.whenIdle();
+    assert.equal(api.workspace.diagnostics.index.relationPasses, savedBefore.relationPasses, 'native save waits for idle time');
+    assert.ok(api.workspace.diagnostics.index.deferredUpdate);
+    await api.view.handleMessage({ type: 'localResume' }); await api.workspace.whenIdle();
+  }
+  finally { savedWorker.off('message', collectSavedProgress); }
+  assert.equal(api.workspace.diagnostics.index.sourceParses, savedBefore.sourceParses + 1);
+  assert.equal(api.workspace.diagnostics.index.relationPasses, savedBefore.relationPasses + 1);
+  assert.equal(api.workspace.sourceFiles.get(savedBeta.toString()), untouchedBeta, 'save retains the unrelated shared-header consumer');
+  assert.ok(savedProgress.length && savedProgress.every(progress => progress.functionsTotal <= 2), 'native save analyzes only the changed file and its header context');
+  assert.equal(savedProgress.some(progress => /saved_beta|save_beta_target/.test(progress.symbol ?? '')), false);
+  console.log('Incremental native save passed: one source parse, two related functions, unrelated shared-header consumer retained');
   if(process.env.DYNSIGHT_AI_SETUP_TEST==='1') {
     const config=vscode.workspace.getConfiguration('dynsight');
     const currentConfig=()=>vscode.workspace.getConfiguration('dynsight');

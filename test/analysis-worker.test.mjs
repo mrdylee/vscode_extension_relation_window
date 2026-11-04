@@ -14,6 +14,51 @@ function snapshot(worker, accept = () => true) {
   });
 }
 
+test('a saved source edit reuses unrelated consumers of shared types and token-pasting macros', async () => {
+  const worker = new Worker(path.resolve('dist/analysis-worker.cjs'), { workerData: { assets: path.resolve('dist') } });
+  const pending = new Map(), progress = []; let serial = 0;
+  worker.on('message', message => {
+    if (message.type === 'callback-progress') progress.push(message.progress);
+    const job = pending.get(message.id); if (!job) return;
+    pending.delete(message.id); message.error ? job.reject(new Error(message.error)) : job.resolve(message.result);
+  });
+  worker.on('error', error => { for (const job of pending.values()) job.reject(error); pending.clear(); });
+  const request = message => {
+    const id = ++serial;
+    return { id, promise: new Promise((resolve, reject) => { pending.set(id, { resolve, reject }); worker.postMessage({ ...message, id }); }) };
+  };
+  const sources = [
+    ['file:///shared.h', 'typedef void(*CB)(void);\n#define JOIN(a,b) a##b\n'],
+    ['file:///alpha.c', '#include "shared.h"\nvoid alpha(void){CB cb=JOIN(alpha,_target);cb();}'],
+    ['file:///beta.c', '#include "shared.h"\nstatic void beta_target(void){}void beta(void){CB cb=beta_target;cb();}'],
+    ['file:///targets.c', 'void alpha_target(void){}']
+  ];
+  const versions = [];
+  const parse = async (uri, text) => {
+    const job = request({ uri, text, skip: true }); await job.promise;
+    const at = versions.findIndex(row => row[0] === uri);
+    if (at < 0) versions.push([uri, job.id, -job.id]); else versions[at] = [uri, job.id, -job.id];
+  };
+  const derive = async () => {
+    const result = await request({ type: 'derive', versions }).promise;
+    for (const [uri, stamp] of result.versions) versions.find(row => row[0] === uri)[2] = stamp;
+    return result;
+  };
+  try {
+    for (const source of sources) await parse(...source);
+    await derive(); progress.length = 0;
+    await parse(sources[1][0], sources[1][1].replace('cb();', 'cb();int edited=1;'));
+    const next = await derive();
+    assert.ok(next.files.some(file => file.uri === sources[1][0]));
+    assert.equal(next.files.some(file => file.uri === sources[2][0]), false, 'unrelated results retain their acknowledged Worker stamp');
+    assert.ok(progress.length);
+    assert.ok(progress.every(sample => sample.functionsTotal <= 2), 'basic and detailed passes analyze only the changed file and its context');
+    assert.equal(progress.some(sample => /beta/.test(sample.symbol ?? '')), false);
+    const alpha = next.files.find(file => file.uri === sources[1][0]);
+    assert.ok(alpha.references.some(ref => ref.callKind === 'inferred' && ref.name === 'alpha_target' && ref.targetId.startsWith('file:///targets.c#')));
+  } finally { await worker.terminate(); }
+});
+
 test('Worker applies macro folder policy without removing raw calls or unchecked header definitions', async () => {
   const worker = new Worker(path.resolve('dist/analysis-worker.cjs'), { workerData: { assets: path.resolve('dist') } });
   let serial = 0; const pending = new Map();

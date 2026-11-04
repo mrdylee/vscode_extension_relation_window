@@ -38,11 +38,12 @@ export function createDiagnostics(version: string, refresh: () => void, reportIs
       const index = data.index;
       const outcome = index.callbackAnalysis?.progress?.outcome;
       const partial = !!data.workerError || !!index.failedSources || index.fileLimitReached || index.callbackAnalysis?.limited || index.callbackAnalysis?.paused || (outcome && outcome !== 'completed');
-      const blocked = data.workerError || (index.basicWaitReason && !['indexing', 'source-update', 'relations'].includes(index.basicWaitReason));
+      const blocked = data.workerError || (index.basicWaitReason && !['indexing', 'source-update', 'relations', 'analysis-deferred'].includes(index.basicWaitReason));
       const basic = index.basicReady ? 'ready' : blocked ? 'blocked' : 'preparing';
       if(index.basicReady !== undefined)body.append(el('div',`Basic navigation: ${basic} · Detailed results: ${index.detailedCurrent ? partial ? 'current (partial)' : 'current' : 'pending or partial'}`));
       if (index.failedSources) body.append(el('div', `Source failures: ${index.failedSources}. Check Analysis notices for affected files.`, 'warning'));
       if (index.basicReady === false && index.basicWaitReason) body.append(el('div', copilotWaitMessage(index.basicWaitReason)));
+      if (index.deferredUpdate) body.append(el('div', `Pending relation update: ${index.deferredUpdate.files} changed C/H file(s) · ${time(index.deferredUpdate.at)}${index.deferredUpdate.persistenceError ? ' · Could not save the pending update for restart.' : ''}`));
       if (index.callbackAnalysis) {
         const analysis = index.callbackAnalysis, progress = analysis.progress;
         body.append(el('div', `Local analysis: ${analysis.paused ? 'paused' : analysis.running ? 'running' : progress?.outcome ?? 'idle'}${progress ? ` · Total ${progress.elapsedMs}ms · ${progress.stage === 'registrations' ? 'Registration candidates' : `Round ${progress.round}/${progress.maxRounds}`} · Functions ${progress.functionsDone}/${progress.functionsTotal} · ${progress.stage === 'registrations' ? 'Checks' : 'Evaluations'} ${progress.evaluations}${progress.symbol ? ` · Current ${progress.symbol}: ${progress.scopeElapsedMs}ms / ${progress.scopeEvaluations}` : ''}` : ''}`));

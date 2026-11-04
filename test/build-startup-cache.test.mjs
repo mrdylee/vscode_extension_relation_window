@@ -45,7 +45,7 @@ async function scenario(t, options = {}) {
   t.after(async () => { for (const item of instances) await item.close(); await rm(storage, { recursive: true, force: true }); });
   function open(overrides = {}) {
     const folder = { uri: Uri.parse(root), name: 'startup', index: 0 };
-    const configuration = new Emitter(), folders = new Emitter(), sourceChanges = new Emitter();
+    const configuration = new Emitter(), folders = new Emitter(), sourceChanges = new Emitter(), edited = new Emitter(), savedDocument = new Emitter();
     const commands = new Map(), messages = [], reads = [];
     let metadataWaited = false, discoveryWaited = false, discoveries = 0;
     const adapter = {
@@ -62,7 +62,7 @@ async function scenario(t, options = {}) {
         return [...files.keys()].filter(name => /\.[ch]$/i.test(name)).map(Uri.parse);
       },
       createFileSystemWatcher: () => ({ dispose() {}, onDidCreate: sourceChanges.event, onDidChange: sourceChanges.event, onDidDelete: () => disposable() }),
-      onDidChangeTextDocument: () => disposable(), onDidCloseTextDocument: () => disposable(),
+      onDidChangeTextDocument: edited.event, onDidCloseTextDocument: () => disposable(), onDidSaveTextDocument: savedDocument.event,
       onDidChangeConfiguration: configuration.event, onDidChangeWorkspaceFolders: folders.event,
       fs: {
         readFile: async uri => {
@@ -99,7 +99,7 @@ async function scenario(t, options = {}) {
     const context = { subscriptions: [], workspaceState: { get: key => saved.get(key), update: async (key, value) => saved.set(key, value) } };
     const service = module.exports.registerBuildConfigurations(context, workspace);
     let closed = false;
-    const item = { workspace, service, adapter, configuration, folders, sourceChanges, commands, messages, reads,
+    const item = { workspace, service, adapter, configuration, folders, sourceChanges, edited, savedDocument, commands, messages, reads,
       get discoveries() { return discoveries; },
       async settle() { await bounded(Promise.all([workspace.ready, service.ready])); await bounded(workspace.whenIdle()); },
       async close() { if (closed) return; closed = true; service.dispose(); const worker = workspace.worker; workspace.dispose(); await worker.terminate(); } };
@@ -312,4 +312,83 @@ test('unselected startup retains version checks without an extra source discover
   assert.match(next.workspace.status, /14.*19/);
   assert.equal(next.discoveries, 0);
   assert.equal(next.workspace.diagnostics.index.sourceParses, 0);
+});
+
+test('selected build preserves the one-hour wait across save and restart before manual update', async t => {
+  const s = await scenario(t), profile = await s.seed(), next = s.open(); await next.settle();
+  const initial = next.workspace.diagnostics.index, messageCount = next.messages.length;
+  const filename = s.profileManifest(profile.id), before = await readFile(filename, 'utf8');
+  const text = source.replace('first();', 'second();');
+  const document = { uri: Uri.parse(root + '/main.c'), isClosed: false, isDirty: true, getText: () => text };
+  next.adapter.textDocuments = [document];
+  next.edited.fire({ document, contentChanges: [{}] }); await next.settle(); await next.service.refresh();
+  assert.equal(next.workspace.diagnostics.index.sourceParses, initial.sourceParses + 1);
+  assert.equal(next.workspace.diagnostics.index.relationPasses, initial.relationPasses);
+  assert.equal(next.workspace.buildProfile.fingerprint, profile.fingerprint);
+  assert.equal(next.messages.slice(messageCount).some(message => ['derive', 'reset', 'cache-init'].includes(message.type)), false);
+  assert.equal(await readFile(filename, 'utf8'), before);
+  assert.match(next.workspace.status, /Unsaved.*Save/i);
+  document.isDirty = false; s.files.set(root + '/main.c', text); next.savedDocument.fire(document); await next.settle();
+  assert.equal(next.workspace.diagnostics.index.sourceParses, initial.sourceParses + 1);
+  assert.equal(next.workspace.diagnostics.index.relationPasses, initial.relationPasses);
+  assert.equal(await readFile(filename, 'utf8'), before);
+  const deadline = next.workspace.diagnostics.index.deferredUpdate.at;
+  await next.close(); const pending = s.open(); await pending.settle();
+  assert.equal(pending.workspace.diagnostics.index.relationPasses, 0);
+  assert.equal(pending.workspace.diagnostics.index.deferredUpdate.at, deadline);
+  await pending.workspace.resumeAnalysis(); await pending.settle();
+  assert.deepEqual(targetNames(pending.workspace), ['second']);
+  await pending.close(); const reopened = s.open(); await reopened.settle();
+  assert.equal(reopened.workspace.diagnostics.index.cache.state, 'restored');
+  assert.equal(reopened.workspace.diagnostics.index.sourceParses, 0);
+  assert.deepEqual(targetNames(reopened.workspace), ['second']);
+});
+
+test('typing cannot replace a rejected selected cache or clear its rebuild requirement', async t => {
+  const s = await scenario(t), profile = await s.seed(), filename = s.profileManifest(profile.id);
+  await updateManifest(filename, data => { data.analysisVersion = 14; });
+  const before = await readFile(filename, 'utf8'), next = s.open(); await next.settle();
+  const document = { uri: Uri.parse(root + '/main.c'), isClosed: false, isDirty: true, getText: () => source + '\n' };
+  next.adapter.textDocuments = [document]; next.edited.fire({ document, contentChanges: [{}] }); await next.settle();
+  assert.equal(next.workspace.copilotWaitReason, 'cache-rebuild-required');
+  assert.match(next.workspace.status, /14.*19/);
+  assert.equal(await readFile(filename, 'utf8'), before);
+});
+test('discarded unsaved edits do not defer an unchanged selected-build cache after restart', async t => {
+  const s = await scenario(t), profile = await s.seed(), next = s.open(); await next.settle();
+  const filename = s.profileManifest(profile.id), before = await readFile(filename, 'utf8');
+  const document = { uri: Uri.parse(root + '/main.c'), isClosed: false, isDirty: true, getText: () => source + '\n' };
+  next.adapter.textDocuments = [document]; next.edited.fire({ document, contentChanges: [{}] }); await next.settle();
+  assert.ok(next.workspace.diagnostics.index.deferredUpdate);
+  await next.close(); const reopened = s.open(); await reopened.settle();
+  assert.equal(reopened.workspace.diagnostics.index.deferredUpdate, undefined);
+  assert.equal(reopened.workspace.diagnostics.index.sourceParses, 0);
+  assert.equal(reopened.workspace.status, 'Index ready');
+  assert.deepEqual(targetNames(reopened.workspace), ['first']);
+  assert.equal(await readFile(filename, 'utf8'), before);
+});
+
+test('saving one selected source retains unrelated build index entries using the same header', async t => {
+  const s = await scenario(t), main = '#include "shared.h"\n' + source;
+  s.files.set(root + '/main.c', main);
+  s.files.set(root + '/shared.h', 'typedef void(*SaveCB)(void);\n#define JOIN(a,b) a##b\n');
+  s.files.set(root + '/beta.c', '#include "shared.h"\nstatic void beta_target(void){}void beta(void){SaveCB cb=beta_target;cb();}');
+  s.files.set(root + '/makefile', 'all: main.o beta.o\n%.o: %.c\n\tgcc -DMODE=1 -c $< -o $@\n');
+  await s.seed(); const next = s.open(); await next.settle();
+  const index = next.workspace.index, beta = [...index.files.values()].filter(file => file.uri.endsWith('/beta.c'));
+  assert.equal(beta.length, 1);
+  const initial = next.workspace.diagnostics.index, text = main.replace('first();', 'second();');
+  const document = { uri: Uri.parse(root + '/main.c'), isClosed: false, isDirty: true, getText: () => text };
+  next.adapter.textDocuments = [document]; next.edited.fire({ document, contentChanges: [{}] }); await next.settle();
+  const progress = [], collect = message => { if (message.type === 'callback-progress') progress.push(message.progress); };
+  next.workspace.worker.on('message', collect);
+  document.isDirty = false; s.files.set(root + '/main.c', text); next.savedDocument.fire(document); await next.settle();
+  assert.equal(next.workspace.diagnostics.index.relationPasses, initial.relationPasses);
+  await next.workspace.resumeAnalysis(); await next.settle();
+  next.workspace.worker.off('message', collect);
+  assert.equal(next.workspace.index, index, 'saving updates the existing contextual index');
+  assert.equal(next.workspace.index.files.get(beta[0].context.key), beta[0], 'unrelated contextual facts keep their host identity');
+  assert.equal(next.workspace.diagnostics.index.sourceParses, initial.sourceParses + 1);
+  assert.ok(progress.length && progress.every(sample => sample.functionsTotal <= 3));
+  assert.deepEqual(targetNames(next.workspace), ['second']);
 });

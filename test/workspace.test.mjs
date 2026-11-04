@@ -28,9 +28,28 @@ async function bounded(promise) {
   try { return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Workspace operation did not settle')), 3000); })]); }
   finally { clearTimeout(timer); }
 }
+function idleClock(start = Date.now()) {
+  let now = start;
+  const timers = new Map();
+  return {
+    Date: class extends Date { static now() { return now; } },
+    setTimeout(callback, delay, ...args) {
+      if (delay < 1000) return setTimeout(callback, delay, ...args);
+      const timer = { unref() {} };
+      timers.set(timer, { at: now + delay, callback: () => callback(...args) }); return timer;
+    },
+    clearTimeout(timer) { if (!timers.delete(timer)) clearTimeout(timer); },
+    advance(ms) {
+      now += ms;
+      for (const [timer, task] of timers) if (task.at <= now) { timers.delete(timer); task.callback(); }
+    },
+    get now() { return now; },
+    get pending() { return timers.size; }
+  };
+}
 function fixture(t, files = [], options = {}) {
   const folder = { uri: Uri.parse('file:///review'), name: 'review', index: 0 };
-  const created = new Emitter(), changed = new Emitter(), deleted = new Emitter(), closed = new Emitter(), edited = new Emitter();
+  const created = new Emitter(), changed = new Emitter(), deleted = new Emitter(), closed = new Emitter(), edited = new Emitter(), saved = new Emitter();
   const configuration = new Emitter(), folders = new Emitter();
   const adapter = {
     workspaceFolders: options.folders ?? [folder], textDocuments: [],
@@ -39,16 +58,18 @@ function fixture(t, files = [], options = {}) {
     getWorkspaceFolder: () => folder, asRelativePath: value => value.path.slice('/review/'.length),
     findFiles: async () => files,
     createFileSystemWatcher: () => ({ dispose() {}, onDidCreate: created.event, onDidChange: changed.event, onDidDelete: deleted.event }),
-    onDidChangeTextDocument: edited.event, onDidCloseTextDocument: closed.event,
+    onDidChangeTextDocument: edited.event, onDidCloseTextDocument: closed.event, onDidSaveTextDocument: saved.event,
     onDidChangeConfiguration: configuration.event, onDidChangeWorkspaceFolders: folders.event,
     fs: { readFile: async file => Buffer.from(options.sources?.get(file.toString()) ?? '') }
   };
   const vscode = { EventEmitter: Emitter, Uri, RelativePattern: class {}, env: {}, version: 'test', workspace: adapter };
   const module = { exports: {} };
-  runInNewContext(bundle, { module, exports: module.exports, process, Buffer, URL, setTimeout, clearTimeout, require: name => name === 'vscode' ? vscode : require(name) });
+  runInNewContext(bundle, { module, exports: module.exports, process, Buffer, URL, setTimeout, clearTimeout,
+    ...(options.clock && { Date: options.clock.Date, setTimeout: options.clock.setTimeout, clearTimeout: options.clock.clearTimeout }),
+    require: name => name === 'vscode' ? vscode : require(name) });
   const workspace = new module.exports.WorkspaceIndex(options.extensionPath ?? process.cwd(), options.storage);
   t.after(async () => { const worker = workspace.worker; workspace.dispose(); await worker.terminate(); });
-  return { workspace, adapter, created, changed, deleted, closed, edited, configuration, folders };
+  return { workspace, adapter, created, changed, deleted, closed, edited, saved, configuration, folders };
 }
 
 for(const metadata of [{analysisVersion:4},{schema:1}])test(`legacy cache evidence ${JSON.stringify(metadata)} applies only to saved roots`, async t => {
@@ -114,6 +135,7 @@ test('disk cache restores unchanged startup without parses or relationship passe
   sources.set(files[0].toString(), latest.replaceAll('new_target', 'next_target'));
   changed.fire(files[0]); await bounded(workspace.whenIdle());
   assert.equal(workspace.diagnostics.index.sourceParses, 1);
+  await workspace.resumeAnalysis(); await bounded(workspace.whenIdle());
   const task = workspace.index.symbols().find(symbol => symbol.name === 'task');
   assert.ok(workspace.index.relations(task.id, 'callees').some(group => group.name === 'next_target'));
 });
@@ -136,6 +158,197 @@ test('cache startup validates content, additions and removals made while the edi
 });
 
 const latest = 'typedef void(*CB)(void);void new_target(void){}void task(void){CB cb=new_target;cb();}';
+test('one-hour idle update keeps live navigation and runs one saved batch at the deadline', async t => {
+  const clock = idleClock(), file = uri('idle.c'), sources = new Map([[file.toString(), 'void task(void){first();}void first(void){}void second(void){}']]);
+  const { workspace, changed } = fixture(t, [file], { sources, clock });
+  await workspace.ready; await bounded(workspace.whenIdle());
+  const before = workspace.diagnostics.index;
+  sources.set(file.toString(), sources.get(file.toString()).replace('first();', 'second();'));
+  changed.fire(file); await bounded(workspace.whenIdle());
+  assert.equal(workspace.diagnostics.index.sourceParses, before.sourceParses + 1);
+  assert.equal(workspace.diagnostics.index.relationPasses, before.relationPasses, 'save must not immediately run deep analysis');
+  assert.equal(workspace.diagnostics.index.detailedCurrent, false);
+  assert.match(workspace.status, /pending.*1.*file/i);
+  const task = workspace.index.symbols().find(symbol => symbol.name === 'task');
+  assert.ok(workspace.index.relations(task.id, 'callees').some(group => group.name === 'second'));
+  clock.advance(3_599_999); await bounded(workspace.whenIdle());
+  assert.equal(workspace.diagnostics.index.relationPasses, before.relationPasses);
+  clock.advance(1); await bounded(workspace.whenIdle());
+  assert.equal(workspace.diagnostics.index.relationPasses, before.relationPasses + 1);
+  assert.equal(workspace.stable, true); assert.equal(workspace.diagnostics.index.deferredUpdate, undefined);
+  assert.equal(clock.pending, 0);
+});
+test('one-hour idle update resets on real changes and coalesces distinct files', async t => {
+  const clock = idleClock(), files = ['idle-a.c', 'idle-b.c'].map(uri), sources = new Map(files.map((file, n) => [file.toString(), `void task${n}(void){}`]));
+  const { workspace, changed } = fixture(t, files, { sources, clock });
+  await workspace.ready; await bounded(workspace.whenIdle()); const passes = workspace.diagnostics.index.relationPasses;
+  sources.set(files[0].toString(), 'void task0(void){int n=1;}'); changed.fire(files[0]); await bounded(workspace.whenIdle());
+  clock.advance(1_800_000);
+  sources.set(files[1].toString(), 'void task1(void){int n=2;}'); changed.fire(files[1]); await bounded(workspace.whenIdle());
+  assert.equal(workspace.diagnostics.index.deferredUpdate.files, 2);
+  assert.equal(workspace.diagnostics.index.deferredUpdate.at, clock.now + 3_600_000);
+  clock.advance(1_800_000); await bounded(workspace.whenIdle());
+  assert.equal(workspace.diagnostics.index.relationPasses, passes, 'the first deadline was superseded');
+  clock.advance(1_800_000); await bounded(workspace.whenIdle());
+  assert.equal(workspace.diagnostics.index.relationPasses, passes + 1);
+});
+test('one-hour idle update keeps the newest deadline when an older file read finishes later', async t => {
+  const clock = idleClock(), files = ['idle-slow.c', 'idle-fast.c'].map(uri), sources = new Map(files.map((file, n) => [file.toString(), `void task${n}(void){}`]));
+  const { workspace, adapter, changed } = fixture(t, files, { sources, clock });
+  await workspace.ready; await bounded(workspace.whenIdle());
+  const read = deferred(), entered = deferred(), original = adapter.fs.readFile;
+  adapter.fs.readFile = file => file.toString() === files[0].toString() ? (entered.resolve(), read.promise) : original(file);
+  changed.fire(files[0]); await bounded(entered.promise);
+  clock.advance(1_800_000);
+  sources.set(files[1].toString(), 'void task1(void){int newest=1;}'); changed.fire(files[1]);
+  try {
+    await bounded((async () => { while (!workspace.sourceFiles.get(files[1].toString()).text.includes('newest')) await new Promise(resolve => setTimeout(resolve, 10)); })());
+    assert.equal(workspace.diagnostics.index.deferredUpdate.at, clock.now + 3_600_000);
+  } finally { read.resolve(Buffer.from('void task0(void){int older=1;}')); await bounded(workspace.whenIdle()); }
+  assert.equal(workspace.diagnostics.index.deferredUpdate.at, clock.now + 3_600_000, 'late IO cannot move the last-change deadline backwards');
+});
+test('one-hour idle update ignores duplicate save watcher and close notifications', async t => {
+  const clock = idleClock(), file = uri('idle-duplicate.c'), sources = new Map([[file.toString(), latest]]);
+  const { workspace, changed, saved, closed } = fixture(t, [file], { sources, clock });
+  await workspace.ready; await bounded(workspace.whenIdle());
+  sources.set(file.toString(), latest.replaceAll('new_target', 'next_target')); changed.fire(file); await bounded(workspace.whenIdle());
+  assert.ok(workspace.diagnostics.index.deferredUpdate);
+  const deadline = workspace.diagnostics.index.deferredUpdate.at;
+  clock.advance(600_000);
+  const document = { uri: file, isClosed: true, isDirty: false };
+  saved.fire(document); changed.fire(file); closed.fire(document); await bounded(workspace.whenIdle());
+  assert.equal(workspace.diagnostics.index.deferredUpdate.at, deadline);
+  assert.equal(workspace.diagnostics.index.deferredUpdate.files, 1);
+});
+test('one-hour idle update manual resume skips the wait without reparsing', async t => {
+  const clock = idleClock(), file = uri('idle-manual.c'), sources = new Map([[file.toString(), latest]]);
+  const { workspace, changed } = fixture(t, [file], { sources, clock });
+  await workspace.ready; await bounded(workspace.whenIdle()); const before = workspace.diagnostics.index;
+  sources.set(file.toString(), latest.replaceAll('new_target', 'manual_target')); changed.fire(file); await bounded(workspace.whenIdle());
+  assert.equal(workspace.diagnostics.index.relationPasses, before.relationPasses);
+  await workspace.resumeAnalysis(); await bounded(workspace.whenIdle());
+  assert.equal(workspace.diagnostics.index.sourceParses, before.sourceParses + 1);
+  assert.equal(workspace.diagnostics.index.relationPasses, before.relationPasses + 1);
+  assert.ok(workspace.index.files.get(file.toString()).references.some(ref => ref.callKind === 'inferred' && ref.name === 'manual_target'));
+  clock.advance(3_600_000); await bounded(workspace.whenIdle());
+  assert.equal(workspace.diagnostics.index.relationPasses, before.relationPasses + 1, 'no obsolete timer after a manual update');
+});
+test('one-hour idle update waits for saved content when the deadline expires while dirty', async t => {
+  const clock = idleClock(), file = uri('idle-dirty.c'), sources = new Map([[file.toString(), latest]]);
+  const { workspace, adapter, edited, saved } = fixture(t, [file], { sources, clock });
+  await workspace.ready; await bounded(workspace.whenIdle()); const passes = workspace.diagnostics.index.relationPasses;
+  const text = latest.replaceAll('new_target', 'later_target');
+  const document = { uri: file, isDirty: true, isClosed: false, getText: () => text }; adapter.textDocuments = [document];
+  edited.fire({ document, contentChanges: [{}] }); await bounded(workspace.whenIdle());
+  assert.equal(workspace.diagnostics.index.deferredUpdate.files, 1);
+  clock.advance(3_600_000); await bounded(workspace.whenIdle());
+  assert.equal(workspace.diagnostics.index.relationPasses, passes);
+  document.isDirty = false; sources.set(file.toString(), text); saved.fire(document); await bounded(workspace.whenIdle());
+  assert.equal(workspace.diagnostics.index.relationPasses, passes + 1);
+  assert.equal(workspace.stable, true);
+});
+test('one-hour idle update manual resume includes source edits still waiting for their parse debounce', async t => {
+  const clock = idleClock(), file = uri('idle-manual-debounce.c'), sources = new Map([[file.toString(), latest]]);
+  const { workspace, changed } = fixture(t, [file], { sources, clock });
+  await workspace.ready; await bounded(workspace.whenIdle()); const before = workspace.diagnostics.index;
+  sources.set(file.toString(), latest.replaceAll('new_target', 'debounced_target')); changed.fire(file);
+  await bounded(workspace.resumeAnalysis()); await bounded(workspace.whenIdle());
+  assert.equal(workspace.diagnostics.index.sourceParses, before.sourceParses + 1);
+  assert.equal(workspace.diagnostics.index.relationPasses, before.relationPasses + 1);
+  assert.equal(workspace.diagnostics.index.deferredUpdate, undefined);
+  assert.ok(workspace.index.files.get(file.toString()).references.some(ref => ref.callKind === 'inferred' && ref.name === 'debounced_target'));
+});
+test('one-hour idle update includes deleted sources without delaying live removal', async t => {
+  const clock = idleClock(), files = ['idle-removed.c', 'idle-kept.c'].map(uri), sources = new Map(files.map((file, n) => [file.toString(), `void task${n}(void){}`]));
+  const { workspace, deleted } = fixture(t, files, { sources, clock });
+  await workspace.ready; await bounded(workspace.whenIdle()); const passes = workspace.diagnostics.index.relationPasses;
+  files.splice(0, 1).forEach(file => { sources.delete(file.toString()); deleted.fire(file); }); await bounded(workspace.whenIdle());
+  assert.equal(workspace.index.files.size, 1);
+  assert.equal(workspace.diagnostics.index.relationPasses, passes);
+  clock.advance(3_600_000); await bounded(workspace.whenIdle());
+  assert.equal(workspace.diagnostics.index.relationPasses, passes + 1);
+});
+test('one-hour idle update re-arms a timer that fires before the wall-clock deadline', async t => {
+  const clock = idleClock(), file = uri('idle-clock.c'), sources = new Map([[file.toString(), latest]]);
+  const { workspace, changed } = fixture(t, [file], { sources, clock });
+  await workspace.ready; await bounded(workspace.whenIdle()); const passes = workspace.diagnostics.index.relationPasses;
+  sources.set(file.toString(), latest + '\n'); changed.fire(file); await bounded(workspace.whenIdle());
+  clock.Date.now = () => clock.now - 2000;
+  clock.advance(3_600_000); await bounded(workspace.whenIdle());
+  assert.equal(workspace.diagnostics.index.relationPasses, passes);
+  assert.equal(clock.pending, 1, 'a clock adjustment must not leave the update without a timer');
+  clock.advance(2000); await bounded(workspace.whenIdle());
+  assert.equal(workspace.diagnostics.index.relationPasses, passes + 1);
+});
+test('one-hour idle update cannot report detail current while the changed raw parse is pending', async t => {
+  const clock = idleClock(), file = uri('idle-pending-parse.c'), sources = new Map([[file.toString(), latest]]);
+  const { workspace, changed } = fixture(t, [file], { sources, clock });
+  await workspace.ready; await bounded(workspace.whenIdle());
+  const request = workspace.request, entered = deferred(), release = deferred();
+  workspace.request = function(message) {
+    const result = request.call(this, message);
+    if (message.uri !== file.toString()) return result;
+    entered.resolve(); return { ...result, promise: result.promise.then(async value => { await release.promise; return value; }) };
+  };
+  sources.set(file.toString(), latest + '\n'); changed.fire(file);
+  await bounded(entered.promise);
+  try {
+    assert.equal(workspace.diagnostics.index.deferredUpdate.files, 1);
+    assert.equal(workspace.diagnostics.index.detailedCurrent, false);
+    assert.equal(workspace.stable, false);
+  } finally { release.resolve(); await bounded(workspace.whenIdle()); }
+});
+test('one-hour idle update cannot hide a failed changed source behind the pending status', async t => {
+  const clock = idleClock(), file = uri('idle-too-large.c'), sources = new Map([[file.toString(), latest]]);
+  const { workspace, changed } = fixture(t, [file], { sources, clock });
+  await workspace.ready; await bounded(workspace.whenIdle());
+  sources.set(file.toString(), ' '.repeat(2_000_001)); changed.fire(file); await bounded(workspace.whenIdle());
+  assert.equal(workspace.diagnostics.index.deferredUpdate.files, 1);
+  assert.equal(workspace.diagnostics.index.failedSources, 1);
+  assert.match(workspace.status, /Partial index: 1 file.*failed/);
+  assert.equal(workspace.copilotWaitReason, 'source-failed');
+});
+for (const expired of [false, true]) test('one-hour idle update restores pending saved changes after restart: ' + expired, async t => {
+  const storage = await mkdtemp(path.join(os.tmpdir(), 'dynsight-idle-restart-')); t.after(() => rm(storage, { recursive: true, force: true }));
+  const clock = idleClock(), file = uri('idle-restart.c'), sources = new Map([[file.toString(), latest]]);
+  const first = fixture(t, [file], { sources, storage, clock }); await first.workspace.ready; await bounded(first.workspace.whenIdle());
+  const manifest = path.join(storage, 'analysis-cache', 'manifest.json'), before = await readFile(manifest, 'utf8');
+  sources.set(file.toString(), latest.replaceAll('new_target', 'restart_target')); first.changed.fire(file); await bounded(first.workspace.whenIdle());
+  assert.equal(await readFile(manifest, 'utf8'), before, 'pending work keeps the previous saved cache generation');
+  first.workspace.dispose(); assert.equal(clock.pending, 0);
+  clock.advance(expired ? 3_600_000 : 1_800_000);
+  const next = fixture(t, [file], { sources, storage, clock }).workspace;
+  await next.ready; await bounded(next.whenIdle());
+  assert.equal(next.diagnostics.index.sourceParses, 1);
+  assert.equal(next.diagnostics.index.relationPasses, expired ? 1 : 0);
+  if (!expired) {
+    assert.equal(next.diagnostics.index.deferredUpdate.at, clock.now + 1_800_000);
+    clock.advance(1_800_000); await bounded(next.whenIdle());
+    assert.equal(next.diagnostics.index.relationPasses, 1);
+  }
+  assert.ok(next.index.files.get(file.toString()).references.some(ref => ref.callKind === 'inferred' && ref.name === 'restart_target'));
+  assert.equal(next.stable, true);
+  await assert.rejects(readFile(path.join(storage, 'pending-analysis.json'), 'utf8'), { code: 'ENOENT' });
+});
+for (const recorded of [true, false]) test('one-hour idle update preserves the deadline for an unsaved editor restored on restart: ' + recorded, async t => {
+  const storage = await mkdtemp(path.join(os.tmpdir(), 'dynsight-idle-hot-exit-')); t.after(() => rm(storage, { recursive: true, force: true }));
+  const clock = idleClock(), file = uri('idle-hot-exit.c'), sources = new Map([[file.toString(), latest]]);
+  const document = { uri: file, isClosed: false, isDirty: true, getText: () => latest.replaceAll('new_target', 'restored_target') };
+  const first = fixture(t, [file], { sources, storage, clock });
+  await first.workspace.ready; await bounded(first.workspace.whenIdle());
+  first.adapter.textDocuments = [document]; first.edited.fire({ document, contentChanges: [{}] }); await bounded(first.workspace.whenIdle());
+  const deadline = first.workspace.diagnostics.index.deferredUpdate.at;
+  first.workspace.dispose(); clock.advance(600_000);
+  if (!recorded) await rm(path.join(storage, 'pending-analysis.json'));
+  const next = fixture(t, [file], { sources, storage, clock }); next.adapter.textDocuments = [document];
+  await next.workspace.ready; await bounded(next.workspace.whenIdle());
+  assert.equal(next.workspace.diagnostics.index.deferredUpdate?.at, recorded ? deadline : clock.now + 3_600_000, 'a restored dirty overlay keeps its deadline or starts a new wait if its record is unavailable');
+  document.isDirty = false; sources.set(file.toString(), document.getText()); next.saved.fire(document); await bounded(next.workspace.whenIdle());
+  assert.equal(next.workspace.diagnostics.index.relationPasses, 0);
+  clock.advance(recorded ? 3_000_000 : 3_600_000); await bounded(next.workspace.whenIdle());
+  assert.equal(next.workspace.diagnostics.index.relationPasses, 1);
+  assert.ok(next.workspace.sourceFiles.get(file.toString()).references.some(ref => ref.callKind === 'inferred' && ref.name === 'restored_target'));
+});
 test('whole-project analysis completes a 700-slot diagnostic table under the finite Worker storage budget',async t=>{
   const file=uri('diagnostic-table.c'),source='typedef void(*CB)(void);void target(void){}struct Diag{CB check;};static struct Diag table[700];void configure(void){'+
     Array.from({length:700},(_,n)=>`table[${n}].check=target;`).join('')+'}void run(void){configure();table[699].check();}';
@@ -324,21 +537,156 @@ test('a Worker failure raised while dispatching derive retains the fatal status'
   assert.ok(workspace.failures.has('worker'));
 });
 
-test('saving an already indexed dirty buffer clears the Copilot blocker without changing generation', async t => {
+test('saving an already indexed dirty buffer keeps deferred detail without changing generation', async t => {
   const file = uri('save.c'), { workspace, adapter, edited } = fixture(t, [file]);
   await workspace.ready;
   const document = { uri: file, isClosed: false, isDirty: true, getText: () => 'void updated(void) {}' };
   adapter.textDocuments = [document];
   edited.fire({ document, contentChanges: [{}] });
   await bounded(workspace.whenIdle());
-  assert.equal(workspace.stable, true);
+  assert.equal(workspace.stable, false, 'project relations wait for the dirty buffer to be saved');
+  assert.equal(workspace.diagnostics.index.detailedCurrent, false);
   assert.equal(workspace.copilotWaitReason, 'unsaved-sources');
   const generation = workspace.generation;
   document.isDirty = false;
   workspace.schedule(file, 'editor-save');
   await bounded(workspace.whenIdle());
   assert.equal(workspace.generation, generation);
-  assert.equal(workspace.copilotWaitReason, undefined);
+  assert.equal(workspace.copilotWaitReason, 'analysis-deferred');
+});
+
+test('typing updates only the edited source without restarting project relations or replacing the saved cache', async t => {
+  const storage = await mkdtemp(path.join(os.tmpdir(), 'dynsight-typing-'));
+  t.after(() => rm(storage, { recursive: true, force: true }));
+  const file = uri('typing.c'), other = uri('other.c'), header = uri('tokens.h');
+  const sources = new Map([[file.toString(), 'void task(void){one();}'], [other.toString(), 'void one(void){}void two(void){}'], [header.toString(), '#define JOIN(a,b) a##b\n']]);
+  const { workspace, adapter, edited } = fixture(t, [file, other, header], { storage, sources });
+  await workspace.ready; await bounded(workspace.whenIdle());
+  const initial = workspace.diagnostics.index, untouched = workspace.sourceFiles.get(other.toString());
+  const manifest = path.join(storage, 'analysis-cache', 'manifest.json'), before = await readFile(manifest, 'utf8');
+  const request = workspace.request, messages = [], statuses = [];
+  workspace.request = function(message) { messages.push(message); return request.call(this, message); };
+  workspace.changed.event(() => statuses.push(workspace.status));
+  let text;
+  const document = { uri: file, isClosed: false, isDirty: true, getText: () => text };
+  adapter.textDocuments = [document];
+  for (const value of [1, 12, 123]) {
+    text = `void task(void){two();int local=${value};}`;
+    edited.fire({ document, contentChanges: [{}] }); await bounded(workspace.whenIdle());
+  }
+  const after = workspace.diagnostics.index;
+  assert.equal(after.sourceParses, initial.sourceParses + 3);
+  assert.equal(after.relationPasses, initial.relationPasses, 'unsaved typing must not start a project relation pass');
+  assert.equal(after.rebuildCount, initial.rebuildCount);
+  assert.equal(after.detailedCurrent, false);
+  assert.equal(messages.some(message => ['derive', 'reset'].includes(message.type)), false);
+  assert.equal(statuses.some(status => /Preparing basic relations|Detailed analysis/.test(status)), false);
+  assert.match(workspace.status, /Unsaved.*Save/i);
+  assert.equal(workspace.sourceFiles.get(other.toString()), untouched);
+  const task = workspace.index.symbols().find(symbol => symbol.name === 'task');
+  assert.ok(workspace.index.relations(task.id, 'callees').some(group => group.name === 'two'), 'direct navigation uses the current buffer');
+  assert.equal(await readFile(manifest, 'utf8'), before);
+});
+
+test('saving the final dirty buffer waits one hour before callbacks without parsing unchanged text again', async t => {
+  const file = uri('save-detail.c'), sources = new Map([[file.toString(), latest]]);
+  const clock = idleClock(), { workspace, adapter, edited, saved, changed } = fixture(t, [file], { sources, clock });
+  await workspace.ready; await bounded(workspace.whenIdle());
+  const initial = workspace.diagnostics.index;
+  const text = latest.replaceAll('new_target', 'saved_target');
+  const document = { uri: file, isClosed: false, isDirty: true, getText: () => text };
+  adapter.textDocuments = [document];
+  edited.fire({ document, contentChanges: [{}] }); await bounded(workspace.whenIdle());
+  assert.equal(workspace.diagnostics.index.relationPasses, initial.relationPasses);
+  document.isDirty = false; sources.set(file.toString(), text);
+  saved.fire(document); changed.fire(file); await bounded(workspace.whenIdle());
+  assert.equal(workspace.diagnostics.index.sourceParses, initial.sourceParses + 1);
+  assert.equal(workspace.diagnostics.index.relationPasses, initial.relationPasses);
+  clock.advance(3_600_000); await bounded(workspace.whenIdle());
+  assert.equal(workspace.diagnostics.index.relationPasses, initial.relationPasses + 1);
+  assert.equal(workspace.diagnostics.index.rebuildCount, initial.rebuildCount);
+  assert.equal(workspace.diagnostics.index.detailedCurrent, true);
+  assert.equal(workspace.stable, true);
+  assert.ok(workspace.index.files.get(file.toString()).references.some(ref => ref.callKind === 'inferred' && ref.name === 'saved_target'));
+});
+
+test('saving all buffers still waits one hour before deriving project relations', async t => {
+  const files = ['dirty-a.c', 'dirty-b.c'].map(uri), sources = new Map(files.map((file, n) => [file.toString(), `void task${n}(void){}`]));
+  const { workspace, adapter, edited, saved } = fixture(t, files, { sources });
+  await workspace.ready; await bounded(workspace.whenIdle());
+  const initial = workspace.diagnostics.index;
+  const documents = files.map((file, n) => ({ uri: file, isClosed: false, isDirty: true, getText: () => `void task${n}(void){int local=1;}` }));
+  adapter.textDocuments = documents;
+  for (const document of documents) edited.fire({ document, contentChanges: [{}] });
+  await bounded(workspace.whenIdle());
+  assert.equal(workspace.diagnostics.index.relationPasses, initial.relationPasses);
+  documents[0].isDirty = false; saved.fire(documents[0]); await bounded(workspace.whenIdle());
+  assert.equal(workspace.diagnostics.index.relationPasses, initial.relationPasses);
+  documents[1].isDirty = false; saved.fire(documents[1]); await bounded(workspace.whenIdle());
+  assert.equal(workspace.diagnostics.index.relationPasses, initial.relationPasses);
+  await workspace.resumeAnalysis(); await bounded(workspace.whenIdle());
+  assert.equal(workspace.diagnostics.index.relationPasses, initial.relationPasses + 1);
+  assert.equal(workspace.diagnostics.index.sourceParses, initial.sourceParses + 2);
+});
+
+test('discarding a dirty buffer restores disk text and finishes callbacks on explicit update', async t => {
+  const file = uri('discard-detail.c'), sources = new Map([[file.toString(), latest]]);
+  const { workspace, adapter, edited, closed } = fixture(t, [file], { sources });
+  await workspace.ready; await bounded(workspace.whenIdle());
+  const initial = workspace.diagnostics.index;
+  const document = { uri: file, isClosed: false, isDirty: true, getText: () => latest.replaceAll('new_target', 'discarded_target') };
+  adapter.textDocuments = [document];
+  edited.fire({ document, contentChanges: [{}] }); await bounded(workspace.whenIdle());
+  assert.equal(workspace.diagnostics.index.relationPasses, initial.relationPasses);
+  document.isClosed = true; adapter.textDocuments = []; closed.fire(document); await bounded(workspace.whenIdle());
+  assert.equal(workspace.index.symbols().some(symbol => symbol.name === 'discarded_target'), false);
+  assert.equal(workspace.diagnostics.index.relationPasses, initial.relationPasses);
+  await workspace.resumeAnalysis(); await bounded(workspace.whenIdle());
+  assert.equal(workspace.diagnostics.index.relationPasses, initial.relationPasses + 1);
+  assert.equal(workspace.status, 'Index ready');
+  assert.ok(workspace.index.files.get(file.toString()).references.some(ref => ref.callKind === 'inferred' && ref.name === 'new_target'));
+  assert.equal(workspace.index.symbols().some(symbol => symbol.name === 'discarded_target'), false);
+});
+
+test('a dirty edit cancels an active relation pass without starting a replacement before save', async t => {
+  const file = uri('cancel-typing.c'), sources = new Map([[file.toString(), latest]]);
+  const { workspace, adapter, edited } = fixture(t, [file], { sources });
+  await workspace.ready; await bounded(workspace.whenIdle());
+  const request = workspace.request, entered = deferred(), release = deferred();
+  let cancellation;
+  workspace.request = function(message) {
+    const result = request.call(this, message);
+    if (message.type !== 'derive' || cancellation) return result;
+    cancellation = new Int32Array(message.cancellation); entered.resolve();
+    return { ...result, promise: result.promise.then(async value => { await release.promise; return value; }) };
+  };
+  const pending = workspace.resumeAnalysis(); await bounded(entered.promise);
+  const passes = workspace.diagnostics.index.relationPasses;
+  const document = { uri: file, isClosed: false, isDirty: true, getText: () => latest.replaceAll('new_target', 'typing_target') };
+  adapter.textDocuments = [document];
+  edited.fire({ document, contentChanges: [{}] });
+  const cancelled = Atomics.load(cancellation, 0); release.resolve();
+  await pending; await bounded(workspace.whenIdle());
+  assert.equal(cancelled, 1, 'cancel as soon as typing starts, before debounce');
+  assert.equal(workspace.diagnostics.index.relationPasses, passes);
+  assert.equal(workspace.diagnostics.index.detailedCurrent, false);
+  assert.equal(workspace.failures.has('derived'), false);
+  assert.match(workspace.status, /Unsaved.*Save/i);
+});
+
+for (const name of ['notes.txt', 'node_modules/ignored.c']) test('unrelated dirty document does not block explicit saved C updates: ' + name, async t => {
+  const file = uri('saved-source.c'), sources = new Map([[file.toString(), latest]]);
+  const { workspace, adapter, changed } = fixture(t, [file], { sources });
+  await workspace.ready; await bounded(workspace.whenIdle());
+  const passes = workspace.diagnostics.index.relationPasses;
+  adapter.textDocuments = [{ uri: uri(name), isClosed: false, isDirty: true, getText: () => 'unrelated' }];
+  sources.set(file.toString(), latest.replaceAll('new_target', 'external_target'));
+  changed.fire(file); await bounded(workspace.whenIdle());
+  assert.equal(workspace.diagnostics.index.relationPasses, passes);
+  await workspace.resumeAnalysis(); await bounded(workspace.whenIdle());
+  assert.equal(workspace.diagnostics.index.relationPasses, passes + 1);
+  assert.equal(workspace.status, 'Index ready');
+  assert.ok(workspace.index.files.get(file.toString()).references.some(ref => ref.callKind === 'inferred' && ref.name === 'external_target'));
 });
 
 test('analysis limits report a partial index while ordinary syntax notices retain ready status', async t => {
@@ -454,7 +802,7 @@ test('watcher events respect the file limit while existing files can update and 
   await workspace.reindex();
   created.fire(uri('after-rebuild.c')); await bounded(workspace.whenIdle());
   assert.equal(workspace.index.files.size, 1);
-  assert.equal(workspace.status, 'Index ready');
+  assert.match(workspace.status, /Relations pending/);
   assert.equal(workspace.diagnostics.index.fileLimitReached, false, 'a successful smaller rebuild clears the scope limit');
 });
 
@@ -515,6 +863,7 @@ test('edits, discarded unsaved edits and external disk changes update callers', 
   const document = { uri: file, isClosed: false, getText: () => latest };
   adapter.textDocuments = [document];
   edited.fire({ document, contentChanges: [{}] }); await bounded(workspace.whenIdle());
+  await workspace.resumeAnalysis(); await bounded(workspace.whenIdle());
   const callees = () => workspace.index.relations(workspace.index.symbols().find(s => s.name === 'task').id, 'callees').map(g => g.name);
   assert.ok(callees().includes('new_target'));
   document.isClosed = true; adapter.textDocuments = [];
@@ -524,7 +873,7 @@ test('edits, discarded unsaved edits and external disk changes update callers', 
   disk = original.replaceAll('disk_target', 'external_target');
   changed.fire(file); await bounded(workspace.whenIdle());
   assert.ok(callees().includes('external_target'));
-  assert.equal(workspace.status, 'Index ready');
+  assert.match(workspace.status, /Relations pending/);
 });
 
 test('returning to indexed text while a changed Worker response is pending restores raw input', async t => {
@@ -674,7 +1023,7 @@ test('dirty editor overlays cannot replace the persisted saved generation', asyn
   assert.equal(second.index.symbols().some(s => s.name === 'unsaved_target'), false);
 });
 
-test('unchanged document events do not increase source or relation counters; edits do', async t => {
+test('unchanged document events do not increase counters; edits parse immediately and defer relations', async t => {
   const { workspace, adapter, closed, edited } = fixture(t);
   await workspace.ready;
   const file = uri('navigation.c');
@@ -693,7 +1042,7 @@ test('unchanged document events do not increase source or relation counters; edi
   edited.fire({ document: { uri: file }, contentChanges: [{}] }); await bounded(workspace.whenIdle());
   const changed = workspace.diagnostics.index;
   assert.equal(changed.sourceParses, initial.sourceParses + 1);
-  assert.equal(changed.relationPasses, initial.relationPasses + 1);
+  assert.equal(changed.relationPasses, initial.relationPasses);
   assert.equal(changed.lastSourceEvent.kind, 'editor-change');
 });
 
@@ -750,8 +1099,11 @@ test('failed source reads and oversized files cannot report a complete index', a
   changed.fire(files[1]); changed.fire(files[2]);
   await bounded(workspace.whenIdle());
   assert.equal(workspace.index.files.size, 3);
-  assert.equal(workspace.status, 'Index ready', 'recovered files clear the partial status');
+  assert.match(workspace.status, /Relations pending/, 'recovered files clear the failure but wait for relation updates');
   assert.equal(workspace.diagnostics.index.failedSources, 0, 'live failures clear independently of old rebuild snapshots');
+  assert.equal(workspace.copilotWaitReason, 'analysis-deferred');
+  await workspace.resumeAnalysis(); await bounded(workspace.whenIdle());
+  assert.equal(workspace.status, 'Index ready');
   assert.equal(workspace.diagnostics.index.basicWaitReason, undefined);
   assert.equal(workspace.copilotWaitReason, undefined);
 });
@@ -938,7 +1290,7 @@ test('a delete during disk-cache validation must not enqueue the now absent sour
  await workspace.ready;await bounded(workspace.whenIdle());
  assert.equal(workspace.index.files.size,0);
  assert.equal(workspace.failures.size,0,'deleted file must not become a read failure');
- assert.equal(workspace.status,'Index ready');
+ assert.match(workspace.status,/Relations pending/);
 });
 
 test('failed scope discovery cannot later report excluded old source as a ready current index',async t=>{

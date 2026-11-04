@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.97 — 2026-11-05
+
+- Keep per-file symbols and direct references live while batching automatic macro/callback updates until one hour after the last actual C/H change. Duplicate save/watch notifications do not postpone the batch.
+- Restore pending files and their deadline across restart, show Relations pending and Update now, and require saved source inputs before detailed analysis. Explicit updates reuse parsed files and bypass the wait.
+- Reuse unrelated analysis groups, contextual index entries and cache records; keep shared headers as supporting context and follow actual callback and generated macro targets.
+- Preserve the newest deadline across out-of-order file reads and keep the wait for restored unsaved editors. Discarded edits no longer delay a compatible selected-build cache.
+- Keep analysis cache compatibility at 19; initial indexing, explicit rebuilds and deliberate analysis setting changes retain their existing behavior.
+
 ## 0.1.96 — 2026-11-04
 
 - Restore the saved build configuration before checking its analysis cache, so an unrelated older basic cache cannot block a compatible selected-build cache.

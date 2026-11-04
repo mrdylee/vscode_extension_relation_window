@@ -1,11 +1,12 @@
 import * as vscode from 'vscode';
 import { Worker } from 'node:worker_threads';
 import { readFileSync } from 'node:fs';
+import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { analysisConfiguration, resolveAnalysisPolicy, smartAnalysisScope } from './analysis-policy';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { ANALYSIS_CACHE_VERSION, CacheIncompatibility } from './analysis-cache';
-import { CallbackProgress, FileAnalysis } from './model';
+import { CallbackProgress, FileAnalysis, fileKey } from './model';
 import { RelationIndex } from './relations';
 import { Minimatch } from 'minimatch';
 import { getHeapStatistics } from 'node:v8';
@@ -14,15 +15,18 @@ import { CopilotWaitReason, Diagnostics, IndexDiagnostics, RebuildReason, Rebuil
 
 const builtInExcludes = ['**/node_modules/**', '**/.git/**', '**/.vscode-test/**'];
 const maxFiles = 10_000;
+const relationUpdateDelay = 60 * 60 * 1000;
 
 export class WorkspaceIndex implements vscode.Disposable {
   private readonly sourceIndex = new RelationIndex();
   private buildIndex?: RelationIndex;
+  private buildCurrent = false;
+  private appliedBuild = new Map<string, number>();
   private selectedBuild?: BuildProfile;
   private contextRevision = 0;
   buildPending = false;
   buildStatus?: { label: string; state: 'discovering' | 'ready' | 'partial' | 'error'; candidates: number; resolved: number; unresolved: number };
-  get index() { return this.skipInactive && this.buildIndex && (this.buildIndex.files.size || this.selectedBuild?.coverage === 'complete') ? this.buildIndex : this.sourceIndex; }
+  get index() { return this.skipInactive && this.buildCurrent && this.buildIndex && (this.buildIndex.files.size || this.selectedBuild?.coverage === 'complete') ? this.buildIndex : this.sourceIndex; }
   get callbackIndexes() { return this.index===this.sourceIndex?[this.sourceIndex]:[this.sourceIndex,this.index]; }
   get sourceFiles(): ReadonlyMap<string, FileAnalysis> { return this.sourceIndex.files; }
   get buildSourceUris() { return this.startupSourceUris ?? [...this.sourceIndex.files.keys()]; }
@@ -30,7 +34,7 @@ export class WorkspaceIndex implements vscode.Disposable {
   get buildProfile() { return this.selectedBuild; }
   buildMembership(uri:string) {
     if(!this.selectedBuild)return;
-    return this.selectedBuild.units.some(unit=>unit.sourceUri===uri&&unit.membership==='included')||this.buildIndex?.contextsAt(uri).length?'included':this.selectedBuild.coverage==='complete'?'excluded':'unknown';
+    return this.selectedBuild.units.some(unit=>unit.sourceUri===uri&&unit.membership==='included')||this.buildCurrent&&this.buildIndex?.contextsAt(uri).length?'included':this.selectedBuild.coverage==='complete'?'excluded':'unknown';
   }
   indexFor(uri: string) { return this.index.contextsAt(uri).length ? this.index : this.sourceIndex; }
   private get buildEpoch(): BuildEpoch | undefined { return this.selectedBuild ? {profileId:this.selectedBuild.id, fingerprint:this.selectedBuild.fingerprint, contextRevision:this.contextRevision, sourceRevision:this.revision} : undefined; }
@@ -47,7 +51,9 @@ export class WorkspaceIndex implements vscode.Disposable {
     this.buildPending = false;
     if (!pending&&this.selectedBuild?.fingerprint === profile?.fingerprint) return;
     this.cancelActiveAnalysis(); this.selectedBuild = profile; this.contextRevision++;
+    if (!this.initializing) this.releaseRelationDelay();
     this.buildIndex = profile ? new RelationIndex() : undefined;
+    this.buildCurrent = false; this.appliedBuild.clear();
     this.revision++; this.savedRevision = -1; this.derivedRevision = -1;
     this.sourceChanged.fire('configuration'); this.changed.fire();
     if (this.initializing) return;
@@ -83,6 +89,11 @@ export class WorkspaceIndex implements vscode.Disposable {
   private indexing = false;
   private jobs = new Set<Promise<void>>();
   private timers = new Map<string, ReturnType<typeof setTimeout>>();
+  private pendingRelations = new Set<string>();
+  private relationUpdateAt?: number;
+  private relationTimer?: ReturnType<typeof setTimeout>;
+  private pendingWrite = Promise.resolve();
+  private pendingWriteError = false;
   private versions = new Map<string, number>();
   private reservedFiles = new Set<string>();
   private fileLimitReached = false;
@@ -95,7 +106,8 @@ export class WorkspaceIndex implements vscode.Disposable {
   private indexDiagnostics: IndexDiagnostics = { sessionStartedAt: Date.now(), rebuildCount: 0, sourceParses: 0, relationPasses: 0, rebuilds: [] };
   copilotDiagnostics?: Diagnostics['copilot'];
   get generation() { return this.revision; }
-  get stable() { return !this.buildPending && !this.disposed && !this.analysisPaused && !this.cacheBlocked && !this.workerError && !this.indexing && !this.jobs.size && !this.timers.size && this.derivedRevision === this.revision; }
+  get stable() { return !this.pendingRelations.size && !this.buildPending && !this.disposed && !this.analysisPaused && !this.cacheBlocked && !this.workerError && !this.indexing && !this.jobs.size && !this.timers.size && this.derivedRevision === this.revision; }
+  private get relationsWaiting() { return this.relationUpdateAt !== undefined && Date.now() < this.relationUpdateAt; }
   get hasDirtySources() { return vscode.workspace.textDocuments.some(doc => !doc.isClosed && doc.isDirty && this.eligible(doc.uri)); }
   get copilotWaitReason(): CopilotWaitReason | undefined {
     if (this.disposed) return 'closed';
@@ -108,6 +120,7 @@ export class WorkspaceIndex implements vscode.Disposable {
     if (this.indexing) return 'indexing';
     if (this.jobs.size || this.timers.size) return 'source-update';
     if ([...this.failures.keys()].some(key => key !== 'derived' && key !== 'worker')) return 'source-failed';
+    if (this.pendingRelations.size) return 'analysis-deferred';
     if (this.derivedRevision !== this.revision) return 'relations';
     return undefined;
   }
@@ -120,8 +133,9 @@ export class WorkspaceIndex implements vscode.Disposable {
       copilot: this.copilotDiagnostics?.state === 'waiting-for-saved-index'
         ? { ...this.copilotDiagnostics, waitReason: this.copilotWaitReason } : this.copilotDiagnostics,
       index: { ...this.indexDiagnostics, basicReady, failedSources, fileLimitReached: this.fileLimitReached,
+        deferredUpdate: this.pendingRelations.size ? { at: this.relationUpdateAt!, files: this.pendingRelations.size, persistenceError: this.pendingWriteError || undefined } : undefined,
         basicWaitReason: basicReady ? undefined : this.copilotWaitReason,
-        detailedCurrent: this.derivedRevision === this.revision, callbackAnalysis: { paused: this.analysisPaused, running: !!this.activeAnalysis,
+        detailedCurrent: !this.pendingRelations.size && this.derivedRevision === this.revision, callbackAnalysis: { paused: this.analysisPaused, running: !!this.activeAnalysis,
         limited: [...this.index.files.values()].some(file=>file.issues.some(issue=>/^(Macro|Callback) .*(limit|budget)/i.test(issue))),
         progress: this.callbackProgress }, cache: this.indexDiagnostics.cache && { ...this.indexDiagnostics.cache }, rebuilds: this.indexDiagnostics.rebuilds.map(record => ({ ...record,
         files: record.files ? { ...record.files } : undefined })) },
@@ -150,7 +164,7 @@ export class WorkspaceIndex implements vscode.Disposable {
       if (type === 'diagnostics') { this.workerDiagnostics = diagnostics; this.diagnosticsChanged.fire(); return; }
       if(type==='basic-result'){
         const active=this.activeAnalysis;
-        if(!this.workerError&&active&&active.id===requestId&&active.revision===this.revision&&active.key===this.analysisKey&&!this.jobs.size&&!this.timers.size&&
+        if(!this.workerError&&active&&active.id===requestId&&active.revision===this.revision&&active.key===this.analysisKey&&!this.jobs.size&&!this.timers.size&&!this.hasDirtySources&&!this.relationsWaiting&&
           inputs.every(([uri,version]:[string,number])=>this.rawVersions.get(uri)===version)){
           for(const file of files){
             const current=this.sourceIndex.files.get(file.uri);if(!current)continue;
@@ -203,10 +217,11 @@ export class WorkspaceIndex implements vscode.Disposable {
   }
   constructor(private extensionPath: string, private storagePath?: string) {
     if (storagePath) this.restoreLegacyPolicy(path.join(storagePath, 'analysis-cache'));
+    this.restorePendingRelations();
     this.startWorker();
     const watch = vscode.workspace.createFileSystemWatcher('**/*.{c,h}');
     this.disposables.push(watch, watch.onDidCreate(uri => this.schedule(uri, 'file-create')), watch.onDidChange(uri => this.schedule(uri, 'file-change')),
-      watch.onDidDelete(async uri => { if (this.initializing) await this.ready; if (!this.disposed && this.eligible(uri)) { this.indexDiagnostics.lastSourceEvent = { at: Date.now(), kind: 'file-delete' }; this.sourceChanged.fire('file-delete'); this.remove(uri); } }),
+      watch.onDidDelete(async uri => { if (this.initializing) await this.ready; if (!this.disposed && this.eligible(uri)) { this.indexDiagnostics.lastSourceEvent = { at: Date.now(), kind: 'file-delete' }; this.sourceChanged.fire('file-delete'); this.deferRelations(uri.toString()); this.remove(uri); } }),
       vscode.workspace.onDidChangeTextDocument(event => { if (event.contentChanges.length) this.schedule(event.document.uri, 'editor-change'); }),
       vscode.workspace.onDidCloseTextDocument(document => this.schedule(document.uri, 'editor-close')),
       vscode.workspace.onDidChangeConfiguration(event => {
@@ -238,6 +253,7 @@ export class WorkspaceIndex implements vscode.Disposable {
       if (!this.disposed) { this.cacheBlocked = true; this.derivedRevision = this.revision; this.status = `Index error: ${String(error)}. Run Rebuild Index.`; this.changed.fire(); }
     } finally {
       this.initializing = false;
+      this.scheduleRelationUpdate();
       if (!this.cacheBlocked) this.startupSourceUris = undefined;
     }
   }
@@ -315,9 +331,11 @@ export class WorkspaceIndex implements vscode.Disposable {
       const { valid } = await this.request<{ valid: boolean }>({ type: 'cache-validate', versions: this.workerVersions(), analyzeCallbacks: this.analyzeCallbacks }).promise;
       if (this.disposed || epoch !== this.epoch) return;
       if (valid && !this.selectedBuild && !this.jobs.size && !this.timers.size && !this.failures.size) this.derivedRevision = this.revision;
+      if (valid && !this.hasDirtySources && !this.jobs.size && !this.timers.size && !this.failures.size && this.pendingRelations.size) this.clearPendingRelations();
       this.savedRevision = valid ? this.revision : -1;
       this.indexing = false;
-      for (const document of vscode.workspace.textDocuments) if (!document.isClosed && document.isDirty && this.eligible(document.uri)) await this.enqueue(document.uri);
+      for (const document of vscode.workspace.textDocuments) if (!document.isClosed && document.isDirty && this.eligible(document.uri))
+        await this.enqueue(document.uri, this.pendingRelations.has(document.uri.toString()) ? undefined : Date.now());
       await this.derive();
       this.indexDiagnostics.cache.state = valid ? 'restored' : 'updated';
       this.status = this.completedStatus();
@@ -345,6 +363,7 @@ export class WorkspaceIndex implements vscode.Disposable {
     if (this.initializing) await this.ready;
     if (this.disposed || this.cacheBlocked) return;
     this.cancelActiveAnalysis();
+    this.releaseRelationDelay();
     const epoch = ++this.epoch;
     this.indexing = true; this.scopes.clear();
     this.reconciling = (async () => {
@@ -392,7 +411,7 @@ export class WorkspaceIndex implements vscode.Disposable {
     this.deleted.add(key);
     this.versions.set(key, (this.versions.get(key) ?? 0) + 1);
     clearTimeout(this.timers.get(key)); this.timers.delete(key);
-    this.buildIndex?.clear(); this.sourceIndex.remove(key); this.rawVersions.delete(key); this.rawOptions.delete(key); this.appliedDerived.delete(key); this.revision++;
+    this.buildCurrent = false; this.sourceIndex.remove(key); this.rawVersions.delete(key); this.rawOptions.delete(key); this.appliedDerived.delete(key); this.revision++;
     this.reservedFiles.delete(key);
     this.worker.postMessage({ type: 'remove', uri: key });
     this.failures.delete(key); this.changed.fire();
@@ -402,17 +421,19 @@ export class WorkspaceIndex implements vscode.Disposable {
     if (this.disposed) return;
     if (this.initializing) { void this.ready.then(() => this.schedule(uri, kind)); return; }
     if (!this.eligible(uri)) return;
-    this.indexDiagnostics.lastSourceEvent = { at: Date.now(), kind };
+    const at = Date.now();
+    this.indexDiagnostics.lastSourceEvent = { at, kind };
     this.sourceChanged.fire(kind);
     if (this.cacheBlocked) return;
+    if (this.hasDirtySources) this.cancelActiveAnalysis();
     const key = uri.toString();
     this.deleted.delete(key);
     // Invalidate in-flight results immediately, even during the debounce period.
     this.versions.set(key, (this.versions.get(key) ?? 0) + 1);
     clearTimeout(this.timers.get(key));
-    this.timers.set(key, setTimeout(() => { this.timers.delete(key); void this.enqueue(uri); }, 100));
+    this.timers.set(key, setTimeout(() => { this.timers.delete(key); void this.enqueue(uri, at); }, 100));
   }
-  private enqueue(uri: vscode.Uri) {
+  private enqueue(uri: vscode.Uri, changedAt?: number) {
     if (this.disposed || this.cacheBlocked || !this.eligible(uri)) return Promise.resolve();
     const key = uri.toString();
     if (!this.reservedFiles.has(key) && this.reservedFiles.size >= maxFiles) {
@@ -423,12 +444,12 @@ export class WorkspaceIndex implements vscode.Disposable {
     }
     // Reserve before IO so simultaneous new files cannot exceed the limit.
     this.reservedFiles.add(key);
-    const job = this.analyze(uri);
+    const job = this.analyze(uri, changedAt);
     this.jobs.add(job);
     void job.finally(() => { this.jobs.delete(job); if (!this.indexing && !this.jobs.size && !this.timers.size) void this.derive(); });
     return job;
   }
-  private async analyze(uri: vscode.Uri) {
+  private async analyze(uri: vscode.Uri, changedAt?: number) {
     if (this.disposed || !this.eligible(uri)) return;
     const key = uri.toString(), epoch = this.epoch;
     const version = (this.versions.get(key) ?? 0) + 1;
@@ -444,9 +465,10 @@ export class WorkspaceIndex implements vscode.Disposable {
       // preserve the existing raw input and its derived callback results.
       const options = this.options(uri);
       if (this.rawVersions.has(key) && this.sourceIndex.files.get(key)?.text === text && this.rawOptions.get(key) === JSON.stringify(options)) return;
+      if (changedAt !== undefined) this.deferRelations(key, changedAt);
       if (text.length > 2_000_000) throw new Error('File exceeds the 2,000,000 character analysis limit');
       // Ignore duplicate watcher/close events before interrupting a live pass.
-      this.cancelActiveAnalysis(); this.buildIndex?.clear();
+      this.cancelActiveAnalysis(); this.buildCurrent = false;
       // Once dispatched, the Worker may hold this input even if its response is
       // superseded. Do not reuse the old host text until a new result is accepted.
       this.rawVersions.delete(key);
@@ -473,16 +495,61 @@ export class WorkspaceIndex implements vscode.Disposable {
     });
     return { id, promise };
   }
+  private restorePendingRelations() {
+    if (!this.storagePath) return;
+    try {
+      const record = JSON.parse(readFileSync(path.join(this.storagePath, 'pending-analysis.json'), 'utf8'));
+      if (record.version !== 1 || !Number.isFinite(record.at) || !Array.isArray(record.uris)) return;
+      const uris = record.uris.filter((uri: unknown): uri is string => typeof uri === 'string' && this.eligible(vscode.Uri.parse(uri)));
+      this.pendingRelations = new Set(uris);
+      if (this.pendingRelations.size) this.relationUpdateAt = Math.min(record.at, Date.now() + relationUpdateDelay);
+    } catch { /* Source cache validation still discovers changes without this scheduling record. */ }
+  }
+  private persistPendingRelations() {
+    if (!this.storagePath) return;
+    const directory = this.storagePath, filename = path.join(directory, 'pending-analysis.json');
+    const text = this.pendingRelations.size ? JSON.stringify({ version: 1, at: this.relationUpdateAt, uris: [...this.pendingRelations] }) : undefined;
+    this.pendingWrite = this.pendingWrite.then(async () => {
+      if (text === undefined) await rm(filename, { force: true });
+      else { await mkdir(directory, { recursive: true }); await writeFile(filename + '.tmp', text); await rename(filename + '.tmp', filename); }
+      this.pendingWriteError = false;
+    }).catch(() => { this.pendingWriteError = true; if (!this.disposed) { this.status = this.completedStatus(); this.changed.fire(); this.diagnosticsChanged.fire(); } });
+  }
+  private scheduleRelationUpdate() {
+    clearTimeout(this.relationTimer); this.relationTimer = undefined;
+    if (this.disposed || this.initializing || this.relationUpdateAt === undefined || !this.pendingRelations.size) return;
+    this.relationTimer = setTimeout(() => {
+      this.relationTimer = undefined;
+      if (this.relationsWaiting) this.scheduleRelationUpdate(); else void this.derive();
+    }, Math.max(0, this.relationUpdateAt - Date.now()));
+    this.relationTimer.unref?.();
+  }
+  private deferRelations(uri: string, at = Date.now()) {
+    this.pendingRelations.add(uri); this.relationUpdateAt = Math.max(this.relationUpdateAt ?? 0, at + relationUpdateDelay);
+    this.scheduleRelationUpdate(); this.persistPendingRelations();
+    if (this.indexDiagnostics.cache) this.indexDiagnostics.cache.state = 'deferred';
+  }
+  private releaseRelationDelay() {
+    clearTimeout(this.relationTimer); this.relationTimer = undefined;
+    if (this.pendingRelations.size) { this.relationUpdateAt = Date.now(); this.persistPendingRelations(); }
+  }
+  private clearPendingRelations() {
+    clearTimeout(this.relationTimer); this.relationTimer = undefined;
+    if (!this.pendingRelations.size) return;
+    this.pendingRelations.clear(); this.relationUpdateAt = undefined; this.persistPendingRelations();
+  }
   private completedStatus() {
     if (this.workerError) return this.status;
     if (this.analysisPaused || [...this.index.files.values()].some(file => file.callbackDiagnostics?.some(diagnostic => diagnostic.kind === 'cancelled')))
       return 'Partial index: local analysis paused. Resume local analysis to retry.';
+    if (this.hasDirtySources) return 'Unsaved changes · Save to update relations.';
     if (this.failures.has('derived')) return 'Partial index: call analysis failed. See Analysis notices.';
     if ([...this.failures.values()].some(error => error.includes('memory budget')) ||
       [...this.index.files.values()].some(file => file.issues.some(issue => issue.includes('memory budget'))))
       return 'Partial index: memory budget reached. Narrow Include/Exclude, then Rebuild index.';
     if (this.fileLimitReached) return 'Partial index: 10,000 file limit reached';
     if (this.failures.size) return `Partial index: ${this.failures.size} file(s) failed. See Analysis notices.`;
+    if (this.pendingRelations.size) return `Relations pending · ${this.pendingRelations.size} changed C/H file(s) · Updates 1 hour after the last change.${this.pendingWriteError ? ' Pending update could not be saved for restart.' : ''}`;
     if ([...this.index.files.values()].some(file => file.issues.some(issue => /^(Macro|Callback) .*(limit|budget)/i.test(issue))))
       return 'Partial index: analysis limits reached. See Analysis notices.';
     return 'Index ready';
@@ -490,29 +557,41 @@ export class WorkspaceIndex implements vscode.Disposable {
   private derive(): Promise<void> {
     if (this.deriving) return this.deriving;
     if (this.disposed || this.analysisPaused || this.cacheBlocked || this.workerError || this.indexing || this.jobs.size || this.timers.size) return Promise.resolve();
+    if (this.hasDirtySources || this.relationsWaiting) { this.status = this.completedStatus(); this.changed.fire(); this.diagnosticsChanged.fire(); return Promise.resolve(); }
     if (this.derivedRevision === this.revision) return this.saveCache().then(() => this.settled.fire());
     this.deriving = (async () => {
-      while (!this.disposed && !this.analysisPaused && !this.indexing && !this.jobs.size && !this.timers.size && this.derivedRevision !== this.revision) {
+      while (!this.disposed && !this.analysisPaused && !this.hasDirtySources && !this.relationsWaiting && !this.indexing && !this.jobs.size && !this.timers.size && this.derivedRevision !== this.revision) {
         const revision = this.revision;
         this.indexDiagnostics.relationPasses++;
         const versions = this.workerVersions();
         const cancellation = new Int32Array(new SharedArrayBuffer(4));
         this.callbackProgress = undefined;
         this.status = 'Preparing basic relations…';
-        const request = this.request<{ stale: boolean; files: FileAnalysis[]; versions: [string, number][]; buildFiles?:FileAnalysis[]; buildEpoch?:BuildEpoch }>({ type: 'derive', versions,
+        const request = this.request<{ stale: boolean; files: FileAnalysis[]; versions: [string, number][]; buildFiles?:FileAnalysis[]; buildVersions?:[string, number][]; buildEpoch?:BuildEpoch }>({ type: 'derive', versions,
           analyzeCallbacks: this.analyzeCallbacks, cancellation: cancellation.buffer, buildProfile:this.skipInactive?this.selectedBuild:undefined, buildScope:this.buildScope(), buildEpoch:this.buildEpoch, buildPending:this.buildPending });
         this.activeAnalysis = { id: request.id, cancellation, revision, key:this.analysisKey };
         if (!this.workerError) { this.changed.fire(); this.diagnosticsChanged.fire(); }
         let result;
         try { result = await request.promise; }
         finally { if (this.activeAnalysis?.id === request.id) this.activeAnalysis = undefined; this.diagnosticsChanged.fire(); }
-        if (this.disposed || revision !== this.revision) continue;
+        if (this.disposed || revision !== this.revision || this.jobs.size || this.timers.size || this.relationsWaiting) continue;
+        if (this.hasDirtySources) break;
         if (result.stale) throw new Error('Analysis input changed unexpectedly. Rebuild index to retry.');
         if (this.buildEpoch && (!result.buildEpoch || !sameBuildEpoch(this.buildEpoch, result.buildEpoch))) continue;
         for (const file of result.files) this.sourceIndex.update(file);
-        if (result.buildFiles) { const index = new RelationIndex(); result.buildFiles.forEach(file => index.update(file)); this.buildIndex = index; }
+        if (result.buildFiles) {
+          const index = this.buildIndex ??= new RelationIndex(), versions = new Map(result.buildVersions);
+          const active = new Set(result.buildFiles.map(fileKey));
+          for (const key of index.files.keys()) if (!active.has(key)) index.remove(key);
+          for (const file of result.buildFiles) {
+            const key = fileKey(file), stamp = versions.get(key);
+            if (stamp === undefined || this.appliedBuild.get(key) !== stamp || !index.files.has(key)) index.update(file);
+          }
+          this.appliedBuild = versions; this.buildCurrent = true;
+        }
         for (const [uri, stamp] of result.versions) this.appliedDerived.set(uri, stamp);
         this.derivedRevision = revision; this.failures.delete('derived');
+        this.clearPendingRelations();
         this.status = this.completedStatus();
         this.startupSourceUris = undefined;
         this.changed.fire();
@@ -522,7 +601,11 @@ export class WorkspaceIndex implements vscode.Disposable {
         this.failures.set('derived', `Call analysis: ${String(error)}`);
         this.status = this.completedStatus(); this.changed.fire();
       }
-    }).finally(async () => { this.deriving = undefined; await this.saveCache(); this.settled.fire(); });
+    }).finally(async () => {
+      this.deriving = undefined;
+      if (!this.disposed && this.hasDirtySources) { this.status = this.completedStatus(); this.changed.fire(); }
+      await this.saveCache(); this.settled.fire();
+    });
     return this.deriving;
   }
   private cancelActiveAnalysis() {
@@ -538,7 +621,8 @@ export class WorkspaceIndex implements vscode.Disposable {
     if (this.disposed || this.cacheBlocked || this.workerError) return;
     this.analysisPaused = false; this.revision++;
     this.sourceChanged.fire('configuration');
-    await this.deriving; await this.derive();
+    await this.deriving; await this.whenIdle();
+    this.releaseRelationDelay(); await this.derive();
   }
   async reindex(reason: RebuildReason = 'command', settings?: string[]) {
     if (this.initializing) await this.ready;
@@ -547,6 +631,7 @@ export class WorkspaceIndex implements vscode.Disposable {
   }
   private async rebuildIndex(reason: RebuildReason, settings?: string[]) {
     this.cancelActiveAnalysis(); this.analysisPaused = false;
+    this.releaseRelationDelay();
     this.sourceChanged.fire('configuration');
     const record: RebuildRecord = { number: ++this.indexDiagnostics.rebuildCount, at: Date.now(), reason, settings, outcome: 'running' };
     this.indexDiagnostics.rebuilds.push(record);
@@ -576,7 +661,7 @@ export class WorkspaceIndex implements vscode.Disposable {
       const previous = this.worker; this.startWorker(); await previous.terminate();
       if (this.disposed || epoch !== this.epoch) return;
     }
-    this.rawVersions.clear(); this.rawOptions.clear(); this.appliedDerived.clear(); this.revision++;
+    this.rawVersions.clear(); this.rawOptions.clear(); this.appliedDerived.clear(); this.appliedBuild.clear(); this.buildCurrent = false; this.revision++;
     this.deleted.clear();
     this.reservedFiles.clear(); this.fileLimitReached = false;
     this.worker.postMessage({ type: 'reset' });
@@ -640,16 +725,18 @@ export class WorkspaceIndex implements vscode.Disposable {
   }
   async whenIdle() {
     if (this.initializing) await this.ready;
-    while (this.jobs.size || this.timers.size || this.indexing || this.deriving || this.saving || this.reconciling || this.derivedRevision !== this.revision) {
+    while (this.jobs.size || this.timers.size || this.indexing || this.deriving || this.saving || this.reconciling || !this.hasDirtySources && !this.relationsWaiting && this.derivedRevision !== this.revision) {
       await Promise.all([...this.jobs]);
       await this.reconciling; await this.saving;
       await this.derive();
       if (this.disposed || this.analysisPaused || this.cacheBlocked || this.workerError || this.failures.has('derived')) break;
       if (this.jobs.size || this.timers.size || this.indexing) await new Promise(r => setTimeout(r, 30));
     }
+    await this.pendingWrite;
   }
   dispose() {
     this.disposed = true;
+    clearTimeout(this.relationTimer);
     for (const timer of this.timers.values()) clearTimeout(timer);
     for (const request of this.requests.values()) request.reject(new Error('Analysis disposed'));
     this.requests.clear();
