@@ -21,11 +21,12 @@ export function registerBuildConfigurations(context: vscode.ExtensionContext, wo
   const cache = new BuildMetadataCache(fs);
   let selected = context.workspaceState.get<BuildEntry>(storageKey), entries: BuildEntry[] = [], current: BuildProfile | undefined;
   let discoveryIssues:BuildIssue[]=[];
-  let disposed = false, revision = 0, inputKey = '', timer: ReturnType<typeof setTimeout> | undefined;
+  let disposed = false, initialized = false, revision = 0, inputKey = '', timer: ReturnType<typeof setTimeout> | undefined;
   workspace.buildPending = !!selected;
-  const sources = () => [...workspace.sourceFiles.keys()];
+  const sources = () => workspace.buildSourceUris;
   const changed = () => workspace.changed.fire();
-  async function refresh(force = false) {
+  async function refresh(force = false, initial = false) {
+    if (!initial) await workspace.ready;
     if (disposed) return;
     if (force) { cache.clear(); inputKey = ''; }
     const files = sources(), folders = vscode.workspace.workspaceFolders ?? [];
@@ -68,7 +69,7 @@ export function registerBuildConfigurations(context: vscode.ExtensionContext, wo
       workspace.buildStatus = { label: `Build configuration: ${String(error)}`, state: 'error', candidates: entries.length, resolved: 0, unresolved: 0 }; changed();
     }
   }
-  function schedule(force = false) { clearTimeout(timer); timer = setTimeout(() => { void refresh(force); }, 150); }
+  function schedule(force = false) { if (!initialized) return; clearTimeout(timer); timer = setTimeout(() => { void refresh(force); }, 150); }
   function report() {
     if (!current) {
       if(!discoveryIssues.length)return;
@@ -116,7 +117,8 @@ export function registerBuildConfigurations(context: vscode.ExtensionContext, wo
     vscode.workspace.onDidChangeConfiguration(event => { if (['include', 'exclude'].some(key => event.affectsConfiguration('dynsight.' + key))) schedule(true); }),
     vscode.commands.registerCommand('dynsight.selectBuildConfiguration', () => select()),
     vscode.commands.registerCommand('dynsight.refreshBuildConfiguration', async () => { await refresh(true); await report(); })];
-  const ready = workspace.ready.then(() => refresh());
+  if (selected) workspace.setBuildInitializer(() => refresh(false, true));
+  const ready = workspace.ready.then(async () => { initialized = true; await refresh(); });
   const service = { ready, refresh, dispose() { disposed = true; revision++; clearTimeout(timer); subscriptions.forEach(value => value.dispose()); cache.clear(); } };
   context.subscriptions.push(service);
   return service;

@@ -13,6 +13,7 @@ test('build configuration discovery stays read-only and selection applies only a
   const uri = (value: string) => ({ toString: () => value, path: new URL(value).pathname });
   let applied: any;const previews:string[]=[];
   const workspace = { ready: Promise.resolve(), sourceFiles: new Map([['file:///p/App/a.c', { uri: 'file:///p/App/a.c' }]]), changed: emitter,
+    get buildSourceUris() { return [...this.sourceFiles.keys()]; },
     buildPending:false,setBuildProfile: async (profile: unknown) => { if(profile)assert.equal(workspace.buildPending,true,'AI stays pending while a selected configuration is refreshed');workspace.buildPending=false;applied = profile; } };
   const vscode = { FileType: { File: 1, Directory: 2, SymbolicLink: 64 }, Uri: { parse: uri },
     workspace: { workspaceFolders: [{ uri: uri('file:///p'), name: 'p', index: 0 }],

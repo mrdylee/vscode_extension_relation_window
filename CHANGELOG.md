@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.96 — 2026-11-04
+
+- Restore the saved build configuration before checking its analysis cache, so an unrelated older basic cache cannot block a compatible selected-build cache.
+- Retain source candidates and inherited analysis policy during startup, including explicit empty legacy roots, and reconstruct build-specific relationships from cached source analysis without reparsing unchanged files.
+- Wait for startup before rebuilds and configuration changes, and protect incompatible or damaged selected caches until an explicit Rebuild index.
+- Keep analysis cache compatibility at 19; existing version and configuration mismatch checks still apply.
+
 ## 0.1.95 — 2026-11-04
 
 - Recognize the explicit Diab 5.9.6.7 option forms used by RBMS while keeping compiler defaults, generators and unknown options uncertain.

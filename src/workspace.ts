@@ -25,6 +25,8 @@ export class WorkspaceIndex implements vscode.Disposable {
   get index() { return this.skipInactive && this.buildIndex && (this.buildIndex.files.size || this.selectedBuild?.coverage === 'complete') ? this.buildIndex : this.sourceIndex; }
   get callbackIndexes() { return this.index===this.sourceIndex?[this.sourceIndex]:[this.sourceIndex,this.index]; }
   get sourceFiles(): ReadonlyMap<string, FileAnalysis> { return this.sourceIndex.files; }
+  get buildSourceUris() { return this.startupSourceUris ?? [...this.sourceIndex.files.keys()]; }
+  setBuildInitializer(initialize: () => Promise<void>) { this.buildInitializer = initialize; }
   get buildProfile() { return this.selectedBuild; }
   buildMembership(uri:string) {
     if(!this.selectedBuild)return;
@@ -40,6 +42,7 @@ export class WorkspaceIndex implements vscode.Disposable {
     return {rootUri:root!,include:scope.include,exclude:scope.exclude,nocase:process.platform === 'win32'};
   }
   async setBuildProfile(profile: BuildProfile | undefined) {
+    if (this.disposed) return;
     const pending=this.buildPending;
     this.buildPending = false;
     if (!pending&&this.selectedBuild?.fingerprint === profile?.fingerprint) return;
@@ -47,6 +50,7 @@ export class WorkspaceIndex implements vscode.Disposable {
     this.buildIndex = profile ? new RelationIndex() : undefined;
     this.revision++; this.savedRevision = -1; this.derivedRevision = -1;
     this.sourceChanged.fire('configuration'); this.changed.fire();
+    if (this.initializing) return;
     if (this.storagePath) await this.initCache();
     await this.deriving; await this.derive();
   }
@@ -55,6 +59,9 @@ export class WorkspaceIndex implements vscode.Disposable {
   readonly sourceChanged = new vscode.EventEmitter<SourceEvent | 'configuration'>();
   readonly settled = new vscode.EventEmitter<void>();
   readonly ready: Promise<void>;
+  private initializing = true;
+  private buildInitializer?: () => Promise<void>;
+  private startupSourceUris?: string[];
   status = 'Preparing C index…';
   failures = new Map<string, string>();
   private worker!: Worker;
@@ -180,20 +187,26 @@ export class WorkspaceIndex implements vscode.Disposable {
     worker.on('error', failed);
     worker.on('exit', code => failed(new Error(`Analysis Worker exited unexpectedly (${code}). Rebuild index to retry.`)));
   }
-  constructor(private extensionPath: string, private storagePath?: string) {
-    if (storagePath) try {
-      const manifest = JSON.parse(readFileSync(path.join(storagePath, 'analysis-cache', 'manifest.json'), 'utf8'));
+  private restoreLegacyPolicy(directory: string) {
+    try {
+      const manifest = JSON.parse(readFileSync(path.join(directory, 'manifest.json'), 'utf8'));
+      if (!Array.isArray(manifest.legacyRoots) && !(manifest.legacyAnalysis === true || manifest.schema === 1 || manifest.analysisVersion < 5)) return;
+      this.legacyRoots.clear();
       for (const folder of vscode.workspace.workspaceFolders ?? []) {
         const root = folder.uri.toString();
         if (Array.isArray(manifest.legacyRoots) ? manifest.legacyRoots.includes(root) :
           (manifest.legacyAnalysis === true || manifest.schema === 1 || manifest.analysisVersion < 5) && manifest.entries?.some((entry: { uri?: string }) => entry.uri?.startsWith(root.replace(/\/$/, '') + '/')))
           this.legacyRoots.add(root);
       }
+      this.scopes.clear();
     } catch { /* No prior workspace policy. */ }
+  }
+  constructor(private extensionPath: string, private storagePath?: string) {
+    if (storagePath) this.restoreLegacyPolicy(path.join(storagePath, 'analysis-cache'));
     this.startWorker();
     const watch = vscode.workspace.createFileSystemWatcher('**/*.{c,h}');
     this.disposables.push(watch, watch.onDidCreate(uri => this.schedule(uri, 'file-create')), watch.onDidChange(uri => this.schedule(uri, 'file-change')),
-      watch.onDidDelete(uri => { if (this.eligible(uri)) { this.indexDiagnostics.lastSourceEvent = { at: Date.now(), kind: 'file-delete' }; this.sourceChanged.fire('file-delete'); this.remove(uri); } }),
+      watch.onDidDelete(async uri => { if (this.initializing) await this.ready; if (!this.disposed && this.eligible(uri)) { this.indexDiagnostics.lastSourceEvent = { at: Date.now(), kind: 'file-delete' }; this.sourceChanged.fire('file-delete'); this.remove(uri); } }),
       vscode.workspace.onDidChangeTextDocument(event => { if (event.contentChanges.length) this.schedule(event.document.uri, 'editor-change'); }),
       vscode.workspace.onDidCloseTextDocument(document => this.schedule(document.uri, 'editor-close')),
       vscode.workspace.onDidChangeConfiguration(event => {
@@ -201,14 +214,32 @@ export class WorkspaceIndex implements vscode.Disposable {
         const settings = ['skipInactive', 'include', 'exclude', 'macroExpansionFolders', 'detailedAnalysisFolders', 'smartAnalysis.include', 'smartAnalysis.exclude', 'smartAnalysis.macro'].filter(affects);
         if (settings.length) { this.sourceChanged.fire('configuration'); void this.reconcile(); }
         else if (affects('analyzeCallbacks')) {
-          this.cancelActiveAnalysis(); this.analysisPaused = false; this.scopes.clear();
-          this.sourceChanged.fire('configuration'); this.revision++;
-          void (async () => { if (this.storagePath) await this.initCache(); await Promise.all([...this.sourceIndex.files.keys()].map(uri=>this.enqueue(vscode.Uri.parse(uri)))); await this.derive(); })();
+          this.analysisPaused = false;
+          this.sourceChanged.fire('configuration'); void this.reconcile(false);
         }
       }),
       vscode.workspace.onDidChangeWorkspaceFolders(() => { this.sourceChanged.fire('configuration'); void this.reconcile(); }));
     if (vscode.workspace.onDidSaveTextDocument) this.disposables.push(vscode.workspace.onDidSaveTextDocument(doc => this.schedule(doc.uri, 'editor-save')));
-    this.ready = this.storagePath ? this.restoreCache() : this.reindex('startup');
+    this.ready = Promise.resolve().then(() => this.initialize());
+  }
+  private async initialize() {
+    try {
+      if (this.disposed) return;
+      if (this.buildInitializer) {
+        const { uris } = await this.discover();
+        if (this.disposed) return;
+        this.startupSourceUris = uris.map(uri => uri.toString());
+        await this.buildInitializer();
+      }
+      if (this.disposed) return;
+      if (this.storagePath && this.selectedBuild) this.restoreLegacyPolicy(path.join(this.storagePath, 'analysis-cache', 'profiles', this.selectedBuild.id));
+      if (this.storagePath) await this.restoreCache(); else await this.rebuildIndex('startup');
+    } catch (error) {
+      if (!this.disposed) { this.cacheBlocked = true; this.derivedRevision = this.revision; this.status = `Index error: ${String(error)}. Run Rebuild Index.`; this.changed.fire(); }
+    } finally {
+      this.initializing = false;
+      if (!this.cacheBlocked) this.startupSourceUris = undefined;
+    }
   }
   get analysisKey() {
     return createHash('sha256').update(JSON.stringify({ analysisVersion: ANALYSIS_CACHE_VERSION, schema: 2, build:this.selectedBuild?.fingerprint, remote: vscode.env.remoteName ?? '', skip: this.skipInactive, callbacks: this.analyzeCallbacks,
@@ -250,7 +281,7 @@ export class WorkspaceIndex implements vscode.Disposable {
       this.indexDiagnostics.cache.state = initialized.state === 'ready' ? 'checking' : initialized.state;
       this.indexDiagnostics.cache.reason = initialized.reason;
       this.indexDiagnostics.cache.savedVersion = initialized.savedVersion;
-      if (initialized.state === 'missing') { this.indexing = false; await this.reindex('startup'); return; }
+      if (initialized.state === 'missing') { this.indexing = false; await this.rebuildIndex('startup'); return; }
       if (initialized.state === 'incompatible') {
         this.cacheBlocked = true; this.derivedRevision = this.revision;
         this.status = initialized.reason === 'analysis-version'
@@ -283,7 +314,7 @@ export class WorkspaceIndex implements vscode.Disposable {
       }
       const { valid } = await this.request<{ valid: boolean }>({ type: 'cache-validate', versions: this.workerVersions(), analyzeCallbacks: this.analyzeCallbacks }).promise;
       if (this.disposed || epoch !== this.epoch) return;
-      if (valid && !this.jobs.size && !this.timers.size && !this.failures.size) this.derivedRevision = this.revision;
+      if (valid && !this.selectedBuild && !this.jobs.size && !this.timers.size && !this.failures.size) this.derivedRevision = this.revision;
       this.savedRevision = valid ? this.revision : -1;
       this.indexing = false;
       for (const document of vscode.workspace.textDocuments) if (!document.isClosed && document.isDirty && this.eligible(document.uri)) await this.enqueue(document.uri);
@@ -310,15 +341,17 @@ export class WorkspaceIndex implements vscode.Disposable {
     })();
     return this.saving;
   }
-  private reconcile() {
+  private async reconcile(rediscover = true) {
+    if (this.initializing) await this.ready;
+    if (this.disposed || this.cacheBlocked) return;
     this.cancelActiveAnalysis();
     const epoch = ++this.epoch;
-    this.indexing = true; this.scopes.clear(); this.cacheBlocked = false;
+    this.indexing = true; this.scopes.clear();
     this.reconciling = (async () => {
       try {
         for (const key of this.rawVersions.keys()) if (!this.eligible(vscode.Uri.parse(key))) this.remove(vscode.Uri.parse(key));
         if (this.storagePath) await this.initCache();
-        const { uris } = await this.discover();
+        const { uris } = rediscover ? await this.discover() : { uris: [...this.sourceIndex.files.keys()].map(uri => vscode.Uri.parse(uri)) };
         if (this.disposed || epoch !== this.epoch) return;
         const active = new Set(uris.map(uri => uri.toString()));
         for (const key of this.rawVersions.keys()) if (!active.has(key)) this.remove(vscode.Uri.parse(key));
@@ -366,7 +399,9 @@ export class WorkspaceIndex implements vscode.Disposable {
     if (!this.indexing) void this.derive();
   }
   private schedule(uri: vscode.Uri, kind: SourceEvent) {
-    if (this.disposed || !this.eligible(uri)) return;
+    if (this.disposed) return;
+    if (this.initializing) { void this.ready.then(() => this.schedule(uri, kind)); return; }
+    if (!this.eligible(uri)) return;
     this.indexDiagnostics.lastSourceEvent = { at: Date.now(), kind };
     this.sourceChanged.fire(kind);
     if (this.cacheBlocked) return;
@@ -479,6 +514,7 @@ export class WorkspaceIndex implements vscode.Disposable {
         for (const [uri, stamp] of result.versions) this.appliedDerived.set(uri, stamp);
         this.derivedRevision = revision; this.failures.delete('derived');
         this.status = this.completedStatus();
+        this.startupSourceUris = undefined;
         this.changed.fire();
       }
     })().catch(error => {
@@ -505,6 +541,11 @@ export class WorkspaceIndex implements vscode.Disposable {
     await this.deriving; await this.derive();
   }
   async reindex(reason: RebuildReason = 'command', settings?: string[]) {
+    if (this.initializing) await this.ready;
+    if (this.disposed) return;
+    return this.rebuildIndex(reason, settings);
+  }
+  private async rebuildIndex(reason: RebuildReason, settings?: string[]) {
     this.cancelActiveAnalysis(); this.analysisPaused = false;
     this.sourceChanged.fire('configuration');
     const record: RebuildRecord = { number: ++this.indexDiagnostics.rebuildCount, at: Date.now(), reason, settings, outcome: 'running' };
@@ -598,6 +639,7 @@ export class WorkspaceIndex implements vscode.Disposable {
     }
   }
   async whenIdle() {
+    if (this.initializing) await this.ready;
     while (this.jobs.size || this.timers.size || this.indexing || this.deriving || this.saving || this.reconciling || this.derivedRevision !== this.revision) {
       await Promise.all([...this.jobs]);
       await this.reconciling; await this.saving;
