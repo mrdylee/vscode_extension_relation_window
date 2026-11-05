@@ -18,6 +18,39 @@ button[aria-pressed=true] { border-color: var(--accent); color: var(--accent); }
 .panes { display: grid; grid-template-columns: minmax(180px, var(--split, 42%)) 5px minmax(200px, 1fr); flex: 1; min-height: 0; }
 .divider { cursor: col-resize; background: var(--border); touch-action: none; }.divider:hover, .divider:focus-visible { background: var(--accent); }
 .pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }.context { border-right: 1px solid var(--border); }
+.relation { position: relative; }
+.idle-mascot {
+  position: absolute; inset: 0; z-index: 1; overflow: hidden; clip-path: inset(0); pointer-events: none;
+}
+.mascot-cat {
+  position: absolute; right: 5px; bottom: -1px;
+  width: 48px; height: 48px;
+  background: url('./webview.salgu.webp') 0 0 / 400% 400% no-repeat;
+}
+.idle-mascot[data-scene=top] .mascot-cat { top: -1px; bottom: auto; }
+.idle-mascot[data-scene=left] .mascot-cat { right: auto; left: -1px; bottom: -6px; width: 36px; height: 36px; }
+.idle-mascot:is([data-scene=walk-right], [data-scene=walk-left], [data-scene=pop]) .mascot-cat { left: 0; right: auto; }
+.idle-mascot[data-scene=pop] .mascot-cat { top: 0; bottom: auto; }
+.mascot-ball {
+  position: absolute; right: 91px; bottom: 0; width: 5px; height: 5px;
+  border: 1px solid #967c65; border-radius: 50%;
+  background: linear-gradient(140deg, #e8cfad 44%, #bd9f80 45% 55%, #e8cfad 56%);
+}
+.mascot-butterfly {
+  position: absolute; right: 20px; bottom: 8px; width: 14px; height: 10px;
+}
+.mascot-wings {
+  position: absolute; inset: 0;
+  background: linear-gradient(#78505d, #78505d) center / 1px 6px no-repeat;
+}
+.mascot-wings::before, .mascot-wings::after {
+  content: ''; position: absolute; top: 0; width: 6px; height: 8px;
+  border: 1px solid #906377; background: #e7b9de;
+}
+.mascot-wings::before { left: 0; border-radius: 65% 50% 30% 65%; transform: rotate(-27deg); }
+.mascot-wings::after { right: 0; border-radius: 50% 65% 65% 30%; transform: rotate(27deg); }
+.vscode-reduce-motion .idle-mascot { display: none; }
+@media (prefers-reduced-motion: reduce) { .idle-mascot { display: none; } }
 .pane-heading { display: flex; align-items: center; gap: 10px; min-height: 28px; padding: 4px 8px; border-bottom: 1px solid var(--border); overflow: hidden; white-space: nowrap; }
 .pane-heading strong { font-size: 11px; text-transform: uppercase; letter-spacing: .8px; }.muted { color: var(--muted); }
 .graph { overflow: auto; padding: 12px; flex: 1; min-height: 0; }.graph > .branch { width: max-content; }

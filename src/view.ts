@@ -108,14 +108,23 @@ export class RelationView implements vscode.Disposable {
     const js = view.webview.asWebviewUri(vscode.Uri.joinPath(assets, 'webview.js'));
     const nonce = randomBytes(18).toString('hex');
     view.webview.html = `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-      <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${view.webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
+      <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${view.webview.cspSource}; style-src ${view.webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
       <link rel="stylesheet" href="${css}"><title>Dynsight</title></head><body data-view="${contextOnly ? 'context' : 'relation'}"><div id="app"></div><script nonce="${nonce}" src="${js}"></script></body></html>`;
     view.webview.onDidReceiveMessage(message => { void this.handleMessage(message).catch(error => vscode.window.showErrorMessage(`Dynsight: ${String(error)}`)); });
     view.onDidDispose(() => {
       if (contextOnly && this.contextView === view) this.contextView = undefined;
       if (!contextOnly && this.webview === view) this.webview = undefined;
     });
-    if (!contextOnly) { this.publish(); void this.applyPanelLayout(); }
+    if (!contextOnly) {
+      view.onDidChangeVisibility(() => this.publishMascotIdle());
+      this.publish(); void this.applyPanelLayout();
+    }
+  }
+  publishMascotIdle() {
+    const view = this.webview;
+    if (!view) return;
+    const { focused, active } = vscode.window.state;
+    void view.webview.postMessage({ type: 'mascotIdle', idle: view.visible && focused && !active });
   }
   private get index() { const uri = this.root?.uri ?? this.lastEditor?.document.uri.toString(); return uri ? this.workspace.indexFor(uri) : this.workspace.index; }
   private contextKey(uri: string, index = this.index) { const key = this.contextChoices.get(uri); return key && index.files.has(key) ? key : uri; }
@@ -448,7 +457,7 @@ export class RelationView implements vscode.Disposable {
       case 'copilotStop': await vscode.commands.executeCommand('dynsight.stopAiAnalysis'); break;
       case 'localStop': this.workspace.stopAnalysis(); break;
       case 'localResume': await this.workspace.resumeAnalysis(); break;
-      case 'ready': this.refresh(); this.track(vscode.window.activeTextEditor); break;
+      case 'ready': this.refresh(); this.track(vscode.window.activeTextEditor); this.publishMascotIdle(); break;
       case 'readyContext': void this.contextView?.webview.postMessage({ type: 'context', context: this.state.context }); break;
       case 'settings': await vscode.commands.executeCommand('dynsight.openSettings'); break;
       case 'help': await vscode.commands.executeCommand('dynsight.help'); break;

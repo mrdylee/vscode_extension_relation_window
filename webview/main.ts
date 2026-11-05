@@ -8,6 +8,7 @@ import { highlightC } from '../src/syntax';
 import { createDiagnostics } from './diagnostics';
 import { createLocalProgress } from './local-progress';
 import { createCallbackActions } from './callback-actions';
+import { createIdleMascot } from './idle-mascot';
 declare const __EXTENSION_VERSION__: string;
 declare function acquireVsCodeApi(): { postMessage(message: unknown): void };
 const api = acquireVsCodeApi();
@@ -77,6 +78,7 @@ divider.onpointermove = event => { if (divider.hasPointerCapture(event.pointerId
 divider.onpointerup = event => divider.releasePointerCapture(event.pointerId);
 divider.onkeydown = event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); resize(split + (event.key === 'ArrowLeft' ? -3 : 3)); } };
 relation.append(graphHeader, candidates, graph);
+const updateMascot = contextOnly ? undefined : createIdleMascot(relation);
 panes.append(context, divider, relation);
 if (contextOnly) app.append(context); else app.append(toolbar, panes, footer);
 let signature: string | undefined = '', previewSignature: string | undefined = '';
@@ -579,6 +581,7 @@ function render(state: ViewState) {
   footer.append(button('Diagnostics', () => diagnostics?.open(), 'Show memory measurements for a screenshot'));
 }
 window.addEventListener('message', event => {
+  if (event.data?.type === 'mascotIdle') updateMascot?.(event.data.idle === true);
   if (event.data?.type === 'diagnostics') { diagnostics?.update(event.data.diagnostics); renderCopilot(event.data.diagnostics?.copilot); renderLocal(event.data.diagnostics); }
   if (event.data?.type === 'state' && !contextOnly) render(event.data.state);
   if (event.data?.type === 'revealRoot' && !contextOnly && event.data.id === rootKey) revealRoot();

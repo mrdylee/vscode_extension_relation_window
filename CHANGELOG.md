@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.98 — 2026-11-06
+
+- Add Salgu, a cat that plays one of ten short scenes in the Relation panel. The panel waits three minutes after VS Code reports that the focused window is idle. Panel input restarts the wait, and reduced motion disables the animation.
+
 ## 0.1.97 — 2026-11-05
 
 - Keep per-file symbols and direct references live while batching automatic macro/callback updates until one hour after the last actual C/H change. Duplicate save/watch notifications do not postpone the batch.
