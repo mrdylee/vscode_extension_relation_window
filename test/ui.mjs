@@ -27,20 +27,23 @@ try {
     let index = 0;
     Math.random = () => values[Math.min(index++, values.length - 1)];
   }, values);
-  const setIdle = idle => mascotPage.evaluate(idle => {
-    window.dispatchEvent(new MessageEvent('message', { data: { type: 'mascotIdle', idle } }));
-  }, idle);
-  const quietMs = 180_000;
+  const setAvailable = available => mascotPage.evaluate(available => {
+    window.dispatchEvent(new MessageEvent('message', { data: { type: 'mascotAvailability', available } }));
+  }, available);
+  const quietMs = 60_000;
   const startScene = async () => {
-    await setIdle(true);
+    await setAvailable(true);
     await mascotPage.clock.fastForward(quietMs);
   };
   assert.equal(await mascot.count(), 1, 'the Relation view has one mascot');
-  assert.ok(await mascot.isHidden(), 'the mascot waits for the idle signal');
+  assert.ok(await mascot.isHidden(), 'the mascot waits for the visible, focused view');
   await draw(.05);
-  await setIdle(true);
-  await mascotPage.clock.fastForward(quietMs - 1);
-  assert.ok(await mascot.isHidden(), 'first appearance waits three minutes after the idle signal');
+  await setAvailable(true);
+  await mascotPage.clock.fastForward(30_000);
+  await setAvailable(true);
+  await mascotPage.mouse.move(20, 20);
+  await mascotPage.clock.fastForward(quietMs - 30_000 - 1);
+  assert.ok(await mascot.isHidden(), 'first appearance waits one minute without panel input');
   await mascotPage.clock.fastForward(1);
   assert.ok(await mascot.isVisible(), 'the mascot appears when the quiet period ends');
   assert.equal(await mascot.getAttribute('data-scene'), 'play');
@@ -63,23 +66,24 @@ try {
   await mascotPage.keyboard.press('Escape');
   assert.ok(await mascot.isHidden(), 'panel input interrupts the stroll');
   await mascotPage.clock.fastForward(quietMs - 1);
-  assert.ok(await mascot.isHidden(), 'panel input starts another three-minute wait');
+  assert.ok(await mascot.isHidden(), 'panel input starts another one-minute wait');
   await mascotPage.clock.fastForward(1);
   assert.ok(await mascot.isVisible(), 'the mascot can return after panel input stops');
   await cat.evaluate(node => node.getAnimations()[0].finish());
   await mascot.waitFor({ state: 'hidden' });
-  await setIdle(true);
-  assert.ok(await mascot.isHidden(), 'an unchanged idle signal does not repeat a completed stroll');
-  await setIdle(false);
-  await setIdle(true);
+  await setAvailable(true);
+  await mascotPage.clock.fastForward(quietMs);
+  assert.ok(await mascot.isHidden(), 'an unchanged availability signal does not repeat a completed stroll');
+  await setAvailable(false);
+  await setAvailable(true);
   await mascotPage.clock.fastForward(quietMs - 1);
-  await setIdle(false);
+  await setAvailable(false);
   await mascotPage.clock.fastForward(1);
-  assert.ok(await mascot.isHidden(), 'workbench activity cancels a pending scene');
+  assert.ok(await mascot.isHidden(), 'losing availability cancels a pending scene');
   await startScene();
   assert.ok(await mascot.isVisible());
-  await setIdle(false);
-  assert.ok(await mascot.isHidden(), 'workbench activity interrupts the stroll');
+  await setAvailable(false);
+  assert.ok(await mascot.isHidden(), 'losing availability interrupts the stroll');
   for (const [value, scene] of [[.15, 'gaze'], [.25, 'top'], [.35, 'left'], [.45, 'expression']]) {
     await draw(value);
     await startScene();
@@ -98,8 +102,8 @@ try {
     if (scene === 'top') assert.ok(motion[1].top - motion[0].top > 10, 'Salgu enters from above');
     if (scene === 'left') assert.ok(motion[1].left - motion[0].left > 10, 'Salgu enters from the left');
     if (scene === 'expression') assert.notEqual(motion[1].pose, motion[2].pose, 'Salgu changes expression');
-    await setIdle(false);
-    assert.equal(await cat.evaluate(node => node.getAnimations().length), 0, 'activity cancels the scene');
+    await setAvailable(false);
+    assert.equal(await cat.evaluate(node => node.getAnimations().length), 0, 'losing availability cancels the scene');
   }
   for (const width of [540, 390]) {
     await mascotPage.setViewportSize({ width, height: 320 });
@@ -128,7 +132,7 @@ try {
       assert.ok(end[scene === 'walk-right' ? 'right' : 'left']);
       assert.ok(!middle.left && !middle.right && middle.floor, 'walk stays on the sill');
       assert.ok(new Set([start.pose, middle.pose, end.pose]).size > 1, 'walk changes paw poses');
-      await setIdle(false);
+      await setAvailable(false);
     }
   }
   assert.deepEqual(spriteSize, [384, 384], 'old and new poses load from one packaged image');
@@ -149,8 +153,8 @@ try {
   assert.ok(flight[0].x - flight[1].x > 12 && flight[1].y - flight[0].y > 12,
     'the butterfly flies toward the paw');
   assert.deepEqual(flight[1], flight[2], 'flapping stays anchored at the paw during the catch');
-  await setIdle(false);
-  assert.equal(await butterfly.evaluate(node => node.getAnimations({ subtree: true }).length), 0, 'activity stops the butterfly');
+  await setAvailable(false);
+  assert.equal(await butterfly.evaluate(node => node.getAnimations({ subtree: true }).length), 0, 'losing availability stops the butterfly');
   await draw(.85);
   await startScene();
   assert.equal(await mascot.getAttribute('data-scene'), 'eat');
@@ -164,7 +168,7 @@ try {
   });
   assert.equal(bites[0], bites[2], 'Salgu lifts its head between bites');
   assert.equal(new Set(bites).size, 3, 'waiting, biting and satisfied faces are distinct');
-  await setIdle(false);
+  await setAvailable(false);
   for (const value of [0, .99]) {
     await draw(.95, value);
     await startScene();
@@ -187,7 +191,7 @@ try {
     });
     assert.deepEqual(edges.map(({ edge }) => edge), value === 0 ? [0, 1, 2, 3] : [3, 2, 1, 0]);
     assert.ok(edges.every(({ outside }) => outside), 'each pop hides before the next edge');
-    await setIdle(false);
+    await setAvailable(false);
   }
   await mascotPage.emulateMedia({ reducedMotion: 'reduce' });
   await startScene();

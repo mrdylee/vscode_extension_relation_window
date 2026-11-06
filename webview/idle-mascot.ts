@@ -1,4 +1,4 @@
-const quietPeriodMs = 3 * 60_000;
+const quietPeriodMs = 60_000;
 const spriteSize = 48;
 
 type Move = readonly [time: number, x: number, y: number, rotation?: number, easing?: string];
@@ -146,7 +146,7 @@ export function createIdleMascot(parent: HTMLElement) {
   parent.append(mascot);
 
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
-  let idle = false;
+  let available = false;
   let quietAfter = 0;
   let timer: number | undefined;
   let animations: Animation[] = [];
@@ -218,7 +218,7 @@ export function createIdleMascot(parent: HTMLElement) {
   const update = () => {
     window.clearTimeout(timer);
     stop();
-    if (!idle || document.hidden || reducedMotion.matches || document.body.classList.contains('vscode-reduce-motion')) return;
+    if (!available || document.hidden || reducedMotion.matches || document.body.classList.contains('vscode-reduce-motion')) return;
     const delay = quietAfter - performance.now();
     if (delay > 0) timer = window.setTimeout(update, delay);
     else play();
@@ -226,15 +226,15 @@ export function createIdleMascot(parent: HTMLElement) {
   for (const event of ['pointerdown', 'keydown', 'wheel']) {
     document.addEventListener(event, () => {
       quietAfter = performance.now() + quietPeriodMs;
-      if (idle) update();
+      if (available) update();
     }, { capture: true, passive: true });
   }
   document.addEventListener('visibilitychange', update);
   reducedMotion.addEventListener('change', update);
-  return (isIdle: boolean) => {
-    if (idle === isIdle) return;
-    idle = isIdle;
-    if (idle) quietAfter = performance.now() + quietPeriodMs;
+  return (isAvailable: boolean) => {
+    if (available === isAvailable) return;
+    available = isAvailable;
+    if (available) quietAfter = performance.now() + quietPeriodMs;
     update();
   };
 }

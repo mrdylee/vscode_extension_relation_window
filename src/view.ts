@@ -116,15 +116,14 @@ export class RelationView implements vscode.Disposable {
       if (!contextOnly && this.webview === view) this.webview = undefined;
     });
     if (!contextOnly) {
-      view.onDidChangeVisibility(() => this.publishMascotIdle());
+      view.onDidChangeVisibility(() => this.publishMascotAvailability());
       this.publish(); void this.applyPanelLayout();
     }
   }
-  publishMascotIdle() {
+  publishMascotAvailability() {
     const view = this.webview;
     if (!view) return;
-    const { focused, active } = vscode.window.state;
-    void view.webview.postMessage({ type: 'mascotIdle', idle: view.visible && focused && !active });
+    void view.webview.postMessage({ type: 'mascotAvailability', available: view.visible && vscode.window.state.focused });
   }
   private get index() { const uri = this.root?.uri ?? this.lastEditor?.document.uri.toString(); return uri ? this.workspace.indexFor(uri) : this.workspace.index; }
   private contextKey(uri: string, index = this.index) { const key = this.contextChoices.get(uri); return key && index.files.has(key) ? key : uri; }
@@ -457,7 +456,7 @@ export class RelationView implements vscode.Disposable {
       case 'copilotStop': await vscode.commands.executeCommand('dynsight.stopAiAnalysis'); break;
       case 'localStop': this.workspace.stopAnalysis(); break;
       case 'localResume': await this.workspace.resumeAnalysis(); break;
-      case 'ready': this.refresh(); this.track(vscode.window.activeTextEditor); this.publishMascotIdle(); break;
+      case 'ready': this.refresh(); this.track(vscode.window.activeTextEditor); this.publishMascotAvailability(); break;
       case 'readyContext': void this.contextView?.webview.postMessage({ type: 'context', context: this.state.context }); break;
       case 'settings': await vscode.commands.executeCommand('dynsight.openSettings'); break;
       case 'help': await vscode.commands.executeCommand('dynsight.help'); break;

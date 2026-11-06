@@ -581,7 +581,7 @@ function render(state: ViewState) {
   footer.append(button('Diagnostics', () => diagnostics?.open(), 'Show memory measurements for a screenshot'));
 }
 window.addEventListener('message', event => {
-  if (event.data?.type === 'mascotIdle') updateMascot?.(event.data.idle === true);
+  if (event.data?.type === 'mascotAvailability') updateMascot?.(event.data.available === true);
   if (event.data?.type === 'diagnostics') { diagnostics?.update(event.data.diagnostics); renderCopilot(event.data.diagnostics?.copilot); renderLocal(event.data.diagnostics); }
   if (event.data?.type === 'state' && !contextOnly) render(event.data.state);
   if (event.data?.type === 'revealRoot' && !contextOnly && event.data.id === rootKey) revealRoot();

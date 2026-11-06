@@ -51,7 +51,7 @@ export async function activate(context: vscode.ExtensionContext) {
       clearTimeout(timer); timer = setTimeout(() => view.track(event.textEditor), 80);
     }),
     vscode.window.onDidChangeActiveTextEditor(editor => view.track(editor)),
-    vscode.window.onDidChangeWindowState(() => view.publishMascotIdle()),
+    vscode.window.onDidChangeWindowState(() => view.publishMascotAvailability()),
     { dispose: () => clearTimeout(timer) });
   void workspace.ready.then(() => view.track(vscode.window.activeTextEditor));
   // Preserve existing custom keybindings without exposing old command labels.

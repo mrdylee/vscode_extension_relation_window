@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.99 — 2026-11-06
+
+- Play one Salgu scene after one minute without input in the visible Relation view while VS Code has focus. Clicking, scrolling, or typing in the view starts a new wait. Editing in the main editor can continue during the wait.
+
 ## 0.1.98 — 2026-11-06
 
 - Add Salgu, a cat that plays one of ten short scenes in the Relation panel. The panel waits three minutes after VS Code reports that the focused window is idle. Panel input restarts the wait, and reduced motion disables the animation.
