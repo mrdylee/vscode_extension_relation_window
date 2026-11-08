@@ -15,6 +15,7 @@ const server = createServer((req, res) => {
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 try {
+  const state = { graph: fixture.graph, candidates: [], status: 'Index ready', fileCount: 4, issues: [], mode: 'references', accessFilter: 'all', depth: 1, locked: false, skipInactive: true, calleeSort: 'name', contextLayout: 'combined', callGraphDirection: 'callers-left' };
   const mascotPage = await browser.newPage({ viewport: { width: 540, height: 320 } });
   await mascotPage.clock.install({ time: new Date(0) });
   await mascotPage.clock.pauseAt(new Date(60_000));
@@ -30,22 +31,44 @@ try {
   const setAvailable = available => mascotPage.evaluate(available => {
     window.dispatchEvent(new MessageEvent('message', { data: { type: 'mascotAvailability', available } }));
   }, available);
-  const quietMs = 60_000;
-  const startScene = async () => {
+  const showGraph = graph => mascotPage.evaluate(state => {
+    window.dispatchEvent(new MessageEvent('message', { data: { type: 'state', state } }));
+  }, { ...state, graph });
+  const sceneDraw = index => (index + .5) / 20;
+  const startScene = async (index, ...draws) => {
+    await draw(0, sceneDraw(index), ...draws);
     await setAvailable(true);
-    await mascotPage.clock.fastForward(quietMs);
+    await mascotPage.clock.fastForward(10_000);
   };
   assert.equal(await mascot.count(), 1, 'the Relation view has one mascot');
   assert.ok(await mascot.isHidden(), 'the mascot waits for the visible, focused view');
-  await draw(.05);
+  await showGraph(fixture.graph);
+  await draw(0, sceneDraw(0), .99999, sceneDraw(1), 0);
   await setAvailable(true);
-  await mascotPage.clock.fastForward(30_000);
+  await mascotPage.clock.fastForward(5_000);
   await setAvailable(true);
-  await mascotPage.mouse.move(20, 20);
-  await mascotPage.clock.fastForward(quietMs - 30_000 - 1);
-  assert.ok(await mascot.isHidden(), 'first appearance waits one minute without panel input');
+  const mascotGraph = mascotPage.locator('.graph');
+  const { x, y, height } = await mascotGraph.boundingBox();
+  await mascotPage.mouse.move(x + 8, y + height - 8);
+  await mascotPage.mouse.wheel(0, 60);
+  await mascotPage.mouse.down();
+  await mascotPage.mouse.move(x + 48, y + height - 24, { steps: 3 });
+  assert.ok(await mascotGraph.evaluate(node => node.classList.contains('panning')));
+  await mascotPage.mouse.up();
+  await showGraph(fixture.variableGraphs.all);
+  await mascotGraph.locator('.node-title[data-kind="variable"]').click();
+  await showGraph(fixture.graph);
+  const functionTitle = mascotGraph.locator('.node-title[data-kind="function"]').first();
+  await functionTitle.scrollIntoViewIfNeeded();
+  const titleBox = await functionTitle.boundingBox();
+  await mascotPage.mouse.move(titleBox.x + titleBox.width / 4, titleBox.y + titleBox.height / 2);
+  await mascotPage.mouse.down();
+  await mascotPage.mouse.move(titleBox.x + titleBox.width / 2, titleBox.y + titleBox.height / 2, { steps: 3 });
+  await mascotPage.mouse.up();
+  await mascotPage.clock.fastForward(4_999);
+  assert.ok(await mascot.isHidden(), 'the first wait lasts at least 10 seconds');
   await mascotPage.clock.fastForward(1);
-  assert.ok(await mascot.isVisible(), 'the mascot appears when the quiet period ends');
+  assert.ok(await mascot.isVisible(), 'wheel, dragging over the graph or title, redraw and variable selection preserve the timer');
   assert.equal(await mascot.getAttribute('data-scene'), 'play');
   const spriteSize = await cat.evaluate(async node => {
     const image = new Image();
@@ -63,30 +86,36 @@ try {
   });
   assert.ok(distance > 10, 'the mascot crosses part of the panel');
   assert.equal(await mascot.evaluate(node => getComputedStyle(node).pointerEvents), 'none');
-  await mascotPage.keyboard.press('Escape');
-  assert.ok(await mascot.isHidden(), 'panel input interrupts the stroll');
-  await mascotPage.clock.fastForward(quietMs - 1);
-  assert.ok(await mascot.isHidden(), 'panel input starts another one-minute wait');
-  await mascotPage.clock.fastForward(1);
-  assert.ok(await mascot.isVisible(), 'the mascot can return after panel input stops');
   await cat.evaluate(node => node.getAnimations()[0].finish());
   await mascot.waitFor({ state: 'hidden' });
-  await setAvailable(true);
-  await mascotPage.clock.fastForward(quietMs);
-  assert.ok(await mascot.isHidden(), 'an unchanged availability signal does not repeat a completed stroll');
+  await mascotPage.clock.fastForward(19_999);
+  assert.ok(await mascot.isHidden(), 'the next random interval can last 20 seconds');
+  await mascotPage.clock.fastForward(1);
+  assert.ok(await mascot.isVisible(), 'the next scene plays without further input');
+  assert.equal(await mascot.getAttribute('data-scene'), 'gaze');
+  await cat.evaluate(node => node.getAnimations()[0].pause());
+  await mascotPage.clock.fastForward(5_000);
+  await draw(.5, sceneDraw(4), 0);
+  await functionTitle.click();
+  assert.ok(await mascot.isHidden(), 'clicking a function interrupts the current scene');
+  await mascotPage.clock.fastForward(14_999);
+  assert.ok(await mascot.isHidden(), 'clicking a function replaces the pending interval');
+  await mascotPage.clock.fastForward(1);
+  assert.ok(await mascot.isVisible(), 'the fresh interval starts at the function click');
+  assert.equal(await mascot.getAttribute('data-scene'), 'expression');
   await setAvailable(false);
+  await draw(0, sceneDraw(0));
   await setAvailable(true);
-  await mascotPage.clock.fastForward(quietMs - 1);
+  await mascotPage.clock.fastForward(9_999);
   await setAvailable(false);
   await mascotPage.clock.fastForward(1);
   assert.ok(await mascot.isHidden(), 'losing availability cancels a pending scene');
-  await startScene();
+  await startScene(0);
   assert.ok(await mascot.isVisible());
   await setAvailable(false);
   assert.ok(await mascot.isHidden(), 'losing availability interrupts the stroll');
-  for (const [value, scene] of [[.15, 'gaze'], [.25, 'top'], [.35, 'left'], [.45, 'expression']]) {
-    await draw(value);
-    await startScene();
+  for (const [index, scene] of [[1, 'gaze'], [2, 'top'], [3, 'left'], [4, 'expression']]) {
+    await startScene(index);
     assert.equal(await mascot.getAttribute('data-scene'), scene, 'the idle draw can select each scene');
     const motion = await cat.evaluate(node => {
       const [travel, ...expressions] = node.getAnimations();
@@ -98,7 +127,10 @@ try {
       };
       return [sample(0), sample(750), sample(1400)];
     });
-    if (scene === 'gaze') assert.deepEqual(motion[1], motion[2], 'Salgu holds the gaze after appearing');
+    if (scene === 'gaze') {
+      assert.deepEqual([motion[1].left, motion[1].top], [motion[2].left, motion[2].top], 'Salgu holds onto the sill');
+      assert.notEqual(motion[1].pose, motion[2].pose, 'Salgu blinks while looking at the user');
+    }
     if (scene === 'top') assert.ok(motion[1].top - motion[0].top > 10, 'Salgu enters from above');
     if (scene === 'left') assert.ok(motion[1].left - motion[0].left > 10, 'Salgu enters from the left');
     if (scene === 'expression') assert.notEqual(motion[1].pose, motion[2].pose, 'Salgu changes expression');
@@ -107,9 +139,8 @@ try {
   }
   for (const width of [540, 390]) {
     await mascotPage.setViewportSize({ width, height: 320 });
-    for (const [value, scene] of [[.55, 'walk-right'], [.65, 'walk-left']]) {
-      await draw(value);
-      await startScene();
+    for (const [index, scene] of [[5, 'walk-right'], [6, 'walk-left']]) {
+      await startScene(index);
       assert.equal(await mascot.getAttribute('data-scene'), scene);
       const [start, middle, end] = await cat.evaluate(node => {
         const [travel, steps] = node.getAnimations();
@@ -135,9 +166,8 @@ try {
       await setAvailable(false);
     }
   }
-  assert.deepEqual(spriteSize, [384, 384], 'old and new poses load from one packaged image');
-  await draw(.75);
-  await startScene();
+  assert.deepEqual(spriteSize, [384, 672], 'old and new poses load from one packaged image');
+  await startScene(7);
   assert.equal(await mascot.getAttribute('data-scene'), 'butterfly');
   const butterfly = mascot.locator('.mascot-butterfly');
   assert.ok(await butterfly.isVisible());
@@ -155,8 +185,7 @@ try {
   assert.deepEqual(flight[1], flight[2], 'flapping stays anchored at the paw during the catch');
   await setAvailable(false);
   assert.equal(await butterfly.evaluate(node => node.getAnimations({ subtree: true }).length), 0, 'losing availability stops the butterfly');
-  await draw(.85);
-  await startScene();
+  await startScene(8);
   assert.equal(await mascot.getAttribute('data-scene'), 'eat');
   const bites = await cat.evaluate(node => {
     const [, poses] = node.getAnimations();
@@ -170,8 +199,7 @@ try {
   assert.equal(new Set(bites).size, 3, 'waiting, biting and satisfied faces are distinct');
   await setAvailable(false);
   for (const value of [0, .99]) {
-    await draw(.95, value);
-    await startScene();
+    await startScene(9, value);
     assert.equal(await mascot.getAttribute('data-scene'), 'pop');
     const edges = await cat.evaluate(node => {
       const [travel] = node.getAnimations();
@@ -193,8 +221,38 @@ try {
     assert.ok(edges.every(({ outside }) => outside), 'each pop hides before the next edge');
     await setAvailable(false);
   }
+  const dailyScenes = ['yawn', 'doze', 'nap', 'stretch', 'groom', 'scratch', 'drink', 'tilt', 'wag', 'roll'];
+  const breathingSamples = { yawn: [1350, 1850], doze: [970, 1310], nap: [1640, 2160] };
+  for (const [index, scene] of dailyScenes.entries()) {
+    await startScene(10 + index);
+    assert.equal(await mascot.getAttribute('data-scene'), scene, 'the idle draw can select each daily scene');
+    assert.ok(await mascot.isVisible());
+    const poseCount = await cat.evaluate(node => {
+      const [, poses] = node.getAnimations();
+      return new Set(poses.effect.getKeyframes().map(frame => frame.backgroundPosition)).size;
+    });
+    assert.ok(poseCount > 1, `${scene} changes poses while Salgu is on screen`);
+    if (breathingSamples[scene]) {
+      const [first, second] = await cat.evaluate((node, times) => {
+        const animations = node.getAnimations();
+        for (const animation of animations) animation.pause();
+        return times.map(time => {
+          for (const animation of animations) animation.currentTime = time;
+          const { transform, backgroundPosition } = getComputedStyle(node);
+          return { transform, backgroundPosition, bottom: node.getBoundingClientRect().bottom };
+        });
+      }, breathingSamples[scene]);
+      assert.equal(first.backgroundPosition, second.backgroundPosition, `${scene} samples the same pose`);
+      assert.notEqual(first.transform, second.transform, `${scene} moves during the pose`);
+      if (scene === 'nap') assert.ok(Math.abs(first.bottom - second.bottom) < .1, 'Salgu breathes with its paws on the sill');
+    }
+    await cat.evaluate(node => node.getAnimations()[0].finish());
+    await mascot.waitFor({ state: 'hidden' });
+    assert.equal(await cat.evaluate(node => node.getAnimations().length), 0, `${scene} stops animating when it ends`);
+    await setAvailable(false);
+  }
   await mascotPage.emulateMedia({ reducedMotion: 'reduce' });
-  await startScene();
+  await startScene(0);
   assert.ok(await mascot.isHidden(), 'reduced motion suppresses the stroll');
   await mascotPage.goto(`${url}/context`);
   assert.equal(await mascot.count(), 0, 'the separate Context view does not create a second mascot');
@@ -203,7 +261,6 @@ try {
   const page = await browser.newPage({ viewport: { width: 1450, height: 700 }, colorScheme: 'dark' });
   const errors = [];
   page.on('pageerror', error => errors.push(String(error)));
-  const state = { graph: fixture.graph, candidates: [], status: 'Index ready', fileCount: 4, issues: [], mode: 'references', accessFilter: 'all', depth: 1, locked: false, skipInactive: true, calleeSort: 'name', contextLayout: 'combined', callGraphDirection: 'callers-left' };
   const items = new Map();
   function collect(node) {
     if (node.symbolId) items.set(node.symbolId, node.location);

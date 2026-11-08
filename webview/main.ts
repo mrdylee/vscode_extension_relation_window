@@ -27,10 +27,17 @@ const panes = el('main', 'panes');
 const context = el('section', 'context pane');
 const relation = el('section', 'relation pane');
 const graph = el('div', 'graph');
+const dragThresholdPx = 6;
+let functionPress: { id: number; x: number; y: number } | undefined;
 // Expansion can move/recreate nodes between clicks; keep the first click's source target.
 let firstClickId: string | undefined;
 graph.addEventListener('click', event => {
-  if (event.detail === 1) firstClickId = (event.target as HTMLElement).closest<HTMLElement>('.node-title')?.dataset.preview;
+  const press = functionPress;
+  functionPress = undefined;
+  if (event.detail !== 1) return;
+  const title = (event.target as HTMLElement).closest<HTMLElement>('.node-title');
+  firstClickId = title?.dataset.preview;
+  if (press && title?.dataset.kind === 'function') mascot?.restart();
 }, true);
 graph.addEventListener('dblclick', event => {
   if (firstClickId) { event.preventDefault(); send('open', { id: firstClickId }); }
@@ -78,7 +85,7 @@ divider.onpointermove = event => { if (divider.hasPointerCapture(event.pointerId
 divider.onpointerup = event => divider.releasePointerCapture(event.pointerId);
 divider.onkeydown = event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); resize(split + (event.key === 'ArrowLeft' ? -3 : 3)); } };
 relation.append(graphHeader, candidates, graph);
-const updateMascot = contextOnly ? undefined : createIdleMascot(relation);
+const mascot = contextOnly ? undefined : createIdleMascot(relation);
 panes.append(context, divider, relation);
 if (contextOnly) app.append(context); else app.append(toolbar, panes, footer);
 let signature: string | undefined = '', previewSignature: string | undefined = '';
@@ -220,20 +227,31 @@ options.onkeydown = event => {
 document.addEventListener('pointerdown', event => { if (!options.contains(event.target as Node)) closeOptions(); });
 let drag: { id: number; x: number; y: number; panX: number; panY: number; moved: boolean } | undefined;
 graph.onpointerdown = event => {
-  if (event.button !== 0 || (event.target as HTMLElement).closest('.node, button, select')) return;
+  if (event.button !== 0) return;
+  const target = event.target as HTMLElement;
+  functionPress = target.closest<HTMLElement>('.node-title')?.dataset.kind === 'function'
+    ? { id: event.pointerId, x: event.clientX, y: event.clientY }
+    : undefined;
+  if (target.closest('.node, button, select')) return;
   hideDetails(); closeOptions();
   drag = { id: event.pointerId, x: event.clientX, y: event.clientY, panX, panY, moved: false };
   graph.setPointerCapture(event.pointerId);
 };
 graph.onpointermove = event => {
+  if (functionPress?.id === event.pointerId &&
+      Math.hypot(event.clientX - functionPress.x, event.clientY - functionPress.y) >= dragThresholdPx) functionPress = undefined;
   if (!drag || drag.id !== event.pointerId) return;
   const dx = event.clientX - drag.x, dy = event.clientY - drag.y;
-  if (!drag.moved && Math.hypot(dx, dy) < 6) return;
+  if (!drag.moved && Math.hypot(dx, dy) < dragThresholdPx) return;
   event.preventDefault(); drag.moved = true; graph.classList.add('panning');
   panX = drag.panX + dx; panY = drag.panY + dy; positionGraph();
 };
 function finishDrag() { drag = undefined; graph.classList.remove('panning'); }
+graph.onpointerleave = event => {
+  if (functionPress?.id === event.pointerId) functionPress = undefined;
+};
 graph.onpointerup = graph.onpointercancel = event => {
+  if (event.type === 'pointercancel' && functionPress?.id === event.pointerId) functionPress = undefined;
   if (graph.hasPointerCapture(event.pointerId)) graph.releasePointerCapture(event.pointerId);
   finishDrag();
 };
@@ -581,7 +599,7 @@ function render(state: ViewState) {
   footer.append(button('Diagnostics', () => diagnostics?.open(), 'Show memory measurements for a screenshot'));
 }
 window.addEventListener('message', event => {
-  if (event.data?.type === 'mascotAvailability') updateMascot?.(event.data.available === true);
+  if (event.data?.type === 'mascotAvailability') mascot?.setAvailable(event.data.available === true);
   if (event.data?.type === 'diagnostics') { diagnostics?.update(event.data.diagnostics); renderCopilot(event.data.diagnostics?.copilot); renderLocal(event.data.diagnostics); }
   if (event.data?.type === 'state' && !contextOnly) render(event.data.state);
   if (event.data?.type === 'revealRoot' && !contextOnly && event.data.id === rootKey) revealRoot();

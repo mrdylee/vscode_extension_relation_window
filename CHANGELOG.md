@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.100 — 2026-11-08
+
+- Play one of 20 animated Salgu scenes in the visible, focused Relation view. Each appearance draws a fresh random interval of 10–20 seconds from the previous appearance's start.
+- Restart the timer when a function name is clicked directly in the Relation graph. Wheel scrolling, dragging, variable selection, and graph refreshes from work in the editor preserve the running timer.
+- Add yawning, dozing, curled-up naps, stretching, paw grooming, ear scratching, drinking, head tilts, tail wags, and rolling onto the back. Add blinking to the watching scene and keep breathing and leaning anchored to the sill.
+
 ## 0.1.99 — 2026-11-06
 
 - Play one Salgu scene after one minute without input in the visible Relation view while VS Code has focus. Clicking, scrolling, or typing in the view starts a new wait. Editing in the main editor can continue during the wait.
