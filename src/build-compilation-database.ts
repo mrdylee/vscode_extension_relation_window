@@ -1,16 +1,5 @@
 import { BuildEntry, BuildFileSystem, BuildProfile, buildDirectory, fingerprintBuildInput, normalizeCompileContext, resolveBuildUri, splitBuildWords } from './build-context';
 
-function shellEffects(command: string, dialect: 'posix' | 'windows') {
-  let quote = '';
-  for (let n=0;n<command.length;n++) {
-    const c=command[n];
-    if (dialect==='posix' && c==='\\' && quote!=="'") { n++; continue; }
-    if (c==='"' || dialect==='posix' && c==="'") { if (!quote) quote=c; else if (quote===c) quote=''; continue; }
-    if (!quote && /[;&|<>]/.test(c) || quote!=="'" && /[$`]/.test(c) || dialect==='windows' && c==='%') return true;
-  }
-  return false;
-}
-
 // A database records compile invocations, not a proof of the final link set.
 export async function readCompilationDatabase(fs: BuildFileSystem, entry: BuildEntry): Promise<BuildProfile> {
   const profile: BuildProfile = {id:entry.id,entry,fingerprint:'',units:[],coverage:'partial',dependencies:[],relevantEnvironment:[],issues:[]};
@@ -36,11 +25,11 @@ export async function readCompilationDatabase(fs: BuildFileSystem, entry: BuildE
         const dialect=/^[A-Za-z]:[\\/]|^\\\\/.test(record.directory)?'windows':'posix';
         // Prefer argv: unlike command text, its quotes and metacharacters are literal.
         const argv=Array.isArray(record.arguments) && record.arguments.length && record.arguments.every((arg:unknown)=>typeof arg==='string')
-          ? record.arguments : record.arguments !== undefined ? undefined : typeof record.command==='string' ? splitBuildWords(record.command,dialect) : undefined;
-        if (!argv?.length || !argv[0] || argv.length > 4096 || argv.join(' ').length > 65_536) { invalid(); continue; }
-        if (record.arguments === undefined && shellEffects(record.command,dialect)) {
-          issue('unsupported-command',`Compilation database record ${index+1} contains shell expansion or compound commands.`); continue;
+          ? record.arguments : record.arguments !== undefined ? undefined : typeof record.command==='string' ? splitBuildWords(record.command,dialect,true) : undefined;
+        if (!argv && record.arguments === undefined && typeof record.command === 'string') {
+          issue('unsupported-command',`Compilation database record ${index+1} contains unsupported shell syntax or quoting.`); continue;
         }
+        if (!argv?.length || !argv[0] || argv.length > 4096 || argv.join(' ').length > 65_536) { invalid(); continue; }
         if (record.output !== undefined && typeof record.output !== 'string') { invalid(); continue; }
         const unit=await normalizeCompileContext({profileId:entry.id,sourceUri,cwdUri,argv,dialect,
           outputUri:record.output?resolveBuildUri(cwdUri,record.output):undefined,

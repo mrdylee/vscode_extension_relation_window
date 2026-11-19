@@ -46,6 +46,39 @@ test('shared if bodies and trailing C else preserve both assignments through mac
   }
 });
 
+test('literal elif in a split if keeps the shared macro assignments and only reachable headers', () => {
+  for (const [first, second, reachable] of [
+    ['BOARD', '1', ['left', 'middle']], ['BOARD', '(1U)', ['left', 'middle']], ['BOARD', '0', ['left', 'right']],
+    ['0', 'BOARD', ['middle', 'right']]
+  ] as const) {
+    const source = [
+      '#define SET(x) cb=x', 'typedef void(*CB)(void); void initial(void){} void yes(void){} void no(void){}',
+      'int left(void); int middle(void); int right(void); void run(void){CB cb=initial;',
+      '#if '+first, 'if(left())', '#elif '+second, 'if(middle())', '#else', 'if(right())', '#endif',
+      '{SET(yes);}else{SET(no);}cb();}'
+    ].join('\n');
+    const [file] = analyzer.derive([parse(source)]);
+    assert.deepEqual(file.issues, []);
+    const calls = file.references.filter(ref => ref.kind === 'call');
+    assert.deepEqual([...new Set(calls.filter(ref => ref.location.start === source.lastIndexOf('cb();') && ref.callKind === 'inferred').map(ref => ref.name))].sort(), ['no','yes']);
+    const headers = (refs: typeof calls) => [...new Set(refs.filter(ref => ref.kind === 'call' && ['left','middle','right'].includes(ref.name)).map(ref => ref.name))].sort();
+    assert.deepEqual(headers(calls), reachable);
+    const [allBranches] = analyzer.derive([parse(source, 'file:///demo/all.c', false)]);
+    assert.deepEqual(headers(allBranches.references), ['left','middle','right']);
+  }
+});
+
+test('local callback shadowing in a shared split-if body ends at the block boundary', () => {
+  const source = [
+    'typedef void(*CB)(void); void outer(void){} void inner(void){}',
+    'void run(int a,int b){CB cb=outer;', '#if 1', 'if(a)', '#else', 'if(b)', '#endif',
+    '{CB cb=inner;cb();}else{}cb();}'
+  ].join('\n');
+  const [file] = analyzer.derive([parse(source)]);
+  const calls = file.references.filter(ref => ref.callKind === 'inferred');
+  assert.deepEqual(calls.map(ref => [ref.location.start, ref.name]), [[source.indexOf('cb();'),'inner'],[source.lastIndexOf('cb();'),'outer']]);
+});
+
 test('shared if recovery retains malformed bodies and missing directives as syntax notices',()=>{
   for (const body of ['{broken(;}else{}', '{ok();}else{broken(;}', '{ok();}else{}']) {
     const source='void run(int a,int b){\n#ifdef FEATURE\nif(a)\n#else\nif(b)\n'+(body.includes('broken')?'#endif\n':'')+body+'}';

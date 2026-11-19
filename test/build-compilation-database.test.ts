@@ -67,3 +67,24 @@ test('database edits invalidate cached profiles and discovery',async()=>{
   const next=await cache.profile(entry,[],{});assert.notEqual(next.fingerprint,first.fingerprint);
   assert.equal(next.units[0].macroActions[0].replacement,'2');
 });
+
+test('Windows command quoting yields the same compile context as literal arguments', async () => {
+  const record = {directory: 'C:\\project', file: 'a.c'};
+  const args = ['gcc', '-DNAME="hello"', '-DTEXT="two & words"', '-IC:\\inc dir\\', '-c', 'a.c'];
+  const literal = await profile([{...record, arguments: args}]);
+  const parsed = await profile([{...record, command: String.raw`gcc -DNAME=\"hello\" "-DTEXT=\"two & words\"" "-IC:\inc dir\\" -c a.c`}]);
+  assert.deepEqual(parsed.issues, []);
+  assert.deepEqual(parsed.units, literal.units);
+});
+
+test('compilation database resolves filesystem percent and question marks literally', async () => {
+  const p = await profile([{directory:'/p/100%', file:'a?b.c', output:'out/a%23.o',
+    arguments:['gcc','-Iinc?#','@flags%20.rsp','-c','a?b.c']}], {'100%25/flags%2520.rsp':'-DMODE=2'});
+  assert.equal(p.units.length, 1);
+  const [unit] = p.units;
+  assert.equal(unit.sourceUri, 'file:///p/100%25/a%3Fb.c');
+  assert.equal(unit.outputUri, 'file:///p/100%25/out/a%2523.o');
+  assert.equal(unit.includeSearch[0].uri, 'file:///p/100%25/inc%3F%23');
+  assert.equal(unit.macroActions[0].replacement, '2');
+  assert.equal(unit.status, 'resolved');
+});

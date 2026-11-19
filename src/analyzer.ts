@@ -11,21 +11,13 @@ import { suggestPartialCallbacks } from './partial-callbacks';
 import { suggestExplicitCallbacks } from './explicit-callbacks';
 import { locationIn, tokenizeC } from './c-tokens';
 import { initializerPreprocessor, InitializerRecovery } from './initializer-preprocessor';
-import { splitStatement, hasUnsupportedSyntax } from './split-statements';
+import { splitStatement, hasUnsupportedSyntax, literalCondition, inactiveSplitHeaders } from './split-statements';
 import { RelationIndex } from './relations';
 import { FunctionArguments } from './function-arguments';
 
 function ancestor(node: Node, type: string): Node | null {
   for (let current = node.parent; current; current = current.parent) if (current.type === type) return current;
   return null;
-}
-// Unknown macros are not assumed undefined: the source folder has no build configuration.
-function constant(node: Node): boolean | undefined {
-  let text = node.text.replace(/\s/g, '');
-  while (text.startsWith('(') && text.endsWith(')')) text = text.slice(1, -1);
-  if (/^0(?:[uUlL]*)$/.test(text)) return false;
-  if (/^1(?:[uUlL]*)$/.test(text)) return true;
-  return undefined;
 }
 
 function access(node: Node): Access | undefined {
@@ -47,11 +39,14 @@ export async function createAnalyzer(runtime: string, grammar: string) {
   function parseSource(text: string, recovery?: InitializerRecovery, skipInactive = true) {
     const tree = parser.parse(text);
     if (!tree?.rootNode.hasError) return tree;
+    const splitInactive: {start: number; end: number}[] = [];
     const attributes: { start: number; end: number }[] = [], pending = [tree.rootNode];
     const directives: { start: number; end: number }[] = [];
     while (pending.length) {
       const node = pending.pop()!;
       if (['preproc_def', 'preproc_function_def', 'preproc_include', 'preproc_call'].includes(node.type)) directives.push({ start: node.startIndex, end: node.endIndex });
+      if (recovery && skipInactive && node.hasError && (node.type === 'preproc_if' || node.type === 'preproc_ifdef'))
+        splitInactive.push(...inactiveSplitHeaders(node));
       // Recover placement unsupported by this grammar, using only attribute
       // groups it parsed without errors. Malformed groups remain diagnostics.
       if (node.type === 'attribute_specifier' && !node.hasError && /^__attribute__?\s*\(/.test(node.text))
@@ -85,6 +80,7 @@ export async function createAnalyzer(runtime: string, grammar: string) {
       const valid = !!probe && !probe.rootNode.hasError;
       probe?.delete(); return valid;
     });
+    initializers.inactive.push(...splitInactive);
     if (recovery) Object.assign(recovery, initializers);
     attributes.push(...initializers.directives, ...initializers.inactive);
     if (!attributes.length) return tree;
@@ -131,14 +127,14 @@ export async function createAnalyzer(runtime: string, grammar: string) {
       branches.set(node.id, choices);
       if (['preproc_if', 'preproc_elif', 'preproc_ifdef', 'preproc_elifdef'].includes(node.type)) {
         const split = splitStatement(node, undefined);
-        if (split?.embedded) for (const shared of [split.shared, split.sharedAlternative, ...split.trailing ?? []]) if (shared) sharedContexts.set(shared.id, {context, choices});
+        if (split?.embeddedEndif) for (const shared of [split.shared, split.sharedAlternative, ...split.trailing ?? []]) if (shared) sharedContexts.set(shared.id, {context, choices});
         const condition = node.childForFieldName('condition') ?? node.childForFieldName('name');
         const alternative = node.childForFieldName('alternative');
-        const value = condition && ['preproc_if', 'preproc_elif'].includes(node.type) ? constant(condition) : undefined;
+        const value = condition && ['preproc_if', 'preproc_elif'].includes(node.type) ? literalCondition(condition) : undefined;
         const label = node.text.slice(0, node.text.indexOf('\n')).trim();
         const branch = {key: `${uri}:${node.startIndex}`, value: true, condition: label};
         if (skipInactive && value === false) (file.inactive ??= []).push({ start: condition!.endIndex, end: alternative?.startIndex ?? node.endIndex });
-        if (skipInactive && value === true && alternative) (file.inactive ??= []).push({ start: alternative.startIndex, end: split?.embedded ? split.shared.startIndex : alternative.endIndex });
+        if (skipInactive && value === true && alternative) (file.inactive ??= []).push({ start: alternative.startIndex, end: split?.embeddedEndif ? split.shared.startIndex : alternative.endIndex });
         if (!skipInactive || value !== false) {
           const next = value === true && skipInactive ? context : [...context, label];
           for (const child of node.namedChildren) {
@@ -148,7 +144,7 @@ export async function createAnalyzer(runtime: string, grammar: string) {
         if (alternative && (!skipInactive || value !== true)) {
           visit(alternative, value === false && skipInactive ? context : [...context, `else of ${label}`], value === false && skipInactive ? choices : [...choices, {...branch, value: false, condition: `else of ${label}`}]);
         }
-        if (split?.embedded) for (const shared of [split.shared, split.sharedAlternative, ...split.trailing ?? []]) if (shared && !conditions.has(shared.id)) visit(shared, context, choices);
+        if (split?.embeddedEndif) for (const shared of [split.shared, split.sharedAlternative, ...split.trailing ?? []]) if (shared && !conditions.has(shared.id)) visit(shared, context, choices);
         return;
       }
       // Preprocessor bodies are text, not compiled C; don't invent expanded calls.
@@ -164,7 +160,7 @@ export async function createAnalyzer(runtime: string, grammar: string) {
         if (split) {
           split.errors.forEach(id => splitErrors.add(id));
           const condition = children[n].childForFieldName('condition');
-          if (!skipInactive || !condition || constant(condition) === undefined)
+          if (!skipInactive || !condition || literalCondition(condition) === undefined)
             (file.splitStatements ??= []).push({start: children[n].startIndex, end: children[n].endIndex});
         }
       }

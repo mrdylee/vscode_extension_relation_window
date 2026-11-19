@@ -3,12 +3,21 @@ import { Node } from 'web-tree-sitter';
 export interface SplitStatement {
   shared: Node;
   sharedAlternative?: Node;
-  embedded?: boolean;
+  embeddedEndif?: Node;
   trailing?: Node[];
   headers: Map<number, 'body' | 'else'>;
   errors: Set<number>;
 }
 const conditional = new Set(['preproc_if', 'preproc_elif', 'preproc_ifdef', 'preproc_elifdef']);
+
+// Unknown macros are not assumed undefined: the source folder has no build configuration.
+export function literalCondition(node: Node): boolean | undefined {
+  let text = node.text.replace(/\s/g, '');
+  while (text.startsWith('(') && text.endsWith(')')) text = text.slice(1, -1);
+  if (/^0(?:[uUlL]*)$/.test(text)) return false;
+  if (/^1(?:[uUlL]*)$/.test(text)) return true;
+  return undefined;
+}
 
 // Tree-sitter may invent an empty if body before #endif, or detach a trailing
 // else. Bind only those exact fragments to the next complete source statement.
@@ -18,7 +27,10 @@ export function splitStatement(group: Node, shared: Node | undefined): SplitStat
   if (conditional.has(group.type) && group.children.some(child => child.type === '#endif' && child.isMissing)) {
     let last = group.childForFieldName('alternative');
     while (last?.childForFieldName('alternative')) last = last.childForFieldName('alternative');
-    const header = last?.namedChildren.filter(child => child.type !== 'comment');
+    const lastCondition = last?.childForFieldName('condition');
+    // A final literal-true elif covers the remaining configurations just like else.
+    const exhaustive = last?.type === 'preproc_else' || (lastCondition && literalCondition(lastCondition) === true);
+    const header = exhaustive ? last!.namedChildren.filter(child => child.type !== 'comment' && child.id !== lastCondition?.id) : undefined;
     const terminal = header?.[0]?.type === 'if_statement' ? header[0] : undefined;
     const trailing = header?.slice(1) ?? [];
     const body = terminal?.childForFieldName('consequence'), otherwise = terminal?.childForFieldName('alternative');
@@ -26,7 +38,7 @@ export function splitStatement(group: Node, shared: Node | undefined): SplitStat
     const errors = terminal?.namedChildren.filter(child => child.type === 'ERROR') ?? [];
     if (body && !body.hasError && otherwise && !otherwise.hasError && test && !test.hasError && !trailing.some(node=>node.hasError) &&
       errors.length === 1 && /^#\s*endif\s*$/.test(errors[0].text) && errors[0].startIndex >= test.endIndex && errors[0].endIndex <= body.startIndex) {
-      const result: SplitStatement = {shared: body, sharedAlternative: otherwise, embedded: true, trailing, headers: new Map([[terminal!.id, 'body']]),
+      const result: SplitStatement = {shared: body, sharedAlternative: otherwise, embeddedEndif: errors[0], trailing, headers: new Map([[terminal!.id, 'body']]),
         errors: new Set([errors[0].id, ...group.children.filter(child => child.type === '#endif' && child.isMissing).map(child => child.id)])};
       function prefix(node: Node): boolean {
         if (node.id === last!.id) return true;
@@ -63,6 +75,38 @@ export function splitStatement(group: Node, shared: Node | undefined): SplitStat
     return !alternative || branch(alternative);
   }
   return branch(group) ? result : undefined;
+}
+
+// Prune literal branches before reparsing, while keeping the shared body and
+// all source offsets intact. Macro expansion reuses the same inactive ranges.
+export function inactiveSplitHeaders(group: Node) {
+  const ranges: {start: number; end: number}[] = [];
+  const split = splitStatement(group, undefined), endif = split?.embeddedEndif;
+  if (!endif) return ranges;
+  let keptUnknown = false;
+  for (let branch: Node | null = group; branch; branch = branch.childForFieldName('alternative')) {
+    const condition = branch.childForFieldName('condition'), next = branch.childForFieldName('alternative');
+    const value = branch.type === 'preproc_else' ? true : condition ? literalCondition(condition) : undefined;
+    if (value === false && next) {
+      ranges.push({start: branch.startIndex, end: next.startIndex});
+    } else if (value === true) {
+      if (!keptUnknown) {
+        const header = branch.namedChildren.find(child => split.headers.has(child.id))!;
+        return [{start: group.startIndex, end: header.startIndex},
+          {start: header.childForFieldName('condition')!.endIndex, end: endif.endIndex}];
+      }
+      if (next) ranges.push({start: next.startIndex, end: endif.startIndex});
+      break;
+    } else {
+      if (!keptUnknown && branch.id !== group.id) {
+        // Promote the first surviving #elif to #if by blanking only 'el'.
+        const keyword = branch.firstChild!, start = keyword.startIndex + keyword.text.indexOf('elif');
+        ranges.push({start, end: start + 2});
+      }
+      keptUnknown = true;
+    }
+  }
+  return ranges;
 }
 
 export function hasUnsupportedSyntax(root: Node) {

@@ -156,7 +156,7 @@ for (const state of ['version', 'settings', 'manifest', 'record']) test('selecte
     await writeFile(path.join(path.dirname(manifest), data.generation, data.entries[0].name), 'damaged');
   }
   const before = await readFile(manifest, 'utf8'), next = s.open(); await next.settle();
-  assert.match(next.workspace.status, state === 'version' ? /14.*20/ : state === 'settings' ? /settings changed/ : /damaged/);
+  assert.match(next.workspace.status, state === 'version' ? /14.*21/ : state === 'settings' ? /settings changed/ : /damaged/);
   assert.equal(next.workspace.copilotWaitReason, 'cache-rebuild-required');
   assert.equal(next.workspace.diagnostics.index.sourceParses, 0);
   assert.equal(await readFile(manifest, 'utf8'), before, 'restoration must not replace rejected cache data');
@@ -236,7 +236,7 @@ for (const action of ['rebuild', 'scope', 'callbacks', 'folders']) test('slow bu
   assert.equal(next.messages.filter(message => message.type === 'cache-init').length, 0, 'no basic cache is opened before build initialization');
   pause.released.resolve(); await next.settle(); if (pending) await bounded(pending); await bounded(next.workspace.whenIdle());
   assert.equal(next.workspace.buildProfile.id, profile.id);
-  assert.doesNotMatch(next.workspace.status, /14.*20/);
+  assert.doesNotMatch(next.workspace.status, /14.*21/);
   assert.equal(await readFile(s.base, 'utf8'), base);
 });
 
@@ -309,7 +309,7 @@ test('unselected startup retains version checks without an extra source discover
   const s = await scenario(t), first = s.open(); await first.settle(); await first.close();
   await updateManifest(s.base, data => { data.analysisVersion = 14; });
   const next = s.open(); await next.settle();
-  assert.match(next.workspace.status, /14.*20/);
+  assert.match(next.workspace.status, /14.*21/);
   assert.equal(next.discoveries, 0);
   assert.equal(next.workspace.diagnostics.index.sourceParses, 0);
 });
@@ -351,7 +351,7 @@ test('typing cannot replace a rejected selected cache or clear its rebuild requi
   const document = { uri: Uri.parse(root + '/main.c'), isClosed: false, isDirty: true, getText: () => source + '\n' };
   next.adapter.textDocuments = [document]; next.edited.fire({ document, contentChanges: [{}] }); await next.settle();
   assert.equal(next.workspace.copilotWaitReason, 'cache-rebuild-required');
-  assert.match(next.workspace.status, /14.*20/);
+  assert.match(next.workspace.status, /14.*21/);
   assert.equal(await readFile(filename, 'utf8'), before);
 });
 test('discarded unsaved edits do not defer an unchanged selected-build cache after restart', async t => {

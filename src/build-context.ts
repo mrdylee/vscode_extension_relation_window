@@ -64,19 +64,35 @@ export function canonicalBuildUri(uri:string,nocase=process.platform==='win32') 
 }
 export function resolveBuildUri(cwd: string, name: string) {
   if (/^[a-z][\w+.-]*:\/\//i.test(name)) return new URL(name).href.replace(/\/$/, '');
-  name = name.replace(/\\/g, '/');
-  if (/^[A-Za-z]:\//.test(name)) return new URL('file:///' + name.replace(/#/g, '%23')).href.replace(/\/$/, '');
+  // The remaining input is a filesystem path, including literal URI delimiters.
+  name = name.replace(/\\/g, '/').replace(/%/g, '%25').replace(/\?/g, '%3F').replace(/#/g, '%23');
+  if (/^[A-Za-z]:\//.test(name)) return new URL('file:///' + name).href.replace(/\/$/, '');
   if (name.startsWith('//')) return new URL('file:' + name).href.replace(/\/$/, '');
-  return new URL(name.replace(/#/g, '%23'), cwd.replace(/\/$/, '') + '/').href.replace(/\/$/, '');
+  return new URL(name, cwd.replace(/\/$/, '') + '/').href.replace(/\/$/, '');
 }
 // This is tokenization only: no shell expansion, substitution or process execution.
-export function splitBuildWords(text: string, dialect: 'posix' | 'windows' = 'posix'): string[] | undefined {
+export function splitBuildWords(text: string, dialect: 'posix' | 'windows' = 'posix', rejectShellEffects = false): string[] | undefined {
   const words: string[] = []; let word = '', quote = '', started = false;
   for (let n = 0; n < text.length; n++) {
-    const c = text[n];
+    let c = text[n];
+    if (dialect === 'windows' && c === '\\') {
+      const start = n;
+      while (text[n + 1] === '\\') n++;
+      const count = n - start + 1, beforeQuote = text[n + 1] === '"';
+      word += '\\'.repeat(beforeQuote ? Math.floor(count / 2) : count);
+      started = true;
+      if (!beforeQuote) continue;
+      c = text[++n];
+      if (count % 2) { word += '"'; continue; }
+    }
+    if (dialect === 'windows' && c === '"' && quote && text[n + 1] === '"') {
+      word += '"'; n++; continue;
+    }
     if (c === '\\' && dialect === 'posix' && quote !== "'" && n + 1 < text.length &&
       (!quote || /[\s"\\$`]/.test(text[n + 1]))) { word += text[++n]; started = true; continue; }
     if ((c === '"' || (c === "'" && dialect === 'posix')) && (!quote || quote === c)) { quote = quote ? '' : c; started = true; continue; }
+    if (rejectShellEffects && ((!quote && /[;&|<>]/.test(c)) ||
+      (quote !== "'" && /[$`]/.test(c)) || (dialect === 'windows' && c === '%'))) return;
     if (!quote && /\s/.test(c)) { if (started) { words.push(word); word = ''; started = false; } }
     else { word += c; started = true; }
   }
