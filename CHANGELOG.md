@@ -1,8 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.1.101 — 2026-11-19
 
 - Select `compile_commands.json` as a read-only build configuration to confirm recorded source membership without interpreting or running build scripts. Preserve multiple configurations and response-file dependencies. Unrecorded files remain unknown; a partial command database never proves exclusion or final link coverage.
+- Preserve escaped quotes in Windows compile commands and literal percent signs, question marks and hash characters in build paths.
 - Allow up to 64 macro expansion alternatives for an initializer, while function bodies retain their 32-alternative bound. Work, token, nesting, memory and cancellation protections still apply; omitted alternatives remain partial.
 - Recover preprocessor-selected `if` headers that share a body and a trailing C `else`. Preserve common statements, source locations and literal branch selection, and keep real syntax errors visible.
 - Preserve retained preprocessor directives during macro expansion and invalidate older analysis caches (compatibility version 21). Rebuild the index after installing this change.
