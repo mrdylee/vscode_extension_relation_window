@@ -113,6 +113,7 @@ export async function createAnalyzer(runtime: string, grammar: string) {
     const nodes: Node[] = [];
     const conditions = new Map<number, string[]>();
     const branches = new Map<number, import('./model').MacroBranch[]>();
+    const sharedContexts = new Map<number, {context: string[]; choices: import('./model').MacroBranch[]}>();
     const declarationNames = new Set<number>();
     const functionOwners = new Map<number, string>();
     const initializerOwners = new Map<number, string>();
@@ -122,18 +123,22 @@ export async function createAnalyzer(runtime: string, grammar: string) {
       endLine: node.endPosition.row, endColumn: node.endPosition.column });
 
     function visit(node: Node, context: string[], choices: import('./model').MacroBranch[] = []) {
+      const shared = sharedContexts.get(node.id);
+      if (shared) { context = shared.context; choices = shared.choices; }
       const recovered = recovery.contexts.find(range => node.startIndex >= range.start && node.startIndex < range.end);
       nodes.push(node);
       conditions.set(node.id, recovered ? [...context, ...recovered.conditions] : context);
       branches.set(node.id, choices);
       if (['preproc_if', 'preproc_elif', 'preproc_ifdef', 'preproc_elifdef'].includes(node.type)) {
+        const split = splitStatement(node, undefined);
+        if (split?.embedded) for (const shared of [split.shared, split.sharedAlternative, ...split.trailing ?? []]) if (shared) sharedContexts.set(shared.id, {context, choices});
         const condition = node.childForFieldName('condition') ?? node.childForFieldName('name');
         const alternative = node.childForFieldName('alternative');
         const value = condition && ['preproc_if', 'preproc_elif'].includes(node.type) ? constant(condition) : undefined;
         const label = node.text.slice(0, node.text.indexOf('\n')).trim();
         const branch = {key: `${uri}:${node.startIndex}`, value: true, condition: label};
         if (skipInactive && value === false) (file.inactive ??= []).push({ start: condition!.endIndex, end: alternative?.startIndex ?? node.endIndex });
-        if (skipInactive && value === true && alternative) (file.inactive ??= []).push({ start: alternative.startIndex, end: alternative.endIndex });
+        if (skipInactive && value === true && alternative) (file.inactive ??= []).push({ start: alternative.startIndex, end: split?.embedded ? split.shared.startIndex : alternative.endIndex });
         if (!skipInactive || value !== false) {
           const next = value === true && skipInactive ? context : [...context, label];
           for (const child of node.namedChildren) {
@@ -143,6 +148,7 @@ export async function createAnalyzer(runtime: string, grammar: string) {
         if (alternative && (!skipInactive || value !== true)) {
           visit(alternative, value === false && skipInactive ? context : [...context, `else of ${label}`], value === false && skipInactive ? choices : [...choices, {...branch, value: false, condition: `else of ${label}`}]);
         }
+        if (split?.embedded) for (const shared of [split.shared, split.sharedAlternative, ...split.trailing ?? []]) if (shared && !conditions.has(shared.id)) visit(shared, context, choices);
         return;
       }
       // Preprocessor bodies are text, not compiled C; don't invent expanded calls.
@@ -155,7 +161,12 @@ export async function createAnalyzer(runtime: string, grammar: string) {
       const children = node.namedChildren.filter(child => child.type !== 'comment');
       for (let n = 0; n < children.length; n++) {
         const split = splitStatement(children[n], children[n + 1]);
-        if (split) { split.errors.forEach(id => splitErrors.add(id)); (file.splitStatements ??= []).push({start: children[n].startIndex, end: children[n].endIndex}); }
+        if (split) {
+          split.errors.forEach(id => splitErrors.add(id));
+          const condition = children[n].childForFieldName('condition');
+          if (!skipInactive || !condition || constant(condition) === undefined)
+            (file.splitStatements ??= []).push({start: children[n].startIndex, end: children[n].endIndex});
+        }
       }
     }
     const top = tree.rootNode.namedChildren.filter(node => node.type !== 'comment');
@@ -205,8 +216,10 @@ export async function createAnalyzer(runtime: string, grammar: string) {
       return symbol;
     }
     for (const node of nodes) {
+      if (node.type === 'ERROR' && splitErrors.has(node.id) && /^#\s*endif\s*$/.test(node.text))
+        (file.directives ??= []).push({start:node.startIndex,end:node.endIndex});
       if (node.type.startsWith('preproc_')) for (const child of node.children) {
-        if (!child.type.startsWith('#') && child.type !== 'preproc_directive') continue;
+        if (child.isMissing || !child.type.startsWith('#') && child.type !== 'preproc_directive') continue;
         let end = text.indexOf('\n', child.startIndex);
         while (end >= 0 && /\\\r?$/.test(text.slice(child.startIndex, end))) end = text.indexOf('\n', end + 1);
         (file.directives ??= []).push({ start: child.startIndex, end: end < 0 ? text.length : end + 1 });

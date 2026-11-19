@@ -6,9 +6,10 @@ import { runInNewContext } from 'node:vm';
 import { buildFixture } from './build-fixtures';
 
 const require = createRequire(process.cwd() + '/package.json');
-test('build configuration discovery stays read-only and selection applies only a proven entry', async () => {
+for (const kind of ['make', 'compilation-database']) test(`${kind}: discovery stays read-only and selection applies only a proven entry`, async () => {
   const bundle = buildSync({ entryPoints: ['src/build-service.ts'], bundle: true, write: false, platform: 'node', format: 'cjs', external: ['vscode', 'web-tree-sitter'] }).outputFiles[0].text;
-  const f = buildFixture({ Makefile: 'CC=gcc\na.o: App/a.c\n\t$(CC) -DMODE=1 -c $<' }), commands = new Map<string, Function>(), saved = new Map();
+  const f = buildFixture(kind==='make' ? { Makefile: 'CC=gcc\na.o: App/a.c\n\t$(CC) -DMODE=1 -c $<' }
+    : { 'compile_commands.json': JSON.stringify([{directory:'/p',file:'App/a.c',arguments:['gcc','-DMODE=1','-c','App/a.c']}]) }), commands = new Map<string, Function>(), saved = new Map();
   const disposable = { dispose() {} }, emitter = { event: () => disposable, fire() {} };
   const uri = (value: string) => ({ toString: () => value, path: new URL(value).pathname });
   let applied: any;const previews:string[]=[];
@@ -34,6 +35,7 @@ test('build configuration discovery stays read-only and selection applies only a
     assert.match((workspace as any).buildStatus.label,/No build selected/);
     await commands.get('dynsight.selectBuildConfiguration')!();
     assert.equal((applied as any).units[0].sourceUri, 'file:///p/App/a.c');
+    assert.equal((applied as any).entry.dialect,kind);
     assert.equal((applied as any).units[0].macroActions[0].replacement, '1');
     assert.equal(saved.size, 1);
     const reads = f.reads.length; await service.refresh(); assert.equal(f.reads.length, reads);

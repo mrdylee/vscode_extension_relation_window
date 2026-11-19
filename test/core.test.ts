@@ -34,6 +34,25 @@ test('split if headers preserve alternative condition side effects',()=>{
   assert.deepEqual([...new Set(file.references.filter(ref=>ref.callKind==='inferred'&&ref.location.start===source.lastIndexOf('cb();')).map(ref=>ref.name))].sort(),['first','second']);
 });
 
+test('shared if bodies and trailing C else preserve both assignments through macro expansion',()=>{
+  for (const directive of ['#ifdef FEATURE', '#if 0', '#if 1']) {
+    const source='#define FEATURE\n#define SET(x) cb=x\ntypedef void(*CB)(void);void first(void){}void yes(void){}void no(void){}void after(void){}void run(int a,int b){CB cb=first;\n'+directive+'\nif(a)\n#else\nif(b)\n#endif\n{SET(yes);}else{SET(no);}cb();after();}';
+    const raw=parse(source); assert.deepEqual(raw.issues,[],directive);
+    const [file]=analyzer.derive([raw]); assert.deepEqual(file.issues,[],directive);
+    assert.deepEqual([...new Set(file.references.filter(ref=>ref.callKind==='inferred'&&ref.location.start===source.lastIndexOf('cb();')).map(ref=>ref.name))].sort(),['no','yes'],directive);
+    assert.ok(file.references.some(ref=>ref.name==='after'&&ref.kind==='call'));
+    const common=raw.references.filter(ref=>['yes','no'].includes(ref.name)&&ref.location.start>source.indexOf('void run'));
+    assert.ok(common.length); assert.ok(common.every(ref=>!ref.conditions.length));
+  }
+});
+
+test('shared if recovery retains malformed bodies and missing directives as syntax notices',()=>{
+  for (const body of ['{broken(;}else{}', '{ok();}else{broken(;}', '{ok();}else{}']) {
+    const source='void run(int a,int b){\n#ifdef FEATURE\nif(a)\n#else\nif(b)\n'+(body.includes('broken')?'#endif\n':'')+body+'}';
+    assert.ok(analyzer.calls('file:///malformed.c',source).issues.length,source);
+  }
+});
+
 test('split-statement recovery keeps genuine syntax errors and explicit empty if bodies',()=>{
   const malformed='void run(int a){\n#if BOARD\nif(a){}else\n#endif\n{broken(;} }';
   assert.ok(parse(malformed).issues.length);

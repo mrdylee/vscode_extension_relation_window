@@ -1,5 +1,5 @@
 import { BuildDiscovery, BuildFileSystem, buildDirectory, canonicalBuildUri, fingerprintBuildInput } from './build-context';
-import { BuildEntry, BuildProfile } from './build-context';
+import { BuildEntry, BuildProfile, buildEntryDialect } from './build-context';
 import { extractStaticBuildOptions } from './build-options';
 
 export class BuildMetadataCache implements BuildFileSystem {
@@ -48,7 +48,7 @@ export class BuildMetadataCache implements BuildFileSystem {
   }
   invalidate(uri: string, structure = false) {
     uri=canonicalBuildUri(uri);
-    const parent = buildDirectory(uri), metadata = /(?:\/(?:GNUmakefile|[Mm]akefile)|\.(?:mk|sh|bat|cmd))$/i.test(uri);
+    const parent = buildDirectory(uri), metadata = /(?:\/(?:GNUmakefile|[Mm]akefile|compile_commands\.json)|\.(?:mk|sh|bat|cmd))$/i.test(uri);
     const within=(path:string)=>path===uri||path.startsWith(uri+'/');
     const descendants=structure&&([...this.dependencies].some(within)||[...this.directories.keys()].some(within));
     if (!this.dependencies.has(uri) && !((metadata || structure) && this.directories.has(parent)) && !descendants) return false;
@@ -78,9 +78,9 @@ export async function discoverBuildEntries(fs: BuildFileSystem, request: { rootU
   const add = (uri: string, explicit = false) => {
     if (!result.candidates.includes(uri)) result.candidates.push(uri);
     const name = decodeURIComponent(uri.split('/').pop()!);
-    if (!explicit && !/^(?:GNUmakefile|[Mm]akefile)$|\.(?:sh|bat|cmd)$/i.test(name)) return;
-    const dialect = /\.(?:bat|cmd)$/i.test(name) ? 'cmd' : /\.sh$/i.test(name) ? 'sh' : 'make';
-    result.entries.push({ id: fingerprintBuildInput([root, uri]), rootUri: root, entryUri: uri, cwdUri: dialect === 'make' ? buildDirectory(uri) : root, dialect, args: [], evidence: [] });
+    if (!explicit && !/^(?:GNUmakefile|[Mm]akefile|compile_commands\.json)$|\.(?:sh|bat|cmd)$/i.test(name)) return;
+    const dialect = buildEntryDialect(uri);
+    result.entries.push({ id: fingerprintBuildInput([root, uri]), rootUri: root, entryUri: uri, cwdUri: dialect === 'make' || dialect === 'compilation-database' ? buildDirectory(uri) : root, dialect, args: [], evidence: [] });
   };
   for (const directory of directories) {
     if (shouldCancel?.()) { result.issues.push({ code: 'cancelled', message: 'Build discovery cancelled' }); break; }
@@ -92,7 +92,7 @@ export async function discoverBuildEntries(fs: BuildFileSystem, request: { rootU
       if (++visits > 20_000) break;
       if (entry.kind !== 'file') continue;
       const name = decodeURIComponent(entry.uri.split('/').pop()!);
-      if (/^(?:GNUmakefile|[Mm]akefile)$|\.mk$/i.test(name) || directory === root && /\.(?:sh|bat|cmd)$/i.test(name)) add(entry.uri);
+      if (/^(?:GNUmakefile|[Mm]akefile|compile_commands\.json)$|\.mk$/i.test(name) || directory === root && /\.(?:sh|bat|cmd)$/i.test(name)) add(entry.uri);
     }
     if (visits > 20_000) { result.issues.push({ code: 'discovery-limited', message: 'Build discovery visited 20,000 entries' }); break; }
   }

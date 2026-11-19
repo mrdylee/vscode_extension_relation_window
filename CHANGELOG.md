@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Select `compile_commands.json` as a read-only build configuration to confirm recorded source membership without interpreting or running build scripts. Preserve multiple configurations and response-file dependencies. Unrecorded files remain unknown; a partial command database never proves exclusion or final link coverage.
+- Allow up to 64 macro expansion alternatives for an initializer, while function bodies retain their 32-alternative bound. Work, token, nesting, memory and cancellation protections still apply; omitted alternatives remain partial.
+- Recover preprocessor-selected `if` headers that share a body and a trailing C `else`. Preserve common statements, source locations and literal branch selection, and keep real syntax errors visible.
+- Preserve retained preprocessor directives during macro expansion and invalidate older analysis caches (compatibility version 20). Rebuild the index after installing this change.
+
 ## 0.1.100 — 2026-11-08
 
 - Play one of 20 animated Salgu scenes in the visible, focused Relation view. Each appearance draws a fresh random interval of 10–20 seconds from the previous appearance's start.

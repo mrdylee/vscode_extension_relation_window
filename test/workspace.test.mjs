@@ -371,6 +371,18 @@ test('selected unresolved Build exposes the same basic callback index used by na
   assert.equal(workspace.index.files.size,0,'a verified empty build remains an empty projection');
   assert.equal(workspace.buildMembership(file.toString()),'excluded');
 });
+test('a recorded compile command confirms membership while an unrecorded source stays unknown',async t=>{
+  const recorded=uri('recorded.c'),unrecorded=uri('unrecorded.c');
+  const {workspace}=fixture(t,[recorded,unrecorded],{sources:new Map([[recorded.toString(),'void recorded(void){}'],[unrecorded.toString(),'void unrecorded(void){}']])});
+  await workspace.ready;await bounded(workspace.whenIdle());
+  await workspace.setBuildProfile({id:'database',fingerprint:'recorded-command',entry:{id:'database',rootUri:'file:///review',entryUri:'file:///review/compile_commands.json',cwdUri:'file:///review',dialect:'compilation-database',args:[],evidence:[]},
+    units:[{id:'recorded',fingerprint:'recorded',profileId:'database',sourceUri:recorded.toString(),cwdUri:'file:///review',argv:['gcc','-funknown-option','-c','recorded.c'],dialect:'posix',compiler:'gcc',status:'partial',membership:'included',builtins:'unknown',macroActions:[],includeSearch:[],forcedInputs:[],dependencies:[],evidence:[],issues:[{code:'unsupported-option',message:'Unverified option'}]}],
+    coverage:'partial',dependencies:[],relevantEnvironment:[],issues:[]});
+  await bounded(workspace.whenIdle());
+  assert.equal(workspace.buildMembership(recorded.toString()),'included');
+  assert.equal(workspace.buildMembership(unrecorded.toString()),'unknown');
+  assert.ok(workspace.indexFor(unrecorded.toString()).files.has(unrecorded.toString()),'unrecorded source navigation remains available');
+});
 test('build profile changes discard a delayed previous result and preserve basic source navigation', async t => {
   const file = uri('build-main.c'), source = 'typedef void(*CB)(void);void first(void){}void second(void){}\n#if MODE==1\nCB saved=first;\n#else\nCB saved=second;\n#endif\nvoid run(void){saved();}';
   const { workspace } = fixture(t, [file], { sources: new Map([[file.toString(), source]]) });

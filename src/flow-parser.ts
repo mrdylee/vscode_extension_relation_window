@@ -169,7 +169,7 @@ export function flowFacts(root: Node, uri: string, locate: Locate, active?: Set<
         const children=current.namedChildren.filter(child=>child.type!=='comment'),result:Statement[]=[];
         for(let n=0;n<children.length;n++){
           const split=splitStatement(children[n],children[n+1]);
-          if(split){result.push(...completeSplit(children[n],split));n++;}else result.push(...statements(children[n]));
+          if(split){result.push(...completeSplit(children[n],split),...(split.trailing??[]).flatMap(statements));if(!split.embedded)n++;}else result.push(...statements(children[n]));
         }
         return result;
       }
@@ -177,11 +177,11 @@ export function flowFacts(root: Node, uri: string, locate: Locate, active?: Set<
         const mode=split.headers.get(current.id);
         if(mode){
           const previous=structuralConditions;structuralConditions=new Set([...previous,...(context?.(current)??[])]);
-          const result:Statement[]=[{kind:'branch',condition:expr(current.childForFieldName('condition')),then:statements(mode==='body'?split.shared:current.childForFieldName('consequence')),otherwise:mode==='else'?statements(split.shared):[]}];
+          const result:Statement[]=[{kind:'branch',condition:expr(current.childForFieldName('condition')),then:statements(mode==='body'?split.shared:current.childForFieldName('consequence')),otherwise:mode==='else'?statements(split.shared):statements(split.sharedAlternative)}];
           structuralConditions=previous;return result;
         }
         const condition=current.childForFieldName('condition')??current.childForFieldName('name'),alternative=current.childForFieldName('alternative');
-        const yes=current.namedChildren.filter(child=>child.id!==condition?.id&&child.id!==alternative?.id&&child.type!=='comment'&&!split.errors.has(child.id)).flatMap(child=>completeSplit(child,split));
+        const yes=current.namedChildren.filter(child=>child.id!==condition?.id&&child.id!==alternative?.id&&child.type!=='comment'&&!split.errors.has(child.id)&&!split.trailing?.some(tail=>tail.id===child.id)).flatMap(child=>completeSplit(child,split));
         if(current.type==='preproc_else')return yes;
         const no=alternative?completeSplit(alternative,split):statements(split.shared),literal=condition?.text.replace(/[()\s]/g,'');
         if(skipInactive&&(literal==='0'||literal==='1'))return literal==='0'?no:yes;

@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import type { WorkspaceIndex } from './workspace';
 import { BuildMetadataCache } from './build-discovery';
-import { BuildEntry, BuildFileSystem, BuildProfile, BuildIssue, fingerprintBuildInput, resolveBuildUri, splitBuildWords } from './build-context';
+import { BuildEntry, BuildFileSystem, BuildProfile, BuildIssue, buildEntryDialect, fingerprintBuildInput, resolveBuildUri, splitBuildWords } from './build-context';
 
 const storageKey = 'buildConfiguration-v1';
 export function registerBuildConfigurations(context: vscode.ExtensionContext, workspace: WorkspaceIndex) {
@@ -10,7 +10,7 @@ export function registerBuildConfigurations(context: vscode.ExtensionContext, wo
     readText: async uri => {
       try {
         const data = await vscode.workspace.fs.readFile(vscode.Uri.parse(uri));
-        return data.byteLength > 1_048_576 ? undefined : Buffer.from(data).toString('utf8');
+        return data.byteLength > (/\/compile_commands\.json$/i.test(uri) ? 16*1024*1024 : 1_048_576) ? undefined : Buffer.from(data).toString('utf8');
       } catch (error) { if (missing(error)) return; throw error; }
     },
     list: async uri => {
@@ -88,12 +88,12 @@ export function registerBuildConfigurations(context: vscode.ExtensionContext, wo
     if (!choice || disposed) return;
     let entry = choice.entry;
     if (choice.label === 'Choose build entry file…') {
-      const files = await vscode.window.showOpenDialog({ canSelectMany: false, canSelectFiles: true, canSelectFolders: false, title: 'Select an existing build script or Makefile' });
+      const files = await vscode.window.showOpenDialog({ canSelectMany: false, canSelectFiles: true, canSelectFolders: false, title: 'Select a Makefile, build script or compile_commands.json' });
       const file = files?.[0]; if (!file) return;
       const folder = vscode.workspace.getWorkspaceFolder(file); if (!folder) { await vscode.window.showErrorMessage('Choose a build entry inside an open workspace folder.'); return; }
       const rootUri = folder.uri.toString().replace(/\/$/, ''), uri = file.toString();
-      const dialect = /\.(bat|cmd)$/i.test(uri) ? 'cmd' : /\.sh$/i.test(uri) ? 'sh' : 'make';
-      entry = { id: fingerprintBuildInput([rootUri, uri]), rootUri, entryUri: uri, cwdUri: dialect === 'make' ? uri.slice(0, uri.lastIndexOf('/')) : rootUri, dialect, args: [], evidence: [] };
+      const dialect = buildEntryDialect(uri);
+      entry = { id: fingerprintBuildInput([rootUri, uri]), rootUri, entryUri: uri, cwdUri: dialect === 'make' || dialect === 'compilation-database' ? uri.slice(0, uri.lastIndexOf('/')) : rootUri, dialect, args: [], evidence: [] };
     }
     if (entry) {
       const preview = await cache.profile(entry, sources(), process.env);

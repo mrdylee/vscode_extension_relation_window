@@ -337,7 +337,9 @@ export function deriveMacroCalls(raw: FileAnalysis[], analyze: Analyze, parseCal
       if (shouldCancel?.()) { issues.add(macroCancelled); return init; }
       if (memoryPressure?.()) { issues.add(macroMemoryLimit); return init; }
       const tokens = tokenizeC(activeText(file, init.location.start, init.location.end), (start, end) => sourceLocation(init.location.start + start, init.location.start + end));
-      const expander = new MacroExpander(lookup, memoryPressure, shouldCancel, budget, init.id), variants = expander.expand(tokens);
+      // Aggregate initializers combine independent field constants. Keep their
+      // finite allowance separate from function bodies; work/heap bounds remain.
+      const expander = new MacroExpander(lookup, memoryPressure, shouldCancel, budget, init.id, 64), variants = expander.expand(tokens);
       expander.issues.forEach(issue => issues.add(issue));
       const incomplete = [...expander.issues, ...[...issues].filter(issue => issue.startsWith('Macro environment'))].filter(issue => /limit|budget/.test(issue));
       if (budget?.projectExhausted) return init;
@@ -368,7 +370,7 @@ export function deriveMacroCalls(raw: FileAnalysis[], analyze: Analyze, parseCal
     for (const fn of file.functions ?? []) {
       if (shouldCancel?.()) return partial(macroCancelled);
       if (memoryPressure?.()) return partial(macroMemoryLimit);
-      const tokens = tokenizeC(activeText(file, fn.body.start, fn.body.end), (start, end) => sourceLocation(fn.body.start + start, fn.body.start + end));
+      const tokens = tokenizeC(activeText(file, fn.body.start, fn.body.end), (start, end) => sourceLocation(fn.body.start + start, fn.body.start + end), true);
       const expander = new MacroExpander(lookup, memoryPressure, shouldCancel, budget, fn.id), variants = expander.expand(tokens);
       expander.issues.forEach(issue => issues.add(issue));
       const incomplete = [...expander.issues, ...[...issues].filter(issue => issue.startsWith('Macro environment'))].filter(issue => /limit|budget/.test(issue));

@@ -23,7 +23,7 @@ export function macroArguments(tokens: CToken[], open: number): Arguments | unde
 export class MacroExpander {
   readonly issues = new Set<string>();
   private operations = 0;
-  constructor(private lookup: (name: string, offset: number) => MacroChoice[], private memoryPressure?: () => boolean, private shouldCancel?: () => boolean, private budget?: AnalysisWorkBudget, private scope = 'macros') {}
+  constructor(private lookup: (name: string, offset: number) => MacroChoice[], private memoryPressure?: () => boolean, private shouldCancel?: () => boolean, private budget?: AnalysisWorkBudget, private scope = 'macros', private alternativeLimit = 32) {}
   expand(input: CToken[], nesting = 0, branches: MacroBranch[] = []): ExpansionVariant[] {
     if (this.shouldCancel?.()) { this.issues.add('Macro analysis cancelled; call relationships may be incomplete.'); return [{ tokens: input, changed: false, conditions: [], branches }]; }
     if (this.memoryPressure?.()) {
@@ -35,7 +35,7 @@ export class MacroExpander {
     }
     const pending = [{ tokens: input, changed: false, conditions: branches.map(branch => branch.condition), branches, index: 0 }];
     const output: ExpansionVariant[] = [];
-    while (pending.length && output.length < 32) {
+    while (pending.length && output.length < this.alternativeLimit) {
       const variant = pending.pop()!;
       let branched = false;
       while (variant.index < variant.tokens.length) {
@@ -54,7 +54,7 @@ export class MacroExpander {
           this.issues.add(macroMemoryLimit); return [{ tokens: input, changed: false, conditions: [], branches }];
         }
         const token = variant.tokens[variant.index];
-        if (!identifier.test(token.text) || token.hidden?.includes(token.text)) { variant.index++; continue; }
+        if (token.directive || !identifier.test(token.text) || token.hidden?.includes(token.text)) { variant.index++; continue; }
         const choices = this.lookup(token.text, token.location.start);
         if (!choices.length) { variant.index++; continue; }
         const options: typeof pending = [];
@@ -100,9 +100,9 @@ export class MacroExpander {
         }
         if (options.length === 1) Object.assign(variant, options[0]);
         else {
-          const room = 32 - output.length - pending.length;
+          const room = this.alternativeLimit - output.length - pending.length;
           pending.push(...options.slice(0, Math.max(0, room)));
-          if (options.length > room || choices.length > 32) this.issues.add('Macro expansion alternative limit: 32 candidates');
+          if (options.length > room) this.issues.add(`Macro expansion alternative limit: ${this.alternativeLimit} candidates`);
           branched = true; break;
         }
       }
@@ -140,7 +140,7 @@ export class MacroExpander {
       const used = body.some((token, i) => token.text === name && body[i - 1]?.text !== '#' && body[i - 1]?.text !== '##' && body[i + 1]?.text !== '##');
       const next: typeof variants = [];
       for (const variant of variants) for (const choice of used ? this.expand(tokens, nesting + 1, variant.branches) : [{ tokens, conditions: [], changed: false, branches: variant.branches }]) {
-        if (next.length >= 32) { this.issues.add('Macro argument alternative limit: 32 candidates'); break; }
+        if (next.length >= this.alternativeLimit) { this.issues.add(`Macro argument alternative limit: ${this.alternativeLimit} candidates`); break; }
         next.push({ args: new Map(variant.args).set(name, choice.tokens), conditions: [...variant.conditions, ...choice.conditions], branches: choice.branches });
       }
       variants = next;

@@ -2,6 +2,7 @@ import { BuildEntry, BuildEvidence, BuildFileSystem, BuildProfile, buildDirector
 
 import { expandMake, makePattern, MakeVariable } from './build-make-expression';
 import { MAKE_EXTRACTION_VERSION, MakeStatement, parseMakefile } from './build-make-parser';
+import { readCompilationDatabase } from './build-compilation-database';
 type Variable = MakeVariable;
 interface Rule { targets: string[]; prerequisites: string[]; recipes: { text: string; evidence: BuildEvidence }[] }
 const unknown = '\u0000';
@@ -16,6 +17,7 @@ function logicalLines(text: string, continuation = '\\') {
   return result;
 }
 export async function extractStaticBuildOptions(fs: BuildFileSystem, entry: BuildEntry, sourceUris: readonly string[], environment: Record<string, string | undefined>): Promise<BuildProfile> {
+  if (entry.dialect === 'compilation-database') return readCompilationDatabase(fs, entry);
   const profile: BuildProfile = { id: entry.id, entry, fingerprint: '', units: [], coverage: 'partial', dependencies: [], relevantEnvironment: [], issues: [] };
   const readCache = new Map<string, string | undefined>(), dependencies = new Map<string, string>(), usedEnvironment = new Set<string>();
   const knownSources = new Set(sourceUris.map(uri=>canonicalBuildUri(uri))), prerequisiteDirectories = new Map<string, Set<string>>();

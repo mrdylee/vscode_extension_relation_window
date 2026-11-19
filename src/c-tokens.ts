@@ -6,20 +6,26 @@ export interface CToken {
   invocation?: Location;
   hidden?: string[];
   unexpanded?: boolean;
+  directive?: boolean;
 }
 export const identifier = /^[A-Za-z_][A-Za-z_0-9]*$/;
 // Translation-phase line splicing occurs before comments and tokenization.
-export function tokenizeC(source: string, location: (start: number, end: number) => Location): CToken[] {
+export function tokenizeC(source: string, location: (start: number, end: number) => Location, preserveDirectives = false): CToken[] {
   let text = ''; const positions: number[] = [];
   for (let i = 0; i < source.length; i++) {
     if (source[i] === '\\' && (source[i + 1] === '\n' || source.slice(i + 1, i + 3) === '\r\n')) { i += source[i + 1] === '\r' ? 2 : 1; continue; }
     positions.push(i); text += source[i];
   }
   const pattern = /\s+|\/\*[\s\S]*?(?:\*\/|$)|\/\/[^\n]*|(?:u8|u|U|L)?"(?:\\[\s\S]|[^"\\])*"|(?:u|U|L)?'(?:\\[\s\S]|[^'\\])*'|[A-Za-z_][A-Za-z_0-9]*|(?:\d|\.\d)(?:[eEpP][+-]|[A-Za-z_0-9.])*|##|\.\.\.|<<=|>>=|->|\+\+|--|&&|\|\||==|!=|<=|>=|<<|>>|\+=|-=|\*=|\/=|%=|&=|\|=|\^=|[^\s]/gy;
-  const tokens: CToken[] = []; let space = false;
+  const tokens: CToken[] = []; let space = false, firstOnLine = true, directive = false;
   for (const match of text.matchAll(pattern)) {
-    if (/^\s|^\/[/\*]/.test(match[0])) { space = true; continue; }
-    tokens.push({ text: match[0], location: location(positions[match.index], positions[match.index + match[0].length - 1] + 1), space });
+    if (/^\s|^\/[/\*]/.test(match[0])) {
+      if (match[0].includes('\n')) { firstOnLine = true; directive = false; }
+      space = true; continue;
+    }
+    if (firstOnLine && match[0] === '#') directive = true;
+    tokens.push({ text: match[0], location: location(positions[match.index], positions[match.index + match[0].length - 1] + 1), space, ...(preserveDirectives && directive ? {directive:true} : {}) });
+    firstOnLine = false;
     space = false;
   }
   return tokens;

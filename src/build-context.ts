@@ -8,7 +8,10 @@ export interface BuildFileSystem {
 }
 export interface BuildEntry {
   id: string; rootUri: string; entryUri: string; cwdUri: string;
-  dialect: 'sh' | 'cmd' | 'make'; args: string[]; evidence: BuildEvidence[];
+  dialect: 'sh' | 'cmd' | 'make' | 'compilation-database'; args: string[]; evidence: BuildEvidence[];
+}
+export function buildEntryDialect(uri: string): BuildEntry['dialect'] {
+  return /\/compile_commands\.json$/i.test(uri) ? 'compilation-database' : /\.(bat|cmd)$/i.test(uri) ? 'cmd' : /\.sh$/i.test(uri) ? 'sh' : 'make';
 }
 export interface BuildDiscovery {
   entries: BuildEntry[]; candidates: string[]; dependencies: string[]; missingCandidates: string[]; issues: BuildIssue[];

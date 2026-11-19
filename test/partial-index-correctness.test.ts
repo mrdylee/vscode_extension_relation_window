@@ -33,10 +33,17 @@ test('all32macro targets inside the bound remain complete', async () => {
   assert.equal(result.at('cb();').incomplete, false);
 });
 for (const context of ['local', 'global', 'getter']) test(`truncated macro candidates remain incomplete through ${context}`, async () => {
-  const result = await analyze(macroSource(6, context));
+  const limit = context === 'global' ? 64 : 32;
+  const result = await analyze(macroSource(context === 'global' ? 7 : 6, context));
   assert.ok(result.file.issues.some(issue => /alternative limit/.test(issue)));
-  assert.equal(result.at('cb();').targets.length, 32, '32 of64possible targets were omitted');
+  assert.equal(result.at('cb();').targets.length, limit, 'candidates beyond the context allowance were omitted');
   assert.equal(result.at('cb();').incomplete, true, 'bounded candidates cannot establish a complete target set');
+});
+test('aggregate initializer expansion retains all 64 candidates inside its separate bound', async () => {
+  const result = await analyze(macroSource(6, 'global'));
+  assert.ok(!result.file.issues.some(issue => /limit|budget/.test(issue)));
+  assert.equal(result.at('cb();').targets.length, 64);
+  assert.equal(result.at('cb();').incomplete, false);
 });
 const workSource = 'typedef void(*CB)(void);void first(void){}void second(void){}static CB cb=first,noise;void setup(void){noise=first;' +
   'noise=noise;'.repeat(50) + 'cb=second;}void run(void){setup();cb();}void independent(void){CB local=second;local();}';
