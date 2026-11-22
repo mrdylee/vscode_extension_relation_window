@@ -34,11 +34,28 @@ try {
   const showGraph = graph => mascotPage.evaluate(state => {
     window.dispatchEvent(new MessageEvent('message', { data: { type: 'state', state } }));
   }, { ...state, graph });
-  const sceneDraw = index => (index + .5) / 20;
+  const sceneDraw = index => (index + .5) / 40;
   const startScene = async (index, ...draws) => {
     await draw(0, sceneDraw(index), ...draws);
     await setAvailable(true);
     await mascotPage.clock.fastForward(10_000);
+  };
+  const assertSideExit = async scene => {
+    const [start, middle, end] = await cat.evaluate(node => {
+      const [movement] = node.getAnimations();
+      movement.pause();
+      const duration = movement.effect.getTiming().duration;
+      const departure = movement.effect.getKeyframes().at(-2).offset;
+      const panel = node.parentElement.getBoundingClientRect();
+      return [departure, (departure + 1) / 2, 1].map(offset => {
+        movement.currentTime = offset * duration;
+        const cat = node.getBoundingClientRect();
+        return { left: cat.left - panel.right, bottom: cat.bottom - panel.bottom };
+      });
+    });
+    assert.ok(start.left < middle.left && middle.left < 0 && end.left >= 0, `${scene} leaves through the right side`);
+    assert.equal(start.bottom, middle.bottom, `${scene} walks out at floor level`);
+    assert.equal(middle.bottom, end.bottom, `${scene} clears the edge at floor level`);
   };
   assert.equal(await mascot.count(), 1, 'the Relation view has one mascot');
   assert.ok(await mascot.isHidden(), 'the mascot waits for the visible, focused view');
@@ -86,6 +103,18 @@ try {
   });
   assert.ok(distance > 10, 'the mascot crosses part of the panel');
   assert.equal(await mascot.evaluate(node => getComputedStyle(node).pointerEvents), 'none');
+  await mascotPage.keyboard.press('Escape');
+  const { x: salguX, y: salguY, width: salguWidth, height: salguHeight } = await cat.boundingBox();
+  const clickTarget = await mascotPage.evaluate(([x, y]) => document.elementFromPoint(x, y)?.className,
+    [salguX + salguWidth / 2, salguY + salguHeight / 2]);
+  assert.equal(clickTarget, 'mascot-cat', 'mouse clicks reach the visible cat');
+  await mascotPage.mouse.click(salguX + salguWidth / 2, salguY + salguHeight / 2);
+  const heart = mascot.locator('.mascot-heart');
+  assert.ok(await heart.isVisible(), 'clicking Salgu shows a heart');
+  assert.equal(await cat.evaluate(node => node.getAnimations()[0].playState), 'paused', 'Salgu holds still for the greeting');
+  await heart.evaluate(node => node.getAnimations()[0].finish());
+  await heart.waitFor({ state: 'hidden' });
+  await assertSideExit('play');
   await cat.evaluate(node => node.getAnimations()[0].finish());
   await mascot.waitFor({ state: 'hidden' });
   await mascotPage.clock.fastForward(19_999);
@@ -134,6 +163,7 @@ try {
     if (scene === 'top') assert.ok(motion[1].top - motion[0].top > 10, 'Salgu enters from above');
     if (scene === 'left') assert.ok(motion[1].left - motion[0].left > 10, 'Salgu enters from the left');
     if (scene === 'expression') assert.notEqual(motion[1].pose, motion[2].pose, 'Salgu changes expression');
+    if (scene === 'gaze' || scene === 'expression') await assertSideExit(scene);
     await setAvailable(false);
     assert.equal(await cat.evaluate(node => node.getAnimations().length), 0, 'losing availability cancels the scene');
   }
@@ -183,6 +213,7 @@ try {
   assert.ok(flight[0].x - flight[1].x > 12 && flight[1].y - flight[0].y > 12,
     'the butterfly flies toward the paw');
   assert.deepEqual(flight[1], flight[2], 'flapping stays anchored at the paw during the catch');
+  await assertSideExit('butterfly');
   await setAvailable(false);
   assert.equal(await butterfly.evaluate(node => node.getAnimations({ subtree: true }).length), 0, 'losing availability stops the butterfly');
   await startScene(8);
@@ -197,6 +228,7 @@ try {
   });
   assert.equal(bites[0], bites[2], 'Salgu lifts its head between bites');
   assert.equal(new Set(bites).size, 3, 'waiting, biting and satisfied faces are distinct');
+  await assertSideExit('eat');
   await setAvailable(false);
   for (const value of [0, .99]) {
     await startScene(9, value);
@@ -214,11 +246,14 @@ try {
         const hidden = node.getBoundingClientRect();
         const outside = hidden.right <= panel.left || hidden.left >= panel.right ||
           hidden.bottom <= panel.top || hidden.top >= panel.bottom;
-        return { edge: gaps.indexOf(Math.min(...gaps)), outside };
+        const height = Math.round((cat.top + cat.height / 2 - panel.top) / panel.height * 100);
+        return { edge: gaps.indexOf(Math.min(...gaps)), outside, height };
       });
     });
-    assert.deepEqual(edges.map(({ edge }) => edge), value === 0 ? [0, 1, 2, 3] : [3, 2, 1, 0]);
+    assert.deepEqual(edges.map(({ edge }) => edge), value === 0 ? [0, 1, 2, 1] : [1, 2, 1, 0]);
     assert.ok(edges.every(({ outside }) => outside), 'each pop hides before the next edge');
+    assert.deepEqual(edges.filter(({ edge }) => edge === 1).map(({ height }) => height).sort(), [44, 82],
+      'the two right-edge peeks include the lower spot that replaced the bottom peek');
     await setAvailable(false);
   }
   const dailyScenes = ['yawn', 'doze', 'nap', 'stretch', 'groom', 'scratch', 'drink', 'tilt', 'wag', 'roll'];
@@ -246,11 +281,63 @@ try {
       assert.notEqual(first.transform, second.transform, `${scene} moves during the pose`);
       if (scene === 'nap') assert.ok(Math.abs(first.bottom - second.bottom) < .1, 'Salgu breathes with its paws on the sill');
     }
+    await assertSideExit(scene);
     await cat.evaluate(node => node.getAnimations()[0].finish());
     await mascot.waitFor({ state: 'hidden' });
     assert.equal(await cat.evaluate(node => node.getAnimations().length), 0, `${scene} stops animating when it ends`);
     await setAvailable(false);
   }
+  const extraScenes = ['wake-up', 'tiptoe', 'pounce', 'backstep', 'turn-around', 'double-take', 'slow-blink', 'paw-wave', 'face-wash', 'listen',
+    'sniff', 'tail-flick', 'crouch', 'startle', 'morning-stretch', 'dream-twitch', 'belly-stretch', 'small-hop', 'shake-off', 'chase-tail'];
+  for (const [index, scene] of extraScenes.entries()) {
+    await startScene(20 + index);
+    assert.equal(await mascot.getAttribute('data-scene'), scene);
+    assert.ok(await cat.evaluate(node => {
+      const [movement, poses] = node.getAnimations();
+      const travel = movement.effect.getKeyframes();
+      const action = poses.effect.getKeyframes().filter(frame => frame.offset >= travel[1].offset && frame.offset < travel.at(-2).offset);
+      return new Set(action.map(frame => frame.backgroundPosition)).size > 2;
+    }), `${scene} changes poses`);
+    await assertSideExit(scene);
+    await setAvailable(false);
+  }
+  await startScene(1);
+  await cat.evaluate(node => {
+    const movement = node.getAnimations()[0];
+    movement.pause();
+    movement.currentTime = 800;
+  });
+  await mascotPage.getByRole('button', { name: 'Say hello to Salgu' }).press('Enter');
+  assert.ok(await heart.isVisible(), 'the keyboard can greet Salgu');
+  await setAvailable(false);
+  assert.ok(await mascot.isHidden());
+  assert.equal(await heart.evaluate(node => node.getAnimations().length), 0, 'losing availability cancels the greeting');
+  const setVSCodeReduceMotion = reduce => mascotPage.evaluate(reduce => {
+    document.body.classList.toggle('vscode-reduce-motion', reduce);
+  }, reduce);
+  await startScene(1);
+  assert.ok(await mascot.isVisible());
+  const scrollAfterFocus = await cat.evaluate(node => {
+    const [movement] = node.getAnimations();
+    movement.pause();
+    movement.currentTime = 0;
+    node.focus();
+    const scroll = node.parentElement.scrollLeft;
+    node.blur();
+    return scroll;
+  });
+  assert.equal(scrollAfterFocus, 0, 'focusing Salgu outside the edge does not scroll the mascot layer');
+  await setVSCodeReduceMotion(true);
+  assert.ok(await mascot.isHidden());
+  assert.equal(await cat.evaluate(node => node.getAnimations().length), 0, 'VS Code reduced motion stops an active scene');
+  await mascotPage.clock.fastForward(20_000);
+  await draw(0, sceneDraw(1), 0);
+  await setVSCodeReduceMotion(false);
+  await mascotPage.clock.fastForward(9_999);
+  assert.ok(await mascot.isHidden(), 'disabling VS Code reduced motion starts a fresh wait');
+  await mascotPage.clock.fastForward(1);
+  assert.ok(await mascot.isVisible(), 'Salgu resumes after a fresh wait without moving focus');
+  await setAvailable(false);
   await mascotPage.emulateMedia({ reducedMotion: 'reduce' });
   await startScene(0);
   assert.ok(await mascot.isHidden(), 'reduced motion suppresses the stroll');

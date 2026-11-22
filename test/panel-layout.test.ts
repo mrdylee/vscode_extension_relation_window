@@ -23,14 +23,28 @@ function harness(layout = 'combined') {
     workspace: { getConfiguration: () => ({ get: (key: string, fallback: unknown) => config.get(key) ?? fallback }), onDidChangeConfiguration: settings.event,
       asRelativePath: (value: unknown) => String(value) }, Uri: { parse: (value: string) => ({ toString: () => value }) },
     commands: { executeCommand: async (name: string) => { commands.push(name); if (name.endsWith('positionPanelBottom')) await pause?.(); } },
-    window: { showErrorMessage: (message: string) => { errors.push(message); } } };
+    window: { state: { focused: true }, showErrorMessage: (message: string) => { errors.push(message); } } };
   const module = { exports: {} as any };
   runInNewContext(bundle, { module, exports: module.exports, process, Buffer, URL, setTimeout, clearTimeout, require: (name: string) => name === 'vscode' ? vscode : require(name) });
   const index = new RelationIndex();
   const view = new module.exports.RelationView({ index, indexFor: () => index, changed: new Emitter(), diagnosticsChanged: new Emitter(), failures: new Map(), skipInactive: true, status: 'Index ready' }, {});
-  const update = (value: string) => { config.set('contextLayout', value); settings.fire({ affectsConfiguration: (key: string) => key === 'dynsight.contextLayout' }); return view.panelLayout; };
-  return { view, index, commands, errors, copied, update, pause: (value?: () => Promise<void>) => { pause = value; } };
+  const set = (key: string, value: unknown) => { config.set(key, value); settings.fire({ affectsConfiguration: (name: string) => name === `dynsight.${key}` }); };
+  const update = (value: string) => { set('contextLayout', value); return view.panelLayout; };
+  return { view, index, commands, errors, copied, set, update, pause: (value?: () => Promise<void>) => { pause = value; } };
 }
+
+test('changing Salgu visibility immediately updates the open Relation view', () => {
+  const h = harness(), available: boolean[] = [];
+  h.view.webview = { visible: true, webview: { postMessage: (message: { type: string; available: boolean }) => {
+    if (message.type === 'mascotAvailability') available.push(message.available);
+  } } };
+  try {
+    h.view.publishMascotAvailability();
+    h.set('salgu.enabled', false);
+    h.set('salgu.enabled', true);
+    assert.deepEqual(available, [true, false, true]);
+  } finally { h.view.dispose(); }
+});
 
 test('function-name copying accepts Unicode snapshots and reports over-limit failure',async()=>{
   const h=harness(),replies:any[]=[];h.view.webview={webview:{postMessage:async(message:unknown)=>{replies.push(message);}}};

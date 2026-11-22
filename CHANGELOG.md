@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.102 — 2026-11-22
+
+- Expand Salgu to 40 animated scenes in the Relation view. Floor-level scenes leave through the side of the panel.
+- Click Salgu to pause the scene for a blink and a heart. Set `dynsight.salgu.enabled` to `false` to hide Salgu immediately.
+- Respect changes to VS Code’s Reduce Motion setting while Relation stays open.
+
 ## 0.1.101 — 2026-11-19
 
 - Select `compile_commands.json` as a read-only build configuration to confirm recorded source membership without interpreting or running build scripts. Preserve multiple configurations and response-file dependencies. Unrecorded files remain unknown; a partial command database never proves exclusion or final link coverage.

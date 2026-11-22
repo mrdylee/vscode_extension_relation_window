@@ -20,13 +20,16 @@ button[aria-pressed=true] { border-color: var(--accent); color: var(--accent); }
 .pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }.context { border-right: 1px solid var(--border); }
 .relation { position: relative; }
 .idle-mascot {
-  position: absolute; inset: 0; z-index: 1; overflow: hidden; clip-path: inset(0); pointer-events: none;
+  position: absolute; inset: 0; z-index: 1; overflow: clip; clip-path: inset(0); pointer-events: none;
 }
 .mascot-cat {
   position: absolute; right: 5px; bottom: -1px;
-  width: 48px; height: 48px;
+  width: 48px; height: 48px; border: 0; padding: 0; pointer-events: auto;
+}
+.mascot-cat, .mascot-cat:hover {
   background: url('./webview.salgu.webp') 0 0 / 400% 700% no-repeat;
 }
+.mascot-heart { position: absolute; color: #ef82a4; font-size: 15px; line-height: 1; text-shadow: 0 1px 2px #52253e; }
 .idle-mascot[data-scene=top] .mascot-cat { top: -1px; bottom: auto; }
 .idle-mascot[data-scene=left] .mascot-cat { right: auto; left: -1px; bottom: -6px; width: 36px; height: 36px; }
 .idle-mascot:is([data-scene=walk-right], [data-scene=walk-left], [data-scene=pop]) .mascot-cat { left: 0; right: auto; }

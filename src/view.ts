@@ -55,6 +55,7 @@ export class RelationView implements vscode.Disposable {
     });
     this.readPreferences();
     this.preferences = vscode.workspace.onDidChangeConfiguration(event => {
+      if (event.affectsConfiguration('dynsight.salgu.enabled')) this.publishMascotAvailability();
       const analysisChanged = ['analyzeCallbacks', 'detailedAnalysisFolders', 'smartAnalysis.macro', 'smartAnalysis.include', 'smartAnalysis.exclude'].some(key => event.affectsConfiguration(`dynsight.${key}`) || event.affectsConfiguration(`cRelation.${key}`));
       if (event.affectsConfiguration('dynsight.calleeSort') || event.affectsConfiguration('dynsight.contextLayout') || event.affectsConfiguration('dynsight.includeFunctionArguments') || analysisChanged) {
         const previousLayout = this.state.contextLayout;
@@ -123,7 +124,8 @@ export class RelationView implements vscode.Disposable {
   publishMascotAvailability() {
     const view = this.webview;
     if (!view) return;
-    void view.webview.postMessage({ type: 'mascotAvailability', available: view.visible && vscode.window.state.focused });
+    const enabled = vscode.workspace.getConfiguration('dynsight').get('salgu.enabled', true);
+    void view.webview.postMessage({ type: 'mascotAvailability', available: enabled && view.visible && vscode.window.state.focused });
   }
   private get index() { const uri = this.root?.uri ?? this.lastEditor?.document.uri.toString(); return uri ? this.workspace.indexFor(uri) : this.workspace.index; }
   private contextKey(uri: string, index = this.index) { const key = this.contextChoices.get(uri); return key && index.files.has(key) ? key : uri; }
